@@ -7,6 +7,7 @@
 // the view's callbacks reach the React props. The editors' own behaviour is
 // covered in their packages.
 
+import { projectCommands } from "../../state";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -228,7 +229,14 @@ describe("PianoRollPanel", () => {
 // their work is "Saved" is not.
 describe("Toolbar autosave status", () => {
   const props = (over: Partial<ToolbarProps>): ToolbarProps => ({
-    projectName: "P",
+    song: {
+      projectName: "P",
+      bpm: 120,
+      timeSignature: { numerator: 4, denominator: 4 },
+      loop: { start: 0, end: 3840, enabled: false },
+      commands: projectCommands,
+      dispatch: () => undefined,
+    },
     audioStatus: "idle",
     audioReady: false,
     audioBooting: false,

@@ -10,3 +10,5 @@ export { DeviceChainPanel, carryValuesForSwap } from "./DeviceChainPanel";
 export type { DeviceChainPanelProps } from "./DeviceChainPanel";
 export { AutomationPanel } from "./AutomationPanel";
 export type { AutomationPanelProps, LaneFocusRequest } from "./AutomationPanel";
+export { SongControls, TIME_SIGNATURE_DENOMINATORS } from "./SongControls";
+export type { SongControlsProps } from "./SongControls";

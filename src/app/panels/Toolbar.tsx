@@ -5,9 +5,12 @@
 
 import { useCallback, useRef, type ChangeEvent } from "react";
 import type { AutosaveState, GridSettings, ToolMode, TransportState } from "../../types";
+import { SongControls, type SongControlsProps } from "./SongControls";
 
 export interface ToolbarProps {
-  projectName: string;
+  /** SS8/SS13 song-level controls (name, tempo, time signature, loop). The
+   *  commands behind them shipped in M1; this is their control surface. */
+  song: SongControlsProps;
 
   audioStatus: string;
   audioReady: boolean;
@@ -95,7 +98,7 @@ function autosaveLabel(state: AutosaveState, available: boolean): string {
 }
 
 export function Toolbar({
-  projectName,
+  song,
   audioStatus,
   audioReady,
   audioBooting,
@@ -167,9 +170,7 @@ export function Toolbar({
         padding: "4px 8px",
       }}
     >
-      <span className="fbl-toolbar-project" data-testid="project-name">
-        {projectName}
-      </span>
+      <SongControls {...song} />
 
       <button type="button" onClick={onBoot} disabled={audioReady || audioBooting}>
         Boot audio

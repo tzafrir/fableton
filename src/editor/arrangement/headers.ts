@@ -3,9 +3,10 @@
 // has tens of channels, not thousands, so headers are plain elements while
 // clips stay on canvas.
 //
-// Headers own three document verbs (`renameChannel` is the shell's job in
-// M1): select the track, mute it, solo it. Each is one command, exactly like
-// a drag (SS13).
+// Headers own the per-channel document verbs: select, mute, solo, RENAME
+// (double-click the name — `renameChannel` was reachable from no UI at all
+// until then, so every track stayed "Track 1"), and reorder within
+// `channelOrder`. Each is one command, exactly like a drag (SS13).
 
 import type { DocumentStore, ProjectCommands } from "../../types/commands";
 import type { ChannelId } from "../../types/ids";
@@ -109,11 +110,57 @@ export function createLaneHeaders(options: HeadersOptions): LaneHeadersView {
       const title = document.createElement("div");
       title.className = "fbl-arr-header-name";
       title.textContent = lane.channel.name;
+      title.title = "Double-click to rename";
       title.style.whiteSpace = "nowrap";
       title.style.textOverflow = "ellipsis";
       title.style.overflow = "hidden";
       if (lane.channel.color !== null) title.style.borderLeft = `3px solid ${lane.channel.color}`;
       if (lane.channel.color !== null) title.style.paddingLeft = "5px";
+
+      // Double-click the name to rename in place. The input replaces the
+      // label rather than overlaying it, so the row's height never changes
+      // (the frozen row convention: a row IS `viewport.pxPerRow` tall).
+      title.addEventListener("dblclick", (event) => {
+        event.stopPropagation();
+        if (title.querySelector("input") !== null) return;
+        const input = document.createElement("input");
+        input.className = "fbl-arr-header-rename";
+        input.value = lane.channel.name;
+        input.style.width = "100%";
+        input.style.boxSizing = "border-box";
+        input.style.font = "inherit";
+        input.style.color = theme.headerText;
+        input.style.background = theme.headerBackground;
+        input.style.border = `1px solid ${theme.marqueeOutline}`;
+        input.style.borderRadius = "2px";
+        input.style.padding = "0 2px";
+        // Removing a focused input fires `blur`, so Enter/Escape would both
+        // fall through into the blur handler — and Escape would commit the
+        // very text it just discarded. One latch settles the edit exactly once.
+        let settled = false;
+        const finish = (accept: boolean): void => {
+          if (settled) return;
+          settled = true;
+          const next = input.value.trim();
+          input.remove();
+          const keep = accept && next.length > 0 && next !== lane.channel.name;
+          title.textContent = keep ? next : lane.channel.name;
+          if (keep) {
+            options.store.dispatch(options.commands.renameChannel(lane.channelId, next));
+          }
+        };
+        input.addEventListener("keydown", (e) => {
+          e.stopPropagation(); // never let the arrangement key map see this
+          if (e.key === "Enter") finish(true);
+          else if (e.key === "Escape") finish(false);
+        });
+        input.addEventListener("blur", () => finish(true));
+        input.addEventListener("pointerdown", (e) => e.stopPropagation());
+        title.textContent = "";
+        title.appendChild(input);
+        input.focus();
+        input.select();
+      });
       box.appendChild(title);
 
       if (lane.isTrack) {
@@ -138,8 +185,26 @@ export function createLaneHeaders(options: HeadersOptions): LaneHeadersView {
           options.store.dispatch(options.commands.setChannelSolo(lane.channelId, !lane.channel.solo));
         });
 
+        // Reorder within `channelOrder` — which IS the arrangement's row
+        // order (document invariant 2), so this moves the lane on screen.
+        const up = button("\u25b2", "Move track up", theme);
+        up.disabled = lane.row <= 0;
+        up.addEventListener("click", (event) => {
+          event.stopPropagation();
+          options.store.dispatch(options.commands.moveChannel(lane.channelId, lane.row - 1));
+        });
+
+        const down = button("\u25bc", "Move track down", theme);
+        down.disabled = lane.row >= scene.rows.length - 1;
+        down.addEventListener("click", (event) => {
+          event.stopPropagation();
+          options.store.dispatch(options.commands.moveChannel(lane.channelId, lane.row + 1));
+        });
+
         strip.appendChild(mute);
         strip.appendChild(solo);
+        strip.appendChild(up);
+        strip.appendChild(down);
         box.appendChild(strip);
       }
 

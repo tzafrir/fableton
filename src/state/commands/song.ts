@@ -58,25 +58,36 @@ export function createSongCommands(): SongCommands {
 
     setTempo(bpm: number): Command {
       const clamped = Math.min(MAX_BPM, Math.max(MIN_BPM, Number.isFinite(bpm) ? bpm : MIN_BPM));
-      return makeCommand("Set Tempo", (doc) => {
-        // v1 is a single fixed segment starting at tick 0 (invariant 1).
-        const first = doc.tempo[0];
-        if (doc.tempo.length === 1 && first !== undefined) {
-          first.startTick = 0;
-          first.bpm = clamped;
-          return;
-        }
-        doc.tempo = [{ startTick: 0, bpm: clamped }];
-      });
+      return makeCommand(
+        "Set Tempo",
+        (doc) => {
+          // v1 is a single fixed segment starting at tick 0 (invariant 1).
+          const first = doc.tempo[0];
+          if (doc.tempo.length === 1 && first !== undefined) {
+            first.startTick = 0;
+            first.bpm = clamped;
+            return;
+          }
+          doc.tempo = [{ startTick: 0, bpm: clamped }];
+        },
+        // Typing "128" into a tempo field is ONE edit, not three (SS13
+        // `coalesceKey`) — the same treatment `renameProject` gets, and for
+        // the same reason: a per-keystroke undo stack is unusable.
+        { coalesceKey: "song.tempo" },
+      );
     },
 
     setTimeSignature(signature: TimeSignature): Command {
       const numerator = Math.max(1, Math.round(signature.numerator));
       const denominator = Math.max(1, Math.round(signature.denominator));
-      return makeCommand("Set Time Signature", (doc) => {
-        doc.timeSignature.numerator = numerator;
-        doc.timeSignature.denominator = denominator;
-      });
+      return makeCommand(
+        "Set Time Signature",
+        (doc) => {
+          doc.timeSignature.numerator = numerator;
+          doc.timeSignature.denominator = denominator;
+        },
+        { coalesceKey: "song.timeSignature" },
+      );
     },
 
     setLoopRegion(loop: LoopRegion): Command {

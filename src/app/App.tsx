@@ -21,6 +21,7 @@ import type {
   AuditionSink,
   AutosaveState,
   ChannelId,
+  Command,
   ClipId,
   DocumentStore,
   GridSettings,
@@ -435,7 +436,16 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     <div id="app-root" style={{ display: "flex", flexDirection: "column", height: "100vh", minHeight: 0 }}>
       <h1 style={{ margin: 0, padding: "4px 8px", fontSize: 14 }}>Fableton</h1>
       <Toolbar
-        projectName={snapshot.name}
+        song={{
+          projectName: snapshot.name,
+          bpm: snapshot.tempo[0]?.bpm ?? 120,
+          timeSignature: snapshot.timeSignature,
+          loop: snapshot.loop,
+          commands: projectCommands,
+          dispatch: (command: Command) => {
+            store.dispatch(command);
+          },
+        }}
         audioStatus={audioStatus}
         audioReady={engine !== null}
         audioBooting={audioBooting}

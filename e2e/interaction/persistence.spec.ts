@@ -28,14 +28,14 @@ test("an edit is restored unchanged after Save + full page reload (OPFS)", async
   await page.mouse.dblclick(clickPoint.x, clickPoint.y);
   const afterCreate = await scanNotes(page, NOTE_FILL);
   expect(afterCreate.length, "the new note should have been added").toBe(beforeCreate.length + 1);
-  const projectName = await page.getByTestId("project-name").textContent();
+  const projectName = await page.getByTestId("project-name-input").inputValue();
 
   // Force-flush the debounced autosave (SS13: "~2s debounce") deterministically.
   await page.getByTestId("save-button").click();
   await expect(page.getByTestId("autosave-status")).toHaveText("Saved", { timeout: 10_000 });
 
   await page.reload();
-  await expect(page.getByTestId("project-name")).toHaveText(projectName ?? "");
+  await expect(page.getByTestId("project-name-input")).toHaveValue(projectName ?? "");
 
   const clipsAfterReload = await scanColorRects(page, "arrangement-panel", "content", ARR_CLIP_FILL, {
     minAreaDevicePx: 20,

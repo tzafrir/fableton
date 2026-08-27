@@ -101,10 +101,35 @@ export function ArrangementPanel({
   }, [selectedChannelId]);
 
   return (
-    <div
-      ref={containerRef}
-      data-testid="arrangement-panel"
-      style={{ width: "100%", height: "100%", minHeight: 0, minWidth: 0 }}
-    />
+    <div style={{ position: "relative", width: "100%", height: "100%", minHeight: 0, minWidth: 0 }}>
+      <div
+        ref={containerRef}
+        data-testid="arrangement-panel"
+        style={{ width: "100%", height: "100%", minHeight: 0, minWidth: 0 }}
+      />
+      {/* Adding a track belongs where the song is being built, not only in
+          the mixer tab. Sits over the header column, below the ruler. */}
+      <button
+        type="button"
+        data-testid="arrangement-add-track"
+        title="Add a track"
+        onClick={() => store.dispatch(commands.addTrack())}
+        style={{
+          position: "absolute",
+          left: 6,
+          bottom: 6,
+          zIndex: 5,
+          font: "11px system-ui, sans-serif",
+          background: "#222",
+          color: "#bbb",
+          border: "1px solid #444",
+          borderRadius: 3,
+          padding: "2px 8px",
+          cursor: "pointer",
+        }}
+      >
+        + Track
+      </button>
+    </div>
   );
 }

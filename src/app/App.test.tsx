@@ -26,6 +26,16 @@ import { createEmptyProject, createProjectCommands, createSequentialIdFactory } 
 import type { DocumentStore, Project, ProjectStorage } from "../types";
 import { App } from "./App";
 
+/** The project name is an editable field (SS8 song controls), so its value —
+ *  not a label's textContent — is what the shell renders. Queried off the
+ *  document because each describe block owns its own mount container. */
+function projectNameValue(): string {
+  const input = document.querySelector<HTMLInputElement>("[data-testid=project-name-input]");
+  if (input === null) throw new Error("project name input not rendered");
+  return input.value;
+}
+
+
 const bootAudioContext = vi.fn();
 
 vi.mock("../engine/context", () => ({
@@ -106,6 +116,7 @@ async function waitFor(predicate: () => boolean, tries = 20): Promise<void> {
 
 describe("App (SS18-M1 app shell)", () => {
   let container: HTMLDivElement;
+
   let root: Root;
   let storage: ProjectStorage;
 
@@ -147,7 +158,7 @@ describe("App (SS18-M1 app shell)", () => {
     expect(container.querySelector("[data-testid=piano-roll-panel]")).not.toBeNull();
     // A first run opens the starter project (src/demo/project.ts), not an
     // empty document — see `bootstrapProject`'s `createProject` default.
-    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Demo Phrase");
+    expect(projectNameValue()).toBe("Demo Phrase");
   });
 
   it("mounts the arrangement's three SS9 canvas layers", async () => {
@@ -535,14 +546,14 @@ describe("App — global undo/redo (SS18-M1: Cmd/Ctrl+Z / Shift+Z)", () => {
       store.dispatch(commands.renameProject("Renamed"));
     });
     expect(store.getState().name).toBe("Renamed");
-    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Renamed");
+    expect(projectNameValue()).toBe("Renamed");
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }));
     });
 
     expect(store.getState().name).not.toBe("Renamed");
-    expect(container.querySelector("[data-testid=project-name]")!.textContent).not.toBe("Renamed");
+    expect(projectNameValue()).not.toBe("Renamed");
   });
 
   it("Ctrl+Shift+Z redoes", async () => {
@@ -698,7 +709,7 @@ describe("App — save / export / import (SS13 via the persistence package)", ()
     });
     await flushMicrotasks();
 
-    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Imported Project");
+    expect(projectNameValue()).toBe("Imported Project");
   });
 
   // SS10 "Snapping": "Grid is adaptive to zoom (as in Live) with a fixed-grid
@@ -772,7 +783,7 @@ describe("App — save / export / import (SS13 via the persistence package)", ()
     const saved = await storage.read(outgoingId);
     expect(saved).not.toBeNull();
     expect(JSON.parse(saved!).project.name).toBe("EDITED, NEVER SAVED");
-    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Untitled");
+    expect(projectNameValue()).toBe("Untitled");
   });
 
   it("Import flushes the outgoing project's pending autosave first", async () => {
@@ -803,7 +814,7 @@ describe("App — save / export / import (SS13 via the persistence package)", ()
     const saved = await storage.read(outgoingId);
     expect(saved).not.toBeNull();
     expect(JSON.parse(saved!).project.name).toBe("EDITED, NEVER SAVED");
-    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Imported Project");
+    expect(projectNameValue()).toBe("Imported Project");
   });
 
   it("New starts a fresh empty project", async () => {
@@ -817,12 +828,12 @@ describe("App — save / export / import (SS13 via the persistence package)", ()
     await act(async () => {
       store!.dispatch(commands.renameProject("Renamed"));
     });
-    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Renamed");
+    expect(projectNameValue()).toBe("Renamed");
 
     await act(async () => {
       button("New").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Untitled");
+    expect(projectNameValue()).toBe("Untitled");
     expect(store!.canUndo()).toBe(false);
   });
 });
