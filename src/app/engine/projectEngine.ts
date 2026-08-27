@@ -1,19 +1,12 @@
-// types/engine.ts `ProjectEngine` — "the engine as the app shell holds it in
-// M1: one transport, one param registry, one instrument per track, and a way
-// to hand it a new document."
+// types/engine.ts `ProjectEngine`, M2 edition: the coarse M1 body of
+// `applyDocument` ("re-derive the whole desired instrument set") is replaced
+// by the SS6 reconciler — `buildGraph(doc)` -> `diff(live, desired)` ->
+// patch — behind the SAME signature, exactly as the M1 comment promised.
 //
-// `applyDocument` is deliberately coarse (per the interface's own doc
-// comment): every call re-derives the whole desired instrument set from the
-// document, mounts what is missing, unmounts what no longer matches, re-points
-// the transport's event source and reloads every param value. No diffing
-// beyond "is this channel's instrument still the same device" — M2's
-// reconciler is what replaces this body with a real `diff(live, desired)`,
-// behind the same signature.
-//
-// Effects chains and routing (`Channel.chain`, `output`, `sends`,
-// `sidechains`) are NOT wired here: M1 has no mixer yet (SS18-M1 proves the
-// editor kit, command/undo and persistence, not routing), so every mounted
-// instrument connects straight to `destination`. M2 owns the graph.
+// The engine owns what the reconciler must not know about: the transport and
+// its note-event source, note TARGETS (track -> mounted instrument), the
+// param registry's document loads, and the SS6 meter bus (strip taps follow
+// the reconciler's post-fader nodes after every apply).
 
 import { CORE_DEVICES } from "../../devices/core";
 import {
@@ -22,6 +15,8 @@ import {
   type AppDeviceHost,
   type AppDeviceRegistry,
 } from "../../devices/harness";
+import { createGraphReconciler, type GraphReconciler } from "../../engine/graph/reconciler";
+import { createMeterBus, type MeterBus } from "../../engine/meter/meters";
 import { createEngineTransport, type Clock, type EngineTransport } from "../../engine/transport";
 import { createParamRegistry, type AppParamRegistry } from "../../params";
 import { createTempoMap } from "../../time";
@@ -29,8 +24,6 @@ import type { ParamCommit } from "../../params";
 import type {
   AuditionSink,
   ChannelId,
-  DeviceDefinitionId,
-  DeviceInstanceId,
   MountedDevice,
   NoteTarget,
   ProjectEngine,
@@ -46,6 +39,8 @@ export interface ProjectEngineOptions {
   /** Injectable clock — tests use a `ManualClock` (`../../engine/transport`);
    *  the live app leaves this unset and gets the real worker/timer clock. */
   clock?: Clock | undefined;
+  /** Overrides the reconciler's dip-phase decision (tests/offline). */
+  immediateReconcile?: boolean | undefined;
 }
 
 /**
@@ -65,21 +60,14 @@ export interface AppProjectEngine extends ProjectEngine {
    *  diagnostics convenience, not a second write path: the document layer
    *  already gets these through `connectParamRegistry`. */
   onParamCommit(cb: (commit: ParamCommit) => void): Unsub;
+  /** SS6 metering: per-strip peak/RMS frames, read by the mixer UI at rAF. */
+  readonly meters: MeterBus;
 }
 
-interface TrackMount {
-  readonly channelId: ChannelId;
-  readonly deviceId: DeviceInstanceId;
-  readonly definitionId: DeviceDefinitionId;
-  readonly mounted: MountedDevice;
-  /** Built once at mount time (not per resolveTarget/audition call) so the
-   *  transport's per-tick `resolveTarget` lookup never allocates (SS12). */
-  readonly noteTarget: NoteTarget | undefined;
-}
-
-interface DesiredInstrument {
-  readonly deviceId: DeviceInstanceId;
-  readonly definitionId: DeviceDefinitionId;
+/** The transport's per-track note target — rebuilt per apply, looked up per
+ *  tick without allocating (SS12). */
+interface TrackTarget {
+  readonly noteTarget: NoteTarget;
 }
 
 /** `undefined` unless every one of the three note methods is present — a
@@ -91,23 +79,9 @@ function noteTargetOf(mounted: MountedDevice): NoteTarget | undefined {
   return { noteOn, noteOff, allNotesOff };
 }
 
-function desiredInstruments(doc: ProjectSnapshot): Map<ChannelId, DesiredInstrument> {
-  const out = new Map<ChannelId, DesiredInstrument>();
-  for (const channelId of doc.channelOrder) {
-    const channel = doc.channels[channelId];
-    if (channel === undefined || channel.role !== "track") continue;
-    const source = channel.source;
-    if (source === null || source.kind !== "instrument") continue;
-    const device = doc.devices[source.deviceId];
-    if (device === undefined) continue;
-    out.set(channelId, { deviceId: device.id, definitionId: device.definitionId });
-  }
-  return out;
-}
-
 /**
- * Builds the M1 engine against ANY `BaseAudioContext` (SS12: the same
- * wiring drives a live `AudioContext` and an `OfflineAudioContext` render),
+ * Builds the engine against ANY `BaseAudioContext` (SS12: the same wiring
+ * drives a live `AudioContext` and an `OfflineAudioContext` render),
  * starting from whatever document the app shell hands it.
  */
 export function createProjectEngine(
@@ -120,14 +94,26 @@ export function createProjectEngine(
   const registry: AppDeviceRegistry = createDeviceRegistry(CORE_DEVICES);
   const host: AppDeviceHost = createDeviceHost(ctx, params, registry);
 
-  const mountedByChannel = new Map<ChannelId, TrackMount>();
+  // Dip-phase ramps only make sense against a live, wall-clocked context.
+  const live = typeof AudioContext !== "undefined" && ctx instanceof AudioContext;
+  const reconciler: GraphReconciler = createGraphReconciler({
+    ctx,
+    destination,
+    host,
+    params,
+    immediate: options.immediateReconcile ?? !live,
+  });
+  const meters: MeterBus = createMeterBus(ctx);
+
+  const targetsByChannel = new Map<ChannelId, TrackTarget>();
+  const meteredChannels = new Set<ChannelId>();
   const events = createDocumentNoteEventSource(initialDoc);
 
   const transport: EngineTransport = createEngineTransport({
     context: ctx,
     tempoMap: createTempoMap(initialDoc.tempo),
     events,
-    resolveTarget: (trackId) => mountedByChannel.get(trackId)?.noteTarget,
+    resolveTarget: (trackId) => targetsByChannel.get(trackId)?.noteTarget,
     loop: initialDoc.loop,
     lookAheadSeconds: options.lookAheadSeconds,
     tickIntervalMs: options.tickIntervalMs,
@@ -137,7 +123,7 @@ export function createProjectEngine(
   let disposed = false;
   // Serializes `applyDocument`: mounting awaits `prepare()` (worklet loading),
   // so two edits landing in the same tick must not race two overlapping
-  // mounts/unmounts of the same channel's instrument.
+  // reconciles.
   let queue: Promise<void> = Promise.resolve();
 
   async function applyNow(doc: ProjectSnapshot): Promise<void> {
@@ -145,49 +131,52 @@ export function createProjectEngine(
     transport.setTempoMap(createTempoMap(doc.tempo));
     transport.setLoop(doc.loop);
 
-    const desired = desiredInstruments(doc);
+    // SS6: document -> desired graph -> diff -> patched live graph.
+    await reconciler.apply(doc);
+    if (disposed) return;
 
-    for (const [channelId, mount] of [...mountedByChannel]) {
-      const want = desired.get(channelId);
-      if (want === undefined || want.deviceId !== mount.deviceId || want.definitionId !== mount.definitionId) {
-        host.unmount(mount.deviceId);
-        mountedByChannel.delete(channelId);
-      }
+    // Note targets: each track's source instrument, freshly resolved (a swap
+    // remounted the device; same map, new instance).
+    targetsByChannel.clear();
+    for (const channelId of doc.channelOrder) {
+      const channel = doc.channels[channelId];
+      if (channel === undefined || channel.role !== "track") continue;
+      const source = channel.source;
+      if (source === null || source.kind !== "instrument") continue;
+      const mounted = reconciler.mountedDevice(source.deviceId);
+      if (mounted === undefined) continue;
+      const noteTarget = noteTargetOf(mounted);
+      if (noteTarget !== undefined) targetsByChannel.set(channelId, { noteTarget });
     }
 
-    for (const [channelId, want] of desired) {
-      if (mountedByChannel.has(channelId)) continue;
-      const definition = registry.get(want.definitionId);
-      if (definition === undefined) continue; // unknown definition id: coarse M1 skip, stays silent
-      const mounted = await host.mount({ definition, instanceId: want.deviceId, channelId });
-      if (disposed) {
-        mounted.dispose();
-        return;
-      }
-      mounted.output.connect(destination);
-      mountedByChannel.set(channelId, {
-        channelId,
-        deviceId: want.deviceId,
-        definitionId: want.definitionId,
-        mounted,
-        noteTarget: noteTargetOf(mounted),
-      });
+    // Meter taps follow the reconciler's post-fader nodes (SS6 meter tap).
+    const wantMeters = new Set<ChannelId>();
+    for (const channelId of doc.channelOrder) {
+      const tap = reconciler.meterTapFor(channelId);
+      if (tap === undefined) continue;
+      wantMeters.add(channelId);
+      meters.attach(channelId, tap);
     }
+    for (const channelId of [...meteredChannels]) {
+      if (!wantMeters.has(channelId)) meters.detach(channelId);
+    }
+    meteredChannels.clear();
+    for (const channelId of wantMeters) meteredChannels.add(channelId);
 
-    // `events.setDocument` must run even when nothing (re)mounted: the whole
+    // `events.setDocument` must run even when nothing rewired: the whole
     // point of the delegating source is making a note edit audible without a
     // transport rebuild.
     events.setDocument(doc);
-    // Reloads every value, not just what changed: a device mounted just above
-    // starts at its descriptor defaults and needs the document's saved value
-    // backfilled in (SS4 `load` contract) — see `applyParamValues`'s doc
-    // comment in ../../state/paramBridge.ts.
+    // Reloads every value, not just what changed: a device or mixer strip
+    // mounted just above starts at descriptor defaults and needs the
+    // document's saved value backfilled in (SS4 `load` contract).
     params.load(doc.paramValues);
   }
 
   return {
     transport,
     params,
+    meters,
     onParamCommit(cb: (commit: ParamCommit) => void): Unsub {
       return params.onCommit(cb);
     },
@@ -196,7 +185,7 @@ export function createProjectEngine(
       return queue;
     },
     auditionFor(channelId: ChannelId): AuditionSink | undefined {
-      const target = mountedByChannel.get(channelId)?.noteTarget;
+      const target = targetsByChannel.get(channelId)?.noteTarget;
       if (target === undefined) return undefined;
       // SS10: "Auditions are UI, not transport: they play immediately and are
       // never scheduled" — `ctx.currentTime` read at call time, not queued.
@@ -216,6 +205,8 @@ export function createProjectEngine(
       if (disposed) return;
       disposed = true;
       transport.dispose();
+      meters.dispose();
+      reconciler.dispose();
       host.dispose();
       params.dispose();
     },

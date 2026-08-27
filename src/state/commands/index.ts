@@ -11,6 +11,7 @@ import { defaultIdFactory } from "../ids";
 import { createChannelCommands } from "./channels";
 import { createClipCommands } from "./clips";
 import { createNoteCommands } from "./notes";
+import { createRoutingCommands } from "./routing";
 import { createSongCommands } from "./song";
 
 export function createProjectCommands(ids: IdFactory = defaultIdFactory): ProjectCommands {
@@ -18,6 +19,7 @@ export function createProjectCommands(ids: IdFactory = defaultIdFactory): Projec
     ...createNoteCommands(ids),
     ...createClipCommands(ids),
     ...createChannelCommands(ids),
+    ...createRoutingCommands(ids),
     ...createSongCommands(),
   };
 }
@@ -28,6 +30,8 @@ export const projectCommands: ProjectCommands = createProjectCommands();
 export { MIN_BPM, MAX_BPM } from "./song";
 export { noteFromInit } from "./notes";
 export type { ChannelCommands } from "./channels";
+export { DEFAULT_SEND_DB } from "./routing";
+export type { RoutingCommands } from "./routing";
 export type { ClipCommands } from "./clips";
 export type { NoteCommands } from "./notes";
 export type { SongCommands } from "./song";

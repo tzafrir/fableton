@@ -88,6 +88,8 @@ export type {
   PatchPathSegment,
   ProjectCommands,
   ProjectSnapshot,
+  DeviceInit,
+  GroupInit,
   TrackInit,
 } from "./commands";
 

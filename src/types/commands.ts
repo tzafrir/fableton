@@ -27,7 +27,7 @@ import type {
   NoteId,
   ParamId,
 } from "./ids";
-import type { Project, ProjectId } from "./document";
+import type { Project, ProjectId, SidechainEdge } from "./document";
 import type { Ticks, TimeSignature } from "./time";
 import type { LoopRegion } from "./transport";
 
@@ -276,6 +276,20 @@ export type CreateEmptyProject = (options?: {
   ids?: IdFactory | undefined;
 }) => Project;
 
+/** Init for `addGroup` / `addReturn` — cosmetic fields only. */
+export interface GroupInit {
+  id?: ChannelId | undefined;
+  name?: string | undefined;
+  color?: string | null | undefined;
+}
+
+/** Init for a new device instance (`addEffect`, `setInstrument`). */
+export interface DeviceInit {
+  definitionId: DeviceDefinitionId;
+  version?: number | undefined;
+  deviceId?: DeviceInstanceId | undefined;
+}
+
 export interface TrackInit {
   id?: ChannelId | undefined;
   name?: string | undefined;
@@ -358,6 +372,52 @@ export interface ProjectCommands {
   moveChannel(channelId: ChannelId, toIndex: number): Command;
   setChannelMuted(channelId: ChannelId, muted: boolean): Command;
   setChannelSolo(channelId: ChannelId, solo: boolean): Command;
+
+  // routing (SS6/SS18-M2) — every edge edit runs the DFS cycle check via
+  // `canRun`, so a cycle-forming edit never reaches the store.
+  /** New group channel; `memberIds` re-point their `output` into it. The
+   *  group's own output is the members' common parent (or the master). */
+  addGroup(memberIds?: readonly ChannelId[] | undefined, init?: GroupInit | undefined): Command;
+  /** New return channel, output -> master. */
+  addReturn(init?: GroupInit | undefined): Command;
+  /**
+   * Deletes channels of any non-master role. Group members re-point to the
+   * group's own output; sends/sidechains into the deleted set are removed;
+   * clips, devices and `paramValues` entries go with their channel.
+   */
+  deleteChannels(channelIds: readonly ChannelId[]): Command;
+  /** Re-route a channel into a group / return target ("Audio To"). */
+  setChannelOutput(channelId: ChannelId, output: ChannelId): Command;
+  /** Adds (or re-taps) a send from `from` into `to`, seeding its amount
+   *  param at silence. Rejected when it would loop. */
+  setSend(from: ChannelId, to: ChannelId, tap?: "pre" | "post" | undefined): Command;
+  removeSend(from: ChannelId, to: ChannelId): Command;
+  /** SS6: sidechain is an explicit document edge ("Audio From" UI). One
+   *  edge per (device, port): setting replaces any existing edge. */
+  setSidechain(edge: SidechainEdge): Command;
+  removeSidechain(deviceId: DeviceInstanceId, port?: string | undefined): Command;
+
+  // devices (SS7) — chain edits; the reconciler turns each into a patch
+  /** Insert an effect into a channel's chain (`index` omitted = append). */
+  addEffect(channelId: ChannelId, init: DeviceInit, index?: number | undefined): Command;
+  /** Remove devices from chains/source slots; their `paramValues` go too.
+   *  Automation lanes naming their params are KEPT (SS7: never silently
+   *  deleted — M3 renders them greyed + re-bindable). */
+  removeDevices(deviceIds: readonly DeviceInstanceId[]): Command;
+  /** Reorder within one channel's chain. */
+  moveDevice(channelId: ChannelId, deviceId: DeviceInstanceId, toIndex: number): Command;
+  setDeviceEnabled(deviceId: DeviceInstanceId, enabled: boolean): Command;
+  /**
+   * SS7 swap: replace a track's source instrument with a NEW instance of
+   * `init.definitionId`. Clips are untouched; `carryValues` (device-LOCAL id
+   * -> value) seeds compatible params — computed by the CALLER, which knows
+   * both definitions; the document layer never imports the device library.
+   */
+  setInstrument(
+    channelId: ChannelId,
+    init: DeviceInit,
+    carryValues?: Readonly<Record<string, number>> | undefined,
+  ): Command;
 
   // params (the SS3 fast path's one document write, on gesture end)
   setParamValue(paramId: ParamId, value: number): Command;

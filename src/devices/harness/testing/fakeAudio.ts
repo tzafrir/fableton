@@ -71,9 +71,17 @@ export class FakeAudioNode {
     this.connections.push({ to, output, input });
     return to instanceof FakeAudioNode ? to : undefined;
   }
-  disconnect(): void {
+  disconnect(to?: FakeAudioNode | FakeAudioParam): void {
     this.disconnectCount += 1;
-    this.connections.length = 0;
+    if (to === undefined) {
+      this.connections.length = 0;
+      return;
+    }
+    // Targeted disconnect, per the real `AudioNode.disconnect(destination)` —
+    // the reconciler removes single edges, never a node's whole fan-out.
+    for (let i = this.connections.length - 1; i >= 0; i--) {
+      if (this.connections[i]?.to === to) this.connections.splice(i, 1);
+    }
   }
 }
 
@@ -88,6 +96,13 @@ export class FakeDelayNode extends FakeAudioNode {
   readonly delayTime = new FakeAudioParam("delayTime", 0);
   constructor() {
     super("delay");
+  }
+}
+
+export class FakeStereoPannerNode extends FakeAudioNode {
+  readonly pan = new FakeAudioParam("pan", 0);
+  constructor() {
+    super("panner");
   }
 }
 
@@ -109,6 +124,7 @@ export interface FakeAudioContext {
   readonly destination: FakeAudioNode;
   audioWorklet: { addModule(url: string): Promise<void> };
   createGain(): FakeGainNode;
+  createStereoPanner(): FakeStereoPannerNode;
   createDelay(maxDelay?: number): FakeDelayNode;
   createBiquadFilter(): FakeBiquadNode;
   createChannelSplitter(count?: number): FakeAudioNode;
@@ -136,6 +152,7 @@ export function createFakeAudioContext(options: { currentTime?: number } = {}): 
       },
     },
     createGain: () => track(new FakeGainNode()),
+    createStereoPanner: () => track(new FakeStereoPannerNode()),
     createDelay: () => track(new FakeDelayNode()),
     createBiquadFilter: () => track(new FakeBiquadNode()),
     createChannelSplitter: () => track(new FakeAudioNode("splitter")),
