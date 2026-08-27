@@ -20,6 +20,8 @@ import type {
   DeviceInstance,
   DeviceInstanceId,
   DeviceRegistry,
+  DeviceServices,
+  DeviceTempo,
   MountDeviceOptions,
   MountedDevice,
   ParamHandle,
@@ -71,6 +73,10 @@ export function prepareDefinition(
 }
 
 export interface DeviceHostOptions {
+  /** SS8 tempo, as devices may see it (`DeviceServices.tempo`). Omitted, a
+   *  fixed 120 bpm stand-in is used — enough for every device that ignores
+   *  tempo, and for tests that do not care. */
+  tempo?: DeviceTempo | undefined;
   /** Injectable `setTimeout` for the deferred port teardown (tests). */
   schedule?: DelayedCall | undefined;
   /** Extra wait after `dispose(when)` before port nodes are disconnected. */
@@ -95,6 +101,12 @@ export function createDeviceHost(
   options: DeviceHostOptions = {},
 ): AppDeviceHost {
   const mounted = new Map<DeviceInstanceId, MountedDevice>();
+  const services: DeviceServices = {
+    tempo: options.tempo ?? {
+      secondsPerBeat: () => 0.5, // 120 bpm
+      onChange: () => () => undefined,
+    },
+  };
   const schedule = options.schedule ?? defaultSchedule;
   const teardownRampMs = options.teardownRampMs ?? DEFAULT_RAMP_OUT_MS;
   let hostDisposed = false;
@@ -189,7 +201,7 @@ export function createDeviceHost(
       const bundle = createDeviceIO(ctx, definition);
       let instance: DeviceInstance;
       try {
-        instance = definition.create(ctx, bundle.io);
+        instance = definition.create(ctx, bundle.io, services);
       } catch (error) {
         bundle.dispose();
         throw error;

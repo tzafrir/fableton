@@ -6,7 +6,7 @@
 //
 // Test support only — never imported by non-test code in this package.
 
-import type { DeviceIO } from "../../../types";
+import type { DeviceIO, DeviceServices } from "../../../types";
 
 export interface ParamEvent {
   kind: "cancel" | "set" | "linear" | "exponential" | "target";
@@ -122,9 +122,19 @@ export class FakeBufferSourceNode extends FakeAudioNode {
   }
 }
 
+/** `DelayNode`-alike: the delay TIME is the whole point, so it is recorded. */
+export class FakeDelayNode extends FakeAudioNode {
+  readonly delayTime = new FakeAudioParam(0);
+  constructor(readonly maxDelay = 1) {
+    super("delay");
+  }
+}
+
 export class FakeBiquadNode extends FakeAudioNode {
   readonly frequency = new FakeAudioParam(350);
   readonly Q = new FakeAudioParam(1);
+  /** In CENTS — what a musically-even cutoff modulation drives. */
+  readonly detune = new FakeAudioParam(0);
   type = "lowpass";
   constructor() {
     super("biquad");
@@ -174,6 +184,9 @@ export interface FakeAudioContext {
   createBiquadFilter(): FakeBiquadNode;
   createOscillator(): FakeOscillatorNode;
   createWaveShaper(): FakeWaveShaperNode;
+  createDelay(maxDelay?: number): FakeDelayNode;
+  createChannelSplitter(count?: number): FakeAudioNode;
+  createChannelMerger(count?: number): FakeAudioNode;
   createBufferSource(): FakeBufferSourceNode;
   createBuffer(channels: number, length: number, sampleRate: number): AudioBuffer;
 }
@@ -216,6 +229,9 @@ export function createFakeAudioContext(
       return node;
     },
     createBufferSource: () => track(new FakeBufferSourceNode()),
+    createDelay: (maxDelay = 1) => track(new FakeDelayNode(maxDelay)),
+    createChannelSplitter: () => track(new FakeAudioNode("splitter")),
+    createChannelMerger: () => track(new FakeAudioNode("merger")),
     createBuffer: (channels: number, length: number, sampleRate: number) => {
       const data = Array.from({ length: channels }, () => new Float32Array(length));
       return {
@@ -248,6 +264,26 @@ export function asParam(param: FakeAudioParam): AudioParam {
 /** Reads a node handed out through a typed `AudioNode`/`AudioParam` slot back. */
 export function fakeOf<T>(value: T): FakeAudioNode {
   return value as unknown as FakeAudioNode;
+}
+
+/** The harness's `DeviceServices`, as a test supplies them: a fixed tempo
+ *  whose `bpm` can be moved to exercise a tempo-synced device. */
+export function fakeServices(bpm = 120): DeviceServices & { setBpm(next: number): void } {
+  let current = bpm;
+  const listeners = new Set<() => void>();
+  return {
+    tempo: {
+      secondsPerBeat: () => 60 / current,
+      onChange: (cb: () => void) => {
+        listeners.add(cb);
+        return () => listeners.delete(cb);
+      },
+    },
+    setBpm(next: number): void {
+      current = next;
+      for (const cb of [...listeners]) cb();
+    },
+  };
 }
 
 /** A minimal `DeviceIO` — two harness-owned port gains, wired up like the real one. */

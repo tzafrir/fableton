@@ -20,6 +20,7 @@ import {
   fakeOf,
   gainsOf,
   type FakeAudioContext,
+  fakeServices,
 } from "./testing/fakeAudio";
 
 let ctx: FakeAudioContext;
@@ -127,7 +128,7 @@ describe("DeviceHost.mount — the SS7 lifecycle in one place", () => {
       ...def,
       create(c, io) {
         created.push(created.length);
-        return def.create(c, io);
+        return def.create(c, io, fakeServices());
       },
     };
 

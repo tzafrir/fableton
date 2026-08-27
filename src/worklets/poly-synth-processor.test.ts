@@ -257,3 +257,72 @@ describe("PolySynthProcessor", () => {
     for (const param of PolySynth.params) expect(worklet.has(param.id)).toBe(true);
   });
 });
+
+describe("ENV 2 — the filter envelope", () => {
+  // Brightness, measured as the STEEPEST edge in a window. A lowpass rounds
+  // a square wave's edges, so this falls as the filter closes — and unlike
+  // an average it is not swamped by which part of the cycle a window happens
+  // to catch.
+  const edge = (samples: Float32Array, from: number, to: number): number =>
+    maxStep(samples, from, to);
+
+  const base = {
+    shape: 1, // square: plenty of harmonics for the filter to remove
+    cutoff: 300,
+    attack: 1,
+    decay: 4000,
+    sustain: 100,
+    release: 1,
+    gain: 0,
+    env2Attack: 1,
+    // Short enough to complete inside the ~50 ms these tests render.
+    env2Decay: 30,
+    env2Sustain: 0,
+    env2Release: 1,
+  };
+
+  it("opens the filter on a note, then closes it as the envelope decays", async () => {
+    const { ctor } = await loadProcessor();
+    const processor = new ctor();
+    push(processor, { type: "noteOn", pitch: 45, vel: 127, when: 0 });
+    // +36 semitones of sweep from 300 Hz: bright at the attack, dark once
+    // ENV 2 has decayed to its zero sustain.
+    const rendered = render(processor, 20, 0, params({ ...base, env2Amount: 36 }));
+
+    const early = edge(rendered, BLOCK, BLOCK * 4);
+    const late = edge(rendered, rendered.length - BLOCK * 4, rendered.length);
+    expect(early).toBeGreaterThan(late * 3);
+  });
+
+  it("does nothing at zero amount — the synth is unchanged until asked", async () => {
+    const { ctor } = await loadProcessor();
+    const withEnv = new ctor();
+    const without = new ctor();
+    push(withEnv, { type: "noteOn", pitch: 45, vel: 127, when: 0 });
+    push(without, { type: "noteOn", pitch: 45, vel: 127, when: 0 });
+    const a = render(withEnv, 8, 0, params({ ...base, env2Amount: 0 }));
+    const b = render(without, 8, 0, params({ ...base, env2Amount: 0, env2Decay: 500 }));
+    // Identical output whatever the other ENV 2 settings say: amount 0 is off.
+    expect(Array.from(a)).toEqual(Array.from(b));
+  });
+
+  it("holds the filter open until the LAST note of a chord is released", async () => {
+    const { ctor } = await loadProcessor();
+    const processor = new ctor();
+    const settings = params({ ...base, env2Amount: 36, env2Sustain: 100 });
+    push(processor, { type: "noteOn", pitch: 45, vel: 127, when: 0 });
+    push(processor, { type: "noteOn", pitch: 52, vel: 127, when: 0 });
+    render(processor, 4, 0, settings);
+
+    // One note released. A shared envelope gated by "any note" would start
+    // closing here, and a chord's filter would snap shut as its first note
+    // let go.
+    push(processor, { type: "noteOff", pitch: 45, when: 4 * (BLOCK / SR) });
+    const held = render(processor, 8, 4 * (BLOCK / SR), settings);
+    const openEdge = edge(held, BLOCK, held.length);
+
+    push(processor, { type: "noteOff", pitch: 52, when: 12 * (BLOCK / SR) });
+    const closed = render(processor, 12, 12 * (BLOCK / SR), settings);
+    expect(edge(closed, closed.length - BLOCK * 4, closed.length)).toBeLessThan(openEdge / 2);
+  });
+});

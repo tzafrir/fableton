@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { DeviceInstance } from "../../types";
 import { MAX_VOICES, Pluck } from "./pluck";
 import {
+  fakeServices,
   asContext,
   buildDeviceIO,
   createFakeAudioContext,
@@ -26,7 +27,7 @@ interface Rig {
 function rig(): Rig {
   const ctx = createFakeAudioContext();
   const { io } = buildDeviceIO(ctx);
-  const instance = Pluck.create(asContext(ctx), io);
+  const instance = Pluck.create(asContext(ctx), io, fakeServices());
   return {
     ctx,
     instance,

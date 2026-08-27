@@ -37,7 +37,20 @@ import { POLY_SYNTH_PROCESSOR_NAME } from "./polySynth/processorName";
 export { POLY_SYNTH_PROCESSOR_NAME };
 
 /** Device-local ids that are also the worklet's `parameterDescriptors` names. */
-const AUDIO_PARAM_IDS = ["shape", "cutoff", "attack", "decay", "sustain", "release", "gain"] as const;
+const AUDIO_PARAM_IDS = [
+  "shape",
+  "cutoff",
+  "attack",
+  "decay",
+  "sustain",
+  "release",
+  "gain",
+  "env2Amount",
+  "env2Attack",
+  "env2Decay",
+  "env2Sustain",
+  "env2Release",
+] as const;
 
 export const PolySynth: DeviceDefinition = {
   id: "core.poly-synth",
@@ -52,6 +65,14 @@ export const PolySynth: DeviceDefinition = {
     p.percent("sustain", "Sustain", { default: 70 }),
     p.ms("release", "Release", { min: 1, max: 6000, default: 250 }),
     p.db("gain", "Gain", { min: -60, max: 6, default: 0 }),
+    // ENV 2 — the filter envelope (the classic second envelope: env 1 is the
+    // amp, env 2 opens the filter). Amount is in semitones, and 0 by default,
+    // so the synth sounds exactly as before until it is asked for.
+    p.st("env2Amount", "Env2 Amount", { min: -48, max: 48, default: 0 }),
+    p.ms("env2Attack", "Env2 Attack", { min: 1, max: 4000, default: 5 }),
+    p.ms("env2Decay", "Env2 Decay", { min: 1, max: 4000, default: 200 }),
+    p.percent("env2Sustain", "Env2 Sustain", { default: 0 }),
+    p.ms("env2Release", "Env2 Release", { min: 1, max: 6000, default: 250 }),
   ],
   audioIn: [],
   audioOut: [{ id: "out" }],

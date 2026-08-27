@@ -142,7 +142,19 @@ export function createProjectEngine(
 ): AppProjectEngine {
   const params: AppParamRegistry = createParamRegistry({ now: () => ctx.currentTime });
   const registry: AppDeviceRegistry = createDeviceRegistry(CORE_DEVICES);
-  const host: AppDeviceHost = createDeviceHost(ctx, params, registry);
+  // SS8 tempo, as a DEVICE may see it: one number (how long a beat is) plus a
+  // change notification, so a tempo-synced delay or LFO can convert a note
+  // LENGTH without being able to see the transport or the song position.
+  const tempoListeners = new Set<() => void>();
+  const host: AppDeviceHost = createDeviceHost(ctx, params, registry, {
+    tempo: {
+      secondsPerBeat: () => 60 / currentTempoMap.bpmAt(0),
+      onChange: (cb) => {
+        tempoListeners.add(cb);
+        return () => tempoListeners.delete(cb);
+      },
+    },
+  });
 
   // Dip-phase ramps only make sense against a live, wall-clocked context.
   const live = typeof AudioContext !== "undefined" && ctx instanceof AudioContext;
@@ -196,6 +208,8 @@ export function createProjectEngine(
       currentTempoSegments = doc.tempo;
       currentTempoMap = createTempoMap(doc.tempo);
       transport.setTempoMap(currentTempoMap);
+      // Tempo-synced devices re-derive their times from the new beat length.
+      for (const cb of [...tempoListeners]) cb();
     }
     // `setLoop` only swaps a field (it takes effect from the next window), so
     // it needs no such guard.

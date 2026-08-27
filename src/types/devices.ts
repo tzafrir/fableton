@@ -9,7 +9,7 @@
 // `device-harness` (src/devices/harness/) implements the registry + host;
 // `device-defs` (src/devices/core/, src/worklets/) writes definitions.
 
-import type { Seconds } from "./common";
+import type { Seconds, Unsub } from "./common";
 import type {
   ChannelId,
   DeviceDefinitionId,
@@ -44,6 +44,30 @@ export interface PortSpec {
  * connects them to the surrounding chain, so a device can be created
  * before it is wired anywhere.
  */
+/**
+ * SS8 tempo, as much of it as a DEVICE may see.
+ *
+ * A tempo-synced delay or LFO needs one number — how long a beat is — and
+ * needs to be told when it changes. It must NOT see the tempo map, the
+ * transport or the document: a device that could read the song position
+ * could also drift from the scheduler, and SS8 keeps tick<->seconds
+ * conversion in exactly two places. This is a third seam only in the sense
+ * that it converts a NOTE LENGTH, never a position.
+ *
+ * The harness supplies it; a device that ignores it is unaffected.
+ */
+export interface DeviceTempo {
+  /** Seconds per quarter note at the current tempo. */
+  secondsPerBeat(): Seconds;
+  /** Fires after `secondsPerBeat()` changes. Returns an unsubscribe. */
+  onChange(cb: () => void): Unsub;
+}
+
+/** Everything the harness hands a device besides its ports. */
+export interface DeviceServices {
+  tempo: DeviceTempo;
+}
+
 export interface DeviceIO {
   readonly in: AudioNode;
   readonly out: AudioNode;
@@ -96,7 +120,7 @@ export interface DeviceDefinition {
    * Synchronous, allocation-light node construction. The context may be an
    * `OfflineAudioContext` (SS12 export) — never assume `AudioContext`.
    */
-  create(ctx: BaseAudioContext, io: DeviceIO): DeviceInstance;
+  create(ctx: BaseAudioContext, io: DeviceIO, services: DeviceServices): DeviceInstance;
   /** Declarative panel rows; omit -> auto-generated from `params` (SS5). */
   panel?: PanelSpec | undefined;
   /**

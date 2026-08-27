@@ -86,6 +86,14 @@ export class PolySynthProcessor extends AudioWorkletProcessor {
       { name: "sustain", defaultValue: 70, minValue: 0, maxValue: 100, automationRate: "k-rate" },
       { name: "release", defaultValue: 250, minValue: 1, maxValue: 6000, automationRate: "k-rate" },
       { name: "gain", defaultValue: 0, minValue: -60, maxValue: 6, automationRate: "k-rate" },
+      // ENV 2 — the filter envelope. Amount is in SEMITONES so the sweep
+      // covers the same musical interval wherever the cutoff sits; a
+      // percentage of Hz would be an octave down low and nothing up high.
+      { name: "env2Amount", defaultValue: 0, minValue: -48, maxValue: 48, automationRate: "k-rate" },
+      { name: "env2Attack", defaultValue: 5, minValue: 1, maxValue: 4000, automationRate: "k-rate" },
+      { name: "env2Decay", defaultValue: 200, minValue: 1, maxValue: 4000, automationRate: "k-rate" },
+      { name: "env2Sustain", defaultValue: 0, minValue: 0, maxValue: 100, automationRate: "k-rate" },
+      { name: "env2Release", defaultValue: 250, minValue: 1, maxValue: 6000, automationRate: "k-rate" },
     ];
   }
 
@@ -100,6 +108,30 @@ export class PolySynthProcessor extends AudioWorkletProcessor {
     sustainLevel: 0.7,
     releaseSeconds: 0.25,
   };
+
+  /**
+   * ENV 2, the filter envelope.
+   *
+   * The lowpass is ONE filter over the mixed voices, not one per voice, so
+   * its envelope is shared too: it retriggers on any note-on and releases
+   * when the last held note lets go — mono-envelope behaviour, which is what
+   * a shared filter can honestly offer and what an acid line wants anyway.
+   * Making it per-voice means a filter per voice, which is a different
+   * instrument (and a different render budget, SS2).
+   *
+   * It is evaluated once per BLOCK, not per sample: the cutoff is k-rate
+   * because the coefficient costs a `Math.exp`, and 128 samples is 2.7 ms —
+   * finer than any filter sweep can be heard to step.
+   */
+  private readonly filterEnv = new AdsrEnvelope(sampleRate);
+  private readonly env2: AdsrConfig = {
+    attackSeconds: 0.005,
+    decaySeconds: 0.2,
+    sustainLevel: 0,
+    releaseSeconds: 0.25,
+  };
+  /** How many note-ons are still held — the gate for `filterEnv`. */
+  private heldNotes = 0;
 
   constructor(options?: AudioWorkletNodeOptions) {
     super(options);
@@ -135,9 +167,23 @@ export class PolySynthProcessor extends AudioWorkletProcessor {
     this.adsr.releaseSeconds = paramAt(parameters, "release", 250) / 1000;
     const gainDb = paramAt(parameters, "gain", 0);
     const gainLinear = gainDb <= GAIN_SILENCE_DB ? 0 : 10 ** (gainDb / 20);
+    this.env2.attackSeconds = paramAt(parameters, "env2Attack", 5) / 1000;
+    this.env2.decaySeconds = paramAt(parameters, "env2Decay", 200) / 1000;
+    this.env2.sustainLevel = paramAt(parameters, "env2Sustain", 0) / 100;
+    this.env2.releaseSeconds = paramAt(parameters, "env2Release", 250) / 1000;
+    const env2Amount = paramAt(parameters, "env2Amount", 0);
+
+    // Advance ENV 2 across this block and take where it lands. Looping a
+    // trivial add 128 times costs far less than one `Math.exp` per sample,
+    // which is what a per-sample cutoff would cost.
+    let env2Level = this.filterEnv.currentLevel;
+    for (let n = 0; n < blockSize; n++) env2Level = this.filterEnv.next();
+    // Semitones -> a frequency ratio, so the sweep is musically even.
+    const modulated =
+      env2Amount === 0 ? cutoffHz : cutoffHz * 2 ** ((env2Amount * env2Level) / 12);
     // k-rate: one value for the whole block, so the filter coefficient (a
     // `Math.exp`) is computed here, not per sample (SS2 render-thread budget).
-    this.lowpass.setCutoff(cutoffHz);
+    this.lowpass.setCutoff(Math.min(20000, Math.max(20, modulated)));
 
     const dueCount = this.queue.collectDue(currentTime, sampleRate, blockSize);
     const voices = this.voices;
@@ -162,7 +208,7 @@ export class PolySynthProcessor extends AudioWorkletProcessor {
       // scan and the filter rather than grinding them for silence. The
       // processor still returns `true` (it must stay alive for the next note),
       // but an idle instrument now costs a fill instead of a full render.
-      if (this.allIdle() && this.lowpass.isSettled) {
+      if (this.allIdle() && this.lowpass.isSettled && this.filterEnv.isIdle) {
         for (let c = 0; c < channelCount; c++) {
           output[c]!.fill(0, i, until);
         }
@@ -233,12 +279,19 @@ export class PolySynthProcessor extends AudioWorkletProcessor {
         voice.velocitySamplesLeft = samples;
       }
       voice.envelope.noteOn(this.adsr);
+      // ENV 2 retriggers on every note-on (see `filterEnv`).
+      this.heldNotes++;
+      this.filterEnv.noteOn(this.env2);
       return;
     }
     if (type === NOTE_OFF) {
       const released = this.allocator.release(this.queue.pitchAt(index));
       if (released === null) return;
       this.voices[released]?.envelope.noteOff();
+      this.heldNotes = Math.max(0, this.heldNotes - 1);
+      // The shared envelope releases only when the LAST note does, so a
+      // chord's filter does not snap shut as its first note is let go.
+      if (this.heldNotes === 0) this.filterEnv.noteOff();
       return;
     }
     // allNotesOff (§12 "Stop sends allNotesOff(now + e) down every track").
@@ -255,6 +308,8 @@ export class PolySynthProcessor extends AudioWorkletProcessor {
       if (this.allocator.pitchOf(v) === null) continue;
       this.voices[v]?.envelope.noteOff();
     }
+    this.heldNotes = 0;
+    this.filterEnv.noteOff();
     this.allocator.clear();
   }
 }

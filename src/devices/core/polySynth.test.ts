@@ -7,6 +7,7 @@ import type { ParamHandle } from "../../types";
 import { PolySynth, POLY_SYNTH_PROCESSOR_NAME } from "./polySynth";
 import { OSCILLATOR_SHAPES } from "./polySynth/oscillator";
 import {
+  fakeServices,
   asContext,
   buildDeviceIO,
   createFakeAudioContext,
@@ -64,7 +65,7 @@ describe("PolySynth definition shape", () => {
     expect(PolySynth.audioOut.map((port) => port.id)).toEqual(["out"]);
   });
 
-  it("declares shape / cutoff / attack / decay / sustain / release / gain", () => {
+  it("declares the oscillator, the amp envelope, and ENV 2 for the filter", () => {
     expect(PolySynth.params.map((desc) => desc.id)).toEqual([
       "shape",
       "cutoff",
@@ -73,7 +74,18 @@ describe("PolySynth definition shape", () => {
       "sustain",
       "release",
       "gain",
+      "env2Amount",
+      "env2Attack",
+      "env2Decay",
+      "env2Sustain",
+      "env2Release",
     ]);
+  });
+
+  it("leaves ENV 2 at zero depth, so the synth is unchanged until asked", () => {
+    const amount = PolySynth.params.find((desc) => desc.id === "env2Amount");
+    expect(amount?.defaultValue).toBe(0);
+    expect(amount?.unit).toBe("st"); // semitones: a musically even sweep
   });
 
   it("shape's labels are exactly the worklet's OSCILLATOR_SHAPES, in order", () => {
@@ -103,7 +115,7 @@ describe("PolySynth.create", () => {
     const ctx = createFakeAudioContext();
     const { io, output } = buildDeviceIO(ctx);
 
-    PolySynth.create(asContext(ctx), io);
+    PolySynth.create(asContext(ctx), io, fakeServices());
 
     expect(createdNodes).toHaveLength(1);
     const node = lastNode();
@@ -117,7 +129,7 @@ describe("PolySynth.create", () => {
   it("connects each declared param straight to the worklet's own AudioParam", () => {
     const ctx = createFakeAudioContext();
     const { io } = buildDeviceIO(ctx);
-    const instance = PolySynth.create(asContext(ctx), io);
+    const instance = PolySynth.create(asContext(ctx), io, fakeServices());
     const node = lastNode();
 
     const cutoff = fakeHandle();
@@ -133,7 +145,7 @@ describe("PolySynth.create", () => {
   it("forwards noteOn / noteOff / allNotesOff as port messages with the exact args", () => {
     const ctx = createFakeAudioContext();
     const { io } = buildDeviceIO(ctx);
-    const instance = PolySynth.create(asContext(ctx), io);
+    const instance = PolySynth.create(asContext(ctx), io, fakeServices());
     const node = lastNode();
 
     instance.noteOn?.(60, 100, 1.5);
@@ -154,7 +166,7 @@ describe("PolySynth.create", () => {
     // src/workers/clock.worker.ts uses for its tick message).
     const ctx = createFakeAudioContext();
     const { io } = buildDeviceIO(ctx);
-    const instance = PolySynth.create(asContext(ctx), io);
+    const instance = PolySynth.create(asContext(ctx), io, fakeServices());
     const node = lastNode();
     const sent: unknown[] = [];
     node.port.postMessage = (message: unknown): void => {
@@ -179,14 +191,14 @@ describe("PolySynth.create", () => {
   it("reports zero latency", () => {
     const ctx = createFakeAudioContext();
     const { io } = buildDeviceIO(ctx);
-    const instance = PolySynth.create(asContext(ctx), io);
+    const instance = PolySynth.create(asContext(ctx), io, fakeServices());
     expect(instance.latencySamples?.()).toBe(0);
   });
 
   it("dispose sends allNotesOff, fades its own gain, then disconnects", async () => {
     const ctx = createFakeAudioContext({ currentTime: 0 });
     const { io } = buildDeviceIO(ctx);
-    const instance = PolySynth.create(asContext(ctx), io);
+    const instance = PolySynth.create(asContext(ctx), io, fakeServices());
     const node = lastNode();
     const outGain = fakeOf(node.connectedTo[0]) as FakeGainNode;
 

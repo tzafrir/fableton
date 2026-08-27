@@ -163,11 +163,23 @@ describe("createDemoEngine (SS18-M0 hard-coded chain)", () => {
       clock: createManualClock(),
     });
 
-    // The synth's seven k-rate params were fetched off the worklet node and
-    // bound to handles (SS4 fast path A).
-    expect([...synthNode().parameters.keys()].sort()).toEqual(
-      ["attack", "cutoff", "decay", "gain", "release", "shape", "sustain"],
-    );
+    // Every k-rate param the definition declares was fetched off the worklet
+    // node and bound to a handle (SS4 fast path A) — the amp envelope, the
+    // oscillator, and ENV 2 for the filter.
+    expect([...synthNode().parameters.keys()].sort()).toEqual([
+      "attack",
+      "cutoff",
+      "decay",
+      "env2Amount",
+      "env2Attack",
+      "env2Decay",
+      "env2Release",
+      "env2Sustain",
+      "gain",
+      "release",
+      "shape",
+      "sustain",
+    ]);
 
     engine.dispose();
   });

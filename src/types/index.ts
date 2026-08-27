@@ -202,6 +202,8 @@ export type {
   DeviceHost,
   DeviceIO,
   DeviceInstance,
+  DeviceServices,
+  DeviceTempo,
   DeviceInstanceSpec,
   DeviceKind,
   DeviceRegistry,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ParamHandle } from "../../types";
 import { Filter, FILTER_TYPES, filterTypeFromIndex } from "./filter";
 import {
+  fakeServices,
   asContext,
   buildDeviceIO,
   createFakeAudioContext,
@@ -39,8 +40,23 @@ describe("Filter definition shape", () => {
     expect(Filter.version).toBeGreaterThanOrEqual(1);
   });
 
-  it("declares exactly type / cutoff / resonance, device-local ids", () => {
-    expect(Filter.params.map((desc) => desc.id)).toEqual(["type", "cutoff", "resonance"]);
+  it("declares the filter proper plus the LFO that makes it an auto-filter", () => {
+    expect(Filter.params.map((desc) => desc.id)).toEqual([
+      "type",
+      "cutoff",
+      "resonance",
+      "lfoShape",
+      "lfoDepth",
+      "lfoSync",
+      "lfoDiv",
+      "lfoRate",
+    ]);
+  });
+
+  it("the LFO is OFF at defaults, so adding a filter is still just a filter", () => {
+    const depth = Filter.params.find((desc) => desc.id === "lfoDepth");
+    expect(depth?.defaultValue).toBe(0);
+    expect(depth?.unit).toBe("st"); // semitones: it drives `detune`, in cents
   });
 
   it("cutoff is Hz with a log taper", () => {
@@ -76,7 +92,7 @@ describe("Filter.create", () => {
   it("wires io.in -> filter -> gain -> io.out", () => {
     const ctx = createFakeAudioContext();
     const { io, input, output } = buildDeviceIO(ctx);
-    Filter.create(asContext(ctx), io);
+    Filter.create(asContext(ctx), io, fakeServices());
 
     expect(input.connectedTo).toHaveLength(1);
     const filterNode = fakeOf(input.connectedTo[0]) as FakeBiquadNode;
@@ -90,7 +106,7 @@ describe("Filter.create", () => {
   it("binds cutoff and resonance straight to the filter's own AudioParams", () => {
     const ctx = createFakeAudioContext();
     const { io, input } = buildDeviceIO(ctx);
-    const instance = Filter.create(asContext(ctx), io);
+    const instance = Filter.create(asContext(ctx), io, fakeServices());
     const filterNode = fakeOf(input.connectedTo[0]) as FakeBiquadNode;
 
     const cutoff = fakeHandle();
@@ -105,7 +121,7 @@ describe("Filter.create", () => {
   it("binds type to the message path and sets BiquadFilterNode.type on change", () => {
     const ctx = createFakeAudioContext();
     const { io, input } = buildDeviceIO(ctx);
-    const instance = Filter.create(asContext(ctx), io);
+    const instance = Filter.create(asContext(ctx), io, fakeServices());
     const filterNode = fakeOf(input.connectedTo[0]) as FakeBiquadNode;
 
     expect(filterNode.type).toBe("lowpass");
@@ -124,14 +140,14 @@ describe("Filter.create", () => {
   it("reports zero latency", () => {
     const ctx = createFakeAudioContext();
     const { io } = buildDeviceIO(ctx);
-    const instance = Filter.create(asContext(ctx), io);
+    const instance = Filter.create(asContext(ctx), io, fakeServices());
     expect(instance.latencySamples?.()).toBe(0);
   });
 
   it("dispose is idempotent and eventually disconnects the fade-out gain", async () => {
     const ctx = createFakeAudioContext({ currentTime: 0 });
     const { io, input } = buildDeviceIO(ctx);
-    const instance = Filter.create(asContext(ctx), io);
+    const instance = Filter.create(asContext(ctx), io, fakeServices());
     const filterNode = fakeOf(input.connectedTo[0]) as FakeBiquadNode;
     const outGain = fakeOf(filterNode.connectedTo[0]) as FakeGainNode;
 

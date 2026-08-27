@@ -6,6 +6,8 @@
 // Test support only — not exported from the package barrel and never imported
 // by app code.
 
+import type { DeviceServices } from "../../../types";
+
 export interface ParamEvent {
   kind: "cancel" | "hold" | "set" | "linear" | "target";
   value: number;
@@ -193,6 +195,8 @@ export class FakeBiquadNode extends FakeAudioNode {
   readonly frequency = new FakeAudioParam("frequency", 350);
   readonly Q = new FakeAudioParam("Q", 1);
   readonly gain = new FakeAudioParam("gain", 0);
+  /** In CENTS — what a musically-even cutoff modulation drives. */
+  readonly detune = new FakeAudioParam("detune", 0);
   type = "lowpass";
   constructor() {
     super("biquad");
@@ -253,6 +257,16 @@ export function createFakeAudioContext(options: { currentTime?: number } = {}): 
 }
 
 /** The same object, typed as the contract expects it. */
+/** The harness's `DeviceServices`, as a test supplies them (a fixed tempo). */
+export function fakeServices(bpm = 120): DeviceServices {
+  return {
+    tempo: {
+      secondsPerBeat: () => 60 / bpm,
+      onChange: () => () => undefined,
+    },
+  };
+}
+
 export function asContext(ctx: FakeAudioContext): BaseAudioContext {
   return ctx as unknown as BaseAudioContext;
 }

@@ -10,6 +10,7 @@ import { Kick } from "./kick";
 import { DrumMachine, PADS, padNoteName } from "./drumMachine";
 import { Distortion, Overdrive, hardClip, postGainFor, softClip } from "./overdrive";
 import {
+  fakeServices,
   asContext,
   buildDeviceIO,
   createFakeAudioContext,
@@ -43,7 +44,7 @@ function paramPusher(instance: DeviceInstance) {
 function rig(definition: typeof FmSynth): { ctx: FakeAudioContext; instance: DeviceInstance } {
   const ctx = createFakeAudioContext();
   const { io } = buildDeviceIO(ctx);
-  return { ctx, instance: definition.create(asContext(ctx), io) };
+  return { ctx, instance: definition.create(asContext(ctx), io, fakeServices()) };
 }
 
 const oscillators = (ctx: FakeAudioContext): FakeOscillatorNode[] =>
