@@ -1,33 +1,44 @@
-// The shipped app's own seam tests (SS15: "no browser needed for any of the
-// load-bearing logic"). The cutoff control is M0's only live write path into
-// the engine — SS3 fast path A: a gesture writes through `ParamHandle.setLive`
-// at gesture rate with no document churn, and gesture END commits exactly one
-// value. jsdom plus a real `ParamRegistry` (with a fake `AudioParam` standing
-// in for the DSP node) covers all of it; only the AudioContext itself is
-// stubbed, because jsdom has no Web Audio at all.
+// The shipped M1 app shell's own seam tests (SS15: "no browser needed for
+// any of the load-bearing logic"). jsdom has no Web Audio and no
+// `getContext('2d')`, so `bootAudioContext` is mocked (same pattern M0's
+// App.test.tsx used) and the canvas editors run over the kit's fake 2D
+// context (`installFakeCanvas2D`, the same double `arrangement.test.ts` and
+// `pianoRoll.test.ts` use).
+//
+// What this file owns: the WIRING SS18-M1 asks the app shell for — global
+// undo/redo reaching the real store, the transport bar driving a real (fake
+// Web-Audio-backed) engine, and save/export/import hitting the persistence
+// package — not the editors' own gesture/rendering behavior, which is each
+// editor package's own test suite.
+
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createParamRegistry, p } from "../params";
-import type { ParamCommit } from "../params";
-import { FakeAudioParam } from "../devices/harness/testing/fakeAudio";
-import type { DemoEngine } from "../demo";
-import { DEMO_CUTOFF_PARAM_ID } from "../demo/engine";
+import {
+  FakeAudioNode,
+  FakeAudioParam,
+  createFakeAudioContext,
+} from "../devices/harness/testing/fakeAudio";
+import { installFakeCanvas2D, uninstallFakeCanvas2D } from "../editor/kit/testing/fakeCanvas";
+import { createMemoryProjectStorage, projectCodec } from "../persist";
+import { createEmptyProject, createProjectCommands, createSequentialIdFactory } from "../state";
+import type { DocumentStore, Project, ProjectStorage } from "../types";
 import { App } from "./App";
 
 const bootAudioContext = vi.fn();
-const createDemoEngine = vi.fn();
 
 vi.mock("../engine/context", () => ({
   bootAudioContext: (...args: unknown[]) => bootAudioContext(...args) as unknown,
 }));
 
-vi.mock("../demo", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../demo")>();
+const downloadProjectFile = vi.fn();
+
+vi.mock("../persist", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../persist")>();
   return {
     ...actual,
-    createDemoEngine: (...args: unknown[]) => createDemoEngine(...args) as unknown,
+    downloadProjectFile: (...args: unknown[]) => downloadProjectFile(...args) as unknown,
   };
 });
 
@@ -36,112 +47,79 @@ declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
 }
 
-describe("smoke", () => {
-  it("runs in a jsdom + Vitest environment", () => {
-    expect(typeof window).toBe("object");
-    expect(typeof document).toBe("object");
+/** A k-rate `AudioParam` that vivifies on first read, mirroring the real
+ *  `AudioWorkletNode.parameters` map (the same stub `demo/engine.test.ts` and
+ *  `app/engine/projectEngine.test.ts` use). */
+class VivifyingParamMap extends Map<string, FakeAudioParam> {
+  override get(name: string): FakeAudioParam {
+    let param = super.get(name);
+    if (param === undefined) {
+      param = new FakeAudioParam(name, 0);
+      this.set(name, param);
+    }
+    return param;
+  }
+}
+
+interface PostedMessage {
+  readonly type?: string;
+  readonly pitch?: number;
+  readonly when?: number;
+}
+
+/** Everything every stub worklet has been told to play since the last
+ *  `posted.length = 0` — the observation point for "did this edit actually
+ *  reach an instrument", same trick `app/engine/projectEngine.test.ts` uses.
+ *
+ *  CLONED, never retained by reference: `core.poly-synth` reuses one
+ *  preallocated message object per method (SS12's "zero allocation in
+ *  per-tick paths"), so pushing the argument itself would make every entry
+ *  alias the last event posted. */
+const posted: PostedMessage[] = [];
+
+class StubAudioWorkletNode extends FakeAudioNode {
+  readonly parameters = new VivifyingParamMap();
+  readonly port = {
+    postMessage: (message: unknown): void => {
+      posted.push(structuredClone(message) as PostedMessage);
+    },
+  };
+  constructor(_ctx: unknown, _processorName: string) {
+    super("audio-worklet");
+  }
+}
+
+function flushMicrotasks(): Promise<void> {
+  return act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
   });
+}
 
-  it("renders the App placeholder without throwing", () => {
-    const html = renderToStaticMarkup(<App />);
-    expect(html).toContain("Fableton");
-  });
+async function waitFor(predicate: () => boolean, tries = 20): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    if (predicate()) return;
+    await flushMicrotasks();
+  }
+  if (!predicate()) throw new Error("waitFor: condition never became true");
+}
 
-  it("renders Boot/Play/Stop, with Play and Stop disabled before boot", () => {
-    const html = renderToStaticMarkup(<App />);
-    expect(html).toContain(">Boot audio<");
-    expect(html).toMatch(/>Play<\/button>/);
-    expect(html).toMatch(/>Stop<\/button>/);
-    // Play/Stop are disabled until `createDemoEngine` resolves post-boot.
-    const playButton = html.match(/<button[^>]*>Play<\/button>/)?.[0];
-    const stopButton = html.match(/<button[^>]*>Stop<\/button>/)?.[0];
-    expect(playButton).toContain("disabled");
-    expect(stopButton).toContain("disabled");
-  });
-});
-
-describe("App — the live cutoff control (SS3 fast path A)", () => {
-  const CUTOFF = p.hz(DEMO_CUTOFF_PARAM_ID, "Cutoff", { min: 40, max: 18000, default: 1200 });
-
+describe("App (SS18-M1 app shell)", () => {
   let container: HTMLDivElement;
   let root: Root;
-  let registry: ReturnType<typeof createParamRegistry>;
-  let audioParam: FakeAudioParam;
-  let commits: ParamCommit[];
-  let transportCalls: string[];
-  let disposed: number;
-
-  /** A `DemoEngine` whose params really are a `ParamRegistry` with a handle
-   *  bound to a (fake) `AudioParam` — so the test sees what the DSP sees. */
-  function makeEngine(): DemoEngine {
-    registry = createParamRegistry({ now: () => 0 });
-    const handle = registry.register(CUTOFF);
-    audioParam = new FakeAudioParam("cutoff", CUTOFF.defaultValue);
-    handle.bindAudioParam(audioParam as unknown as AudioParam);
-    registry.onCommit((commit) => commits.push(commit));
-    return {
-      transport: {
-        play: () => transportCalls.push("play"),
-        stop: () => transportCalls.push("stop"),
-        onStateChange: () => () => {},
-      } as unknown as DemoEngine["transport"],
-      params: registry,
-      onParamCommit: (cb) => registry.onCommit(cb),
-      dispose: () => {
-        disposed++;
-      },
-    };
-  }
-
-  /** Fires the native input event React's `onChange` listens for on a range. */
-  function drag(value: number): void {
-    const input = container.querySelector<HTMLInputElement>("[data-testid=filter-cutoff]")!;
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-    setter.call(input, String(value));
-    act(() => {
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-  }
-
-  function releaseGesture(): void {
-    const input = container.querySelector("[data-testid=filter-cutoff]")!;
-    act(() => {
-      input.dispatchEvent(new Event("pointerup", { bubbles: true }));
-    });
-  }
-
-  function readout(): string {
-    return container.querySelector("[data-testid=filter-cutoff-value]")!.textContent ?? "";
-  }
-
-  function sliderPosition(): number {
-    return Number(
-      container.querySelector<HTMLInputElement>("[data-testid=filter-cutoff]")!.value,
-    );
-  }
-
-  async function boot(): Promise<void> {
-    const button = [...container.querySelectorAll("button")].find(
-      (b) => b.textContent === "Boot audio",
-    )!;
-    await act(async () => {
-      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-  }
+  let storage: ProjectStorage;
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-    commits = [];
-    transportCalls = [];
-    disposed = 0;
+    installFakeCanvas2D();
+    posted.length = 0;
+    vi.stubGlobal("AudioWorkletNode", StubAudioWorkletNode);
+    storage = createMemoryProjectStorage();
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
-    bootAudioContext.mockResolvedValue({ state: "running", destination: {} });
-    createDemoEngine.mockImplementation(() => Promise.resolve(makeEngine()));
-    act(() => {
-      root.render(<App />);
-    });
+    const base = createFakeAudioContext();
+    bootAudioContext.mockResolvedValue(base as unknown as BaseAudioContext);
   });
 
   afterEach(() => {
@@ -149,126 +127,384 @@ describe("App — the live cutoff control (SS3 fast path A)", () => {
       root.unmount();
     });
     container.remove();
+    uninstallFakeCanvas2D();
+    vi.unstubAllGlobals();
     vi.clearAllMocks();
     globalThis.IS_REACT_ACT_ENVIRONMENT = false;
   });
 
-  it("seeds the control from the live value once the engine is up", async () => {
-    expect(container.querySelector<HTMLInputElement>("[data-testid=filter-cutoff]")!.disabled).toBe(
-      true,
-    );
-    await boot();
-    expect(container.querySelector<HTMLInputElement>("[data-testid=filter-cutoff]")!.disabled).toBe(
-      false,
-    );
-    expect(readout()).toBe(CUTOFF.toText(CUTOFF.defaultValue));
-    expect(disposed).toBe(0);
-  });
+  it("renders a loading placeholder, then the app shell once the project is ready", async () => {
+    const html = renderToStaticMarkup(<App />);
+    expect(html).toContain("Fableton");
 
-  it("a drag reaches the DSP through setLive, without committing", async () => {
-    await boot();
-    drag(0.25);
-
-    const expected = registry.require(DEMO_CUTOFF_PARAM_ID).live();
-    expect(expected).not.toBe(CUTOFF.defaultValue);
-    // The value the DSP actually sees — the whole point of fast path A.
-    expect(audioParam.scheduled).toBeCloseTo(expected, 6);
-    expect(readout()).toBe(CUTOFF.toText(expected));
-    // ...and nothing has reached the document yet (SS3: no document churn
-    // during the gesture).
-    expect(commits).toEqual([]);
-    expect(registry.require(DEMO_CUTOFF_PARAM_ID).base()).toBe(CUTOFF.defaultValue);
-  });
-
-  it("gesture end commits exactly one value (one gesture = one undo entry)", async () => {
-    await boot();
-    drag(0.25);
-    drag(0.5);
-    drag(0.75);
-    expect(commits).toEqual([]);
-
-    releaseGesture();
-
-    const handle = registry.require(DEMO_CUTOFF_PARAM_ID);
-    expect(commits).toHaveLength(1);
-    expect(commits[0]!.id).toBe(DEMO_CUTOFF_PARAM_ID);
-    expect(commits[0]!.value).toBe(handle.live());
-    expect(commits[0]!.previous).toBe(CUTOFF.defaultValue);
-    expect(handle.base()).toBe(handle.live());
-  });
-
-  it("repaints from a write it did not make (the read half of the bridge)", async () => {
-    await boot();
-    const handle = registry.require(DEMO_CUTOFF_PARAM_ID);
-
-    // An automation-path write (M3), or a `load()` from undo: nothing to do
-    // with this input, but the control must follow it.
-    act(() => {
-      handle.setLive(400, "automation");
-      registry.flushChanges(); // the rAF coalescing SS4 specifies
-    });
-
-    expect(readout()).toBe(CUTOFF.toText(400));
-    expect(sliderPosition()).toBeGreaterThan(0);
-    expect(sliderPosition()).toBeLessThan(1);
-  });
-
-  it("boots once even when the button is clicked twice in the same frame", async () => {
-    const button = [...container.querySelectorAll("button")].find(
-      (b) => b.textContent === "Boot audio",
-    )!;
     await act(async () => {
-      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      root.render(<App storage={storage} />);
     });
-    // A second AudioContext + device chain would otherwise leak, silently.
-    expect(bootAudioContext).toHaveBeenCalledTimes(1);
-    expect(createDemoEngine).toHaveBeenCalledTimes(1);
+    await flushMicrotasks();
+
+    expect(container.querySelector("[data-testid=toolbar]")).not.toBeNull();
+    expect(container.querySelector("[data-testid=arrangement-panel]")).not.toBeNull();
+    expect(container.querySelector("[data-testid=piano-roll-panel]")).not.toBeNull();
+    // A first run opens the starter project (src/demo/project.ts), not an
+    // empty document — see `bootstrapProject`'s `createProject` default.
+    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Demo Phrase");
   });
 
-  it("disposes the engine when the component unmounts", async () => {
-    // Without this the transport's 25 ms worker clock keeps ticking, the
-    // AudioContext stays open and the worklet nodes stay connected to
-    // `destination` for the rest of the page's life (SS12 lifecycle).
-    await boot();
-    expect(disposed).toBe(0);
+  it("mounts the arrangement's three SS9 canvas layers", async () => {
+    await act(async () => {
+      root.render(<App storage={storage} />);
+    });
+    await flushMicrotasks();
 
-    act(() => {
-      root.unmount();
+    const panel = container.querySelector("[data-testid=arrangement-panel]")!;
+    const canvases = [...panel.querySelectorAll("canvas")];
+    const classNames = canvases.map((c) => c.className);
+    for (const kind of ["grid", "content", "overlay"]) {
+      expect(classNames.some((name) => name.includes(`fbl-layer-${kind}`))).toBe(true);
+    }
+  });
+
+  it("Boot audio enables Play/Stop and reflects transport state", async () => {
+    await act(async () => {
+      root.render(<App storage={storage} />);
+    });
+    await flushMicrotasks();
+
+    const boot = [...container.querySelectorAll("button")].find((b) => b.textContent === "Boot audio")!;
+    expect(boot.hasAttribute("disabled")).toBe(false);
+
+    await act(async () => {
+      boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await waitFor(
+      () => container.querySelector("[data-testid=audio-status]")!.textContent!.startsWith("ready"),
+    );
+
+    const play = [...container.querySelectorAll("button")].find((b) => b.textContent === "Play")!;
+    const stop = [...container.querySelectorAll("button")].find((b) => b.textContent === "Stop")!;
+    expect(play.hasAttribute("disabled")).toBe(false);
+    expect(stop.hasAttribute("disabled")).toBe(true);
+
+    await act(async () => {
+      play.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(container.querySelector("[data-testid=transport-state]")!.textContent).toBe("playing");
+
+    await act(async () => {
+      stop.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(container.querySelector("[data-testid=transport-state]")!.textContent).toBe("stopped");
+  });
+
+  // THE M1 INTEGRATION CLAIM, end to end in one test (SS3: "the document is
+  // the source of truth"; SS12: the scheduler walks the document's clips).
+  // Every other test here checks one seam; this one checks that the seams are
+  // actually joined: a command dispatched on the bus mutates the document,
+  // the document change reaches `ProjectEngine.applyDocument`, that re-points
+  // the transport's event source, and pressing Play hands the resulting note
+  // to a real mounted instrument. Nothing in this chain is hard-coded any
+  // more — before the M1 migration the transport read a `MidiClip` constant.
+  it("an edit dispatched on the command bus becomes scheduled audio", async () => {
+    let store: DocumentStore | undefined;
+    await act(async () => {
+      root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
+    });
+    await flushMicrotasks();
+
+    const boot = [...container.querySelectorAll("button")].find((b) => b.textContent === "Boot audio")!;
+    await act(async () => {
+      boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await waitFor(
+      () => container.querySelector("[data-testid=audio-status]")!.textContent!.startsWith("ready"),
+    );
+
+    // A pitch nothing in the starter document plays, so a noteOn carrying it
+    // can only have come from the command dispatched below.
+    const UNIQUE_PITCH = 42;
+    const doc = store!.getState();
+    const clipId = Object.keys(doc.clips)[0]!;
+    expect(doc.clips[clipId]!.notes.some((n) => n.pitch === UNIQUE_PITCH)).toBe(false);
+
+    const commands = createProjectCommands();
+    await act(async () => {
+      store!.dispatch(
+        commands.addNotes(clipId, [{ start: 0, dur: 240, pitch: UNIQUE_PITCH, vel: 100 }]),
+      );
+    });
+    // `applyDocument` is queued behind an async mount, so let it settle
+    // before asking the transport to schedule anything.
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    posted.length = 0;
+    const play = [...container.querySelectorAll("button")].find((b) => b.textContent === "Play")!;
+    await act(async () => {
+      play.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
-    expect(disposed).toBe(1);
-    // `afterEach` unmounts again; a second unmount must not re-dispose.
+    // `play()` fills the first look-ahead window synchronously (SS12), so the
+    // note at tick 0 is already scheduled by the time the click returns.
+    expect(
+      posted.some((m) => m.type === "noteOn" && m.pitch === UNIQUE_PITCH),
+      `no noteOn for the note just added; posted=${JSON.stringify(posted)}`,
+    ).toBe(true);
+
+    // ...and undo is audible in the same way: the note stops being scheduled.
+    await act(async () => {
+      [...container.querySelectorAll("button")].find((b) => b.textContent === "Stop")!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    await act(async () => {
+      store!.undo();
+    });
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    posted.length = 0;
+    await act(async () => {
+      play.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(posted.some((m) => m.type === "noteOn" && m.pitch === UNIQUE_PITCH)).toBe(false);
+  });
+
+  it("boots once even when clicked twice in the same frame", async () => {
+    await act(async () => {
+      root.render(<App storage={storage} />);
+    });
+    await flushMicrotasks();
+    const boot = [...container.querySelectorAll("button")].find((b) => b.textContent === "Boot audio")!;
+    await act(async () => {
+      boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(bootAudioContext).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("App — global undo/redo (SS18-M1: Cmd/Ctrl+Z / Shift+Z)", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    installFakeCanvas2D();
+    container = document.createElement("div");
+    document.body.append(container);
     root = createRoot(container);
   });
 
-  it("re-arms the Boot button after a failed boot", async () => {
-    // `bootingRef` guards the in-flight window only. Latching it on failure
-    // would leave a clickable-looking button that dead-ends at the guard, with
-    // no way back to audio short of a page reload.
-    bootAudioContext.mockRejectedValueOnce(new Error("addModule 404"));
-    await boot();
-    expect(container.querySelector("[data-testid=audio-status]")!.textContent).toContain(
-      "failed:",
-    );
-
-    await boot();
-
-    expect(bootAudioContext).toHaveBeenCalledTimes(2);
-    expect(createDemoEngine).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("[data-testid=audio-status]")!.textContent).toContain("ready");
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+    uninstallFakeCanvas2D();
+    globalThis.IS_REACT_ACT_ENVIRONMENT = false;
   });
 
-  it("Play and Stop drive the transport once ready", async () => {
-    await boot();
-    for (const label of ["Play", "Stop"]) {
-      const button = [...container.querySelectorAll("button")].find(
-        (b) => b.textContent === label,
-      )!;
-      act(() => {
-        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  async function mountWithStore(): Promise<DocumentStore> {
+    const storage = createMemoryProjectStorage();
+    let store: DocumentStore | undefined;
+    await act(async () => {
+      root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
+    });
+    await flushMicrotasks();
+    if (store === undefined) throw new Error("onStoreReady never fired");
+    return store;
+  }
+
+  it("Ctrl+Z on the window undoes the last dispatched command", async () => {
+    const store = await mountWithStore();
+    const commands = createProjectCommands();
+    await act(async () => {
+      store.dispatch(commands.renameProject("Renamed"));
+    });
+    expect(store.getState().name).toBe("Renamed");
+    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Renamed");
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }));
+    });
+
+    expect(store.getState().name).not.toBe("Renamed");
+    expect(container.querySelector("[data-testid=project-name]")!.textContent).not.toBe("Renamed");
+  });
+
+  it("Ctrl+Shift+Z redoes", async () => {
+    const store = await mountWithStore();
+    const commands = createProjectCommands();
+    await act(async () => {
+      store.dispatch(commands.renameProject("Renamed"));
+      store.undo();
+    });
+    expect(store.getState().name).not.toBe("Renamed");
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "z", ctrlKey: true, shiftKey: true, bubbles: true }),
+      );
+    });
+    expect(store.getState().name).toBe("Renamed");
+  });
+
+  it("the toolbar's Undo/Redo buttons drive the same store", async () => {
+    const store = await mountWithStore();
+    const commands = createProjectCommands();
+
+    const undoButton = () => container.querySelector<HTMLButtonElement>("[data-testid=undo-button]")!;
+    const redoButton = () => container.querySelector<HTMLButtonElement>("[data-testid=redo-button]")!;
+    expect(undoButton().disabled).toBe(true);
+
+    await act(async () => {
+      store.dispatch(commands.renameProject("Renamed"));
+    });
+    expect(undoButton().disabled).toBe(false);
+
+    await act(async () => {
+      undoButton().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(store.getState().name).not.toBe("Renamed");
+    expect(redoButton().disabled).toBe(false);
+
+    await act(async () => {
+      redoButton().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(store.getState().name).toBe("Renamed");
+  });
+
+  it("backs off while a text field has focus (does not fight native field undo)", async () => {
+    const store = await mountWithStore();
+    const commands = createProjectCommands();
+    await act(async () => {
+      store.dispatch(commands.renameProject("Renamed"));
+    });
+
+    const input = document.createElement("input");
+    document.body.append(input);
+    input.focus();
+    try {
+      await act(async () => {
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }));
       });
+      expect(store.getState().name).toBe("Renamed");
+    } finally {
+      input.remove();
     }
-    expect(transportCalls).toEqual(["play", "stop"]);
+  });
+});
+
+describe("App — save / export / import (SS13 via the persistence package)", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    installFakeCanvas2D();
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+    uninstallFakeCanvas2D();
+    vi.clearAllMocks();
+    globalThis.IS_REACT_ACT_ENVIRONMENT = false;
+  });
+
+  function button(text: string): HTMLButtonElement {
+    return [...container.querySelectorAll("button")].find((b) => b.textContent === text) as HTMLButtonElement;
+  }
+
+  it("Save flushes a pending autosave write to storage", async () => {
+    const storage = createMemoryProjectStorage();
+    let store: DocumentStore | undefined;
+    await act(async () => {
+      root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
+    });
+    await flushMicrotasks();
+    const commands = createProjectCommands();
+    await act(async () => {
+      store!.dispatch(commands.renameProject("Saved Name"));
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>("[data-testid=save-button]")!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    await flushMicrotasks();
+
+    const key = store!.getState().id;
+    const saved = await storage.read(key);
+    expect(saved).not.toBeNull();
+    expect(JSON.parse(saved!).project.name).toBe("Saved Name");
+    expect(container.querySelector("[data-testid=autosave-status]")!.textContent).toBe("Saved");
+  });
+
+  it("Export flushes first, then downloads the current project", async () => {
+    const storage = createMemoryProjectStorage();
+    let store: DocumentStore | undefined;
+    await act(async () => {
+      root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>("[data-testid=export-button]")!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    await flushMicrotasks();
+
+    expect(downloadProjectFile).toHaveBeenCalledTimes(1);
+    const [, exported] = downloadProjectFile.mock.calls[0] as [unknown, Project];
+    expect(exported.id).toBe(store!.getState().id);
+  });
+
+  it("Import replaces the document with the chosen file's project", async () => {
+    const storage = createMemoryProjectStorage();
+    await act(async () => {
+      root.render(<App storage={storage} />);
+    });
+    await flushMicrotasks();
+
+    const incoming = createEmptyProject({ ids: createSequentialIdFactory("other"), name: "Imported Project" });
+    const text = projectCodec.encode(incoming);
+    const file = new File([text], "incoming.json", { type: "application/json" });
+
+    const input = container.querySelector<HTMLInputElement>("[data-testid=import-file-input]")!;
+    await act(async () => {
+      Object.defineProperty(input, "files", { value: [file], configurable: true });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flushMicrotasks();
+
+    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Imported Project");
+  });
+
+  it("New starts a fresh empty project", async () => {
+    const storage = createMemoryProjectStorage();
+    let store: DocumentStore | undefined;
+    await act(async () => {
+      root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
+    });
+    await flushMicrotasks();
+    const commands = createProjectCommands();
+    await act(async () => {
+      store!.dispatch(commands.renameProject("Renamed"));
+    });
+    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Renamed");
+
+    await act(async () => {
+      button("New").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Untitled");
+    expect(store!.canUndo()).toBe(false);
   });
 });

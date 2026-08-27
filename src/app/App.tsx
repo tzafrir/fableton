@@ -1,107 +1,234 @@
-// App chrome root (SS15: "React (chrome only)"). Editors and other
-// bounded-by-count-but-not-DOM UI mount as opaque canvas components inside
-// this tree via an imperative bridge, starting in M1.
-//
-// M0's whole job: a boot/unlock button, then play/stop for the hard-coded
-// clip through the registered core.poly-synth -> core.filter -> destination
-// chain (SS18-M0, src/demo/), plus one live control so the SS3/SS4 param
-// bridge is exercised by the shipped app and not only by its tests.
+// App chrome root (SS15: "React (chrome only)"). M1's job: wire the whole
+// milestone together — arrangement lanes and the piano roll mount as opaque
+// canvas components with an imperative bridge (SS15/`editor.ts`), transport
+// play/stop carries over from M0, undo/redo is global (SS13's command bus),
+// and save/load/export/import hit the persistence package. No editor logic
+// lives in this file — every verb an edit needs already exists as a
+// `ProjectCommands` factory or an `EditorView` method.
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { bootAudioContext } from "../engine/context";
-import { createDemoEngine, DEMO_CUTOFF_PARAM_ID, type DemoEngine } from "../demo";
-import { fromNormalized, toNormalized } from "../params";
-import type { ParamHandle, TransportState, Unsub } from "../types";
+import {
+  downloadProjectFile,
+  importProjectFile,
+  projectCodec,
+} from "../persist";
+import { connectParamRegistry, createEmptyProject, projectCommands } from "../state";
+import type {
+  AuditionSink,
+  AutosaveState,
+  ChannelId,
+  ClipId,
+  DocumentStore,
+  PianoRollView,
+  Project,
+  ProjectStorage,
+  ArrangementView,
+  Ticks,
+  TransportState,
+} from "../types";
+import { createProjectEngine, type AppProjectEngine } from "./engine";
+import { createUndoRedoHandler } from "./keyboard";
+import { ArrangementPanel, PianoRollPanel, Toolbar } from "./panels";
+import { bootstrapProject, type BootstrapResult } from "./persistence";
 
 export interface AppProps {
-  /** Called once the demo chain is mounted. `src/main.tsx` uses it to hand
-   *  the live engine to the e2e bridge; nothing in the app itself needs it. */
-  onEngineReady?: ((engine: DemoEngine) => void) | undefined;
+  /** Called once the engine is mounted (e2e bridge only — see `src/main.tsx`);
+   *  nothing in the app itself needs it. */
+  onEngineReady?: ((engine: AppProjectEngine) => void) | undefined;
+  /** Called once the document store is ready — a test-only hook (the same
+   *  pattern as `onEngineReady`) so a headless test can dispatch commands and
+   *  assert on the real store SS15 says every load-bearing seam needs.
+   *  `src/main.tsx` never sets it. */
+  onStoreReady?: ((store: DocumentStore) => void) | undefined;
+  /** Overrides the persistence backend (tests use the in-memory double);
+   *  defaults to OPFS. */
+  storage?: ProjectStorage | undefined;
 }
 
-export function App({ onEngineReady }: AppProps = {}) {
-  const [status, setStatus] = useState("idle");
-  const [ready, setReady] = useState(false);
-  const [booting, setBooting] = useState(false);
+export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
+  // --- the document: loaded/created once, then lives for the app's life ---
+  const [docState, setDocState] = useState<BootstrapResult | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  // Re-render on every document change: undo/redo enablement and the
+  // autosave dot both key off this without duplicating the store's own state.
+  const [historyTick, setHistoryTick] = useState(0);
+  const [autosaveState, setAutosaveState] = useState<AutosaveState>("idle");
+  const [autosaveError, setAutosaveError] = useState<string | null>(null);
+
+  // --- the engine: created once "Boot audio" is clicked ---
+  const [engine, setEngine] = useState<AppProjectEngine | null>(null);
+  const [audioStatus, setAudioStatus] = useState("idle");
+  const [audioBooting, setAudioBooting] = useState(false);
   const [transportState, setTransportState] = useState<TransportState>("stopped");
-  const [cutoffNorm, setCutoffNorm] = useState(0);
-  const [cutoffText, setCutoffText] = useState("");
-  const engineRef = useRef<DemoEngine | null>(null);
-  const cutoffRef = useRef<ParamHandle | null>(null);
-  const cutoffUnsubRef = useRef<Unsub | null>(null);
-  const stateUnsubRef = useRef<Unsub | null>(null);
-  // Set synchronously, unlike the state above: two clicks in the same frame
-  // would otherwise both get past the guard while the first is still awaiting
-  // `bootAudioContext`, leaving a second AudioContext + chain alive forever.
-  const bootingRef = useRef(false);
+  const engineRef = useRef<AppProjectEngine | null>(null);
+  const bootingRef = useRef(false); // synchronous guard, see App's M0 ancestor
 
-  // Deliberately gesture-triggered: AudioContext boot needs a user gesture
-  // to unlock in most browsers (SS18-M0: "Context boot + unlock"; SS12's
-  // guardrail is what `bootAudioContext` wires up). Clicking this also
-  // exercises the worklet-loading seam end to end — `core.poly-synth`'s
-  // `prepare()` (src/devices/core/polySynth.ts) is what pulls
-  // poly-synth-processor.ts into the build as its own chunk.
-  const handleBoot = useCallback(async () => {
-    if (bootingRef.current || engineRef.current) return;
-    bootingRef.current = true;
-    setBooting(true);
-    setStatus("booting");
-    try {
-      const context = await bootAudioContext();
-      const engine = await createDemoEngine(context, context.destination);
-      stateUnsubRef.current?.();
-      stateUnsubRef.current = engine.transport.onStateChange(setTransportState);
-      engineRef.current = engine;
-      const cutoff = engine.params.get(DEMO_CUTOFF_PARAM_ID) ?? null;
-      cutoffRef.current = cutoff;
-      if (cutoff !== null) {
-        setCutoffNorm(toNormalized(cutoff.desc, cutoff.live()));
-        setCutoffText(cutoff.desc.toText(cutoff.live()));
-        // The read half of the SS4 bridge. Without it the control only ever
-        // shows what IT wrote: an automation-path `setLive(v, "automation")`
-        // (M3), a registry `load()` or an undo's `setBase` would leave the
-        // slider and its readout stale. `onChange` is coalesced to rAF
-        // precisely so a control can repaint from every write (SS4/SS5).
-        cutoffUnsubRef.current?.();
-        cutoffUnsubRef.current = cutoff.onChange((value) => {
-          setCutoffNorm(toNormalized(cutoff.desc, value));
-          setCutoffText(cutoff.desc.toText(value));
-        });
-      }
-      onEngineReady?.(engine);
-      setReady(true);
-      setStatus(`ready (worklet loaded, state=${context.state})`);
-    } catch (error) {
-      setStatus(`failed: ${String(error)}`);
-    } finally {
-      // Both flags, not just the state one: `bootingRef` guards the in-flight
-      // window only. Leaving it latched after a failed boot (a rejected
-      // `addModule`, a throwing `createDemoEngine`) would dead-end the button
-      // for the rest of the page's life while it still looks clickable —
-      // `disabled={ready || booting}` re-enables it, then every click returns
-      // at the guard.
-      bootingRef.current = false;
-      setBooting(false);
+  // --- which clip the piano roll shows ---
+  const [openClipId, setOpenClipId] = useState<ClipId | null>(null);
+
+  const arrangementViewRef = useRef<ArrangementView | null>(null);
+  const pianoRollViewRef = useRef<PianoRollView | null>(null);
+
+  // A stable proxy handed to the piano roll ONCE (SS15 opaque-component
+  // boundary): its target is redirected as the open clip/engine change,
+  // instead of remounting the editor every time (`PianoRollOptions.audition`
+  // is create-time-only).
+  const currentAuditionRef = useRef<AuditionSink | undefined>(undefined);
+  const auditionProxyRef = useRef<AuditionSink>({
+    noteOn(pitch, vel) {
+      currentAuditionRef.current?.noteOn(pitch, vel);
+    },
+    noteOff(pitch) {
+      currentAuditionRef.current?.noteOff(pitch);
+    },
+    allNotesOff() {
+      currentAuditionRef.current?.allNotesOff();
+    },
+  });
+
+  // --- 1. load or create the project on mount ---------------------------
+  useEffect(() => {
+    let cancelled = false;
+    void bootstrapProject(storage).then((result) => {
+      if (cancelled) return;
+      setDocState(result);
+      if (result.loadResult.loadError !== undefined) setLoadError(result.loadResult.loadError);
+      onStoreReady?.(result.store);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // `storage`/`onStoreReady` are test-only overrides, read once at the
+    // startup this effect represents — not reactive props.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // --- 2. re-render on document change; watch autosave status -----------
+  useEffect(() => {
+    if (docState === null) return;
+    const unsubStore = docState.store.onChange(() => setHistoryTick((n) => n + 1));
+    const unsubAutosave = docState.autosave.onStatusChange((status) => {
+      setAutosaveState(status.state);
+      setAutosaveError(status.error);
+    });
+    setAutosaveState(docState.autosave.status.state);
+    return () => {
+      unsubStore();
+      unsubAutosave();
+    };
+  }, [docState]);
+
+  // --- 3. flush a pending autosave before the tab goes away --------------
+  useEffect(() => {
+    if (docState === null) return;
+    const flush = () => {
+      void docState.autosave.flush();
+    };
+    document.addEventListener("visibilitychange", flush);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", flush);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [docState]);
+
+  // --- 4. global undo/redo (SS18-M1: Cmd/Ctrl+Z / Shift+Z) ---------------
+  useEffect(() => {
+    if (docState === null) return;
+    const handle = createUndoRedoHandler(docState.store);
+    const onKeyDown = (event: KeyboardEvent) => {
+      handle(event);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [docState]);
+
+  // --- 5. wire the engine to the document once both exist ---------------
+  useEffect(() => {
+    if (docState === null || engine === null) return;
+    const unsubParams = connectParamRegistry(docState.store, engine.params);
+    const unsubApply = docState.store.onChange((change) => {
+      void engine.applyDocument(change.doc);
+    });
+    void engine.applyDocument(docState.store.getState());
+    return () => {
+      unsubParams();
+      unsubApply();
+    };
+  }, [docState, engine]);
+
+  // --- 6. push the DOM playhead (SS9: never invalidates a canvas) --------
+  useEffect(() => {
+    engineRef.current = engine;
+    if (engine === null) return;
+    const pushOnce = () => {
+      const tick = engine.transport.positionTicks();
+      arrangementViewRef.current?.setPlayheadTicks(tick);
+      pianoRollViewRef.current?.setPlayheadTicks(tick);
+    };
+    pushOnce();
+    if (transportState !== "playing") return;
+    let raf = requestAnimationFrame(function loop() {
+      pushOnce();
+      raf = requestAnimationFrame(loop);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [engine, transportState]);
+
+  // --- 7. redirect the audition proxy as the open clip/engine change -----
+  useEffect(() => {
+    if (docState === null || engine === null || openClipId === null) {
+      currentAuditionRef.current = undefined;
+      return;
     }
-  }, [onEngineReady]);
+    const trackId: ChannelId | undefined = docState.store.getState().clips[openClipId]?.trackId;
+    currentAuditionRef.current = trackId !== undefined ? engine.auditionFor(trackId) : undefined;
+  }, [docState, engine, openClipId]);
 
-  // Unmount teardown. `DemoEngine.dispose()` stops the transport (and with it
-  // the 25 ms worker clock), disposes every mounted device and unregisters
-  // their params (SS7 "Removal is the reverse, gain-ramped"); without it a
-  // remount leaves the previous engine's clock ticking, its worklet nodes
-  // connected to `destination` and its subscriptions holding React state
-  // setters for an unmounted tree.
+  // --- 8. teardown on unmount ---------------------------------------------
   useEffect(
     () => () => {
-      cutoffUnsubRef.current?.();
-      cutoffUnsubRef.current = null;
-      stateUnsubRef.current?.();
-      stateUnsubRef.current = null;
-      cutoffRef.current = null;
       engineRef.current?.dispose();
       engineRef.current = null;
+      docState?.autosave.dispose();
     },
+    // Deliberately empty: this is unmount-only cleanup, re-reading the refs
+    // at that point rather than the render that captured them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+
+  const handleBoot = useCallback(async () => {
+    if (bootingRef.current || engineRef.current !== null || docState === null) return;
+    bootingRef.current = true;
+    setAudioBooting(true);
+    setAudioStatus("booting");
+    try {
+      const ctx = await bootAudioContext();
+      const nextEngine = createProjectEngine(ctx, ctx.destination, docState.store.getState());
+      nextEngine.transport.onStateChange(setTransportState);
+      engineRef.current = nextEngine;
+      // Mount the document's instruments — and with them the poly-synth
+      // worklet module — BEFORE reporting ready. `applyDocument` awaits every
+      // device's `prepare()` (SS7), so without this the button says "ready"
+      // while `addModule()` is still in flight and the first Play after boot
+      // is silent. M0's `createDemoEngine` awaited the same work; the M1
+      // engine just gets the device set from the document (SS3) instead of a
+      // hard-coded chain.
+      await nextEngine.applyDocument(docState.store.getState());
+      setEngine(nextEngine);
+      setAudioStatus(`ready (worklet loaded, state=${ctx.state})`);
+      onEngineReady?.(nextEngine);
+    } catch (error) {
+      setAudioStatus(`failed: ${String(error)}`);
+    } finally {
+      bootingRef.current = false;
+      setAudioBooting(false);
+    }
+  }, [docState, onEngineReady]);
 
   const handlePlay = useCallback(() => {
     engineRef.current?.transport.play();
@@ -111,62 +238,124 @@ export function App({ onEngineReady }: AppProps = {}) {
     engineRef.current?.transport.stop();
   }, []);
 
-  // SS3 fast path A: the drag writes straight to the engine at gesture rate
-  // (no document churn), and gesture end commits exactly one value — the
-  // command/undo entry M1 subscribes to via `ParamRegistry.onCommit`.
-  const handleCutoffInput = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const handle = cutoffRef.current;
-    const normalized = Number(event.target.value);
-    // Painted from the gesture itself as well as from `onChange` above: the
-    // dragging control must not wait a frame to follow the pointer (SS5).
-    setCutoffNorm(normalized);
-    if (handle === null) return;
-    const real = fromNormalized(handle.desc, normalized);
-    handle.setLive(real, "user");
-    setCutoffText(handle.desc.toText(real));
+  const handleUndo = useCallback(() => {
+    docState?.store.undo();
+  }, [docState]);
+
+  const handleRedo = useCallback(() => {
+    docState?.store.redo();
+  }, [docState]);
+
+  const handleSeek = useCallback((tick: Ticks) => {
+    engineRef.current?.transport.seek(tick);
+    const t = engineRef.current?.transport.positionTicks() ?? tick;
+    arrangementViewRef.current?.setPlayheadTicks(t);
+    pianoRollViewRef.current?.setPlayheadTicks(t);
   }, []);
 
-  const handleCutoffCommit = useCallback(() => {
-    cutoffRef.current?.commit();
-  }, []);
+  const handleSaveNow = useCallback(() => {
+    void docState?.autosave.flush();
+  }, [docState]);
+
+  const handleNewProject = useCallback(() => {
+    if (docState === null) return;
+    setOpenClipId(null);
+    docState.store.replaceDocument(createEmptyProject());
+    setStatusMessage(null);
+  }, [docState]);
+
+  const handleExport = useCallback(() => {
+    if (docState === null) return;
+    void docState.autosave.flush().then(() => {
+      const project = docState.store.getState() as unknown as Project;
+      downloadProjectFile(projectCodec, project);
+    });
+  }, [docState]);
+
+  const handleImportFile = useCallback(
+    (file: File) => {
+      if (docState === null) return;
+      void importProjectFile(projectCodec, file).then((result) => {
+        if (!result.ok) {
+          setStatusMessage(result.error);
+          return;
+        }
+        setOpenClipId(null);
+        docState.store.replaceDocument(result.project);
+        setStatusMessage(
+          result.warnings.length > 0 ? `Loaded with ${String(result.warnings.length)} warning(s).` : null,
+        );
+      });
+    },
+    [docState],
+  );
+
+  if (docState === null) {
+    return (
+      <div id="app-root">
+        <h1>Fableton</h1>
+        <p data-testid="app-loading">Loading project…</p>
+      </div>
+    );
+  }
+
+  const store = docState.store;
+  const snapshot = store.getState();
 
   return (
-    <div id="app-root">
-      <h1>Fableton</h1>
-      <p>M0 spine: a hard-coded clip through synth -&gt; filter -&gt; destination.</p>
-      <button
-        type="button"
-        onClick={() => void handleBoot()}
-        disabled={ready || booting}
-      >
-        Boot audio
-      </button>
-      <button type="button" onClick={handlePlay} disabled={!ready}>
-        Play
-      </button>
-      <button type="button" onClick={handleStop} disabled={!ready}>
-        Stop
-      </button>
-      <p>
-        <label htmlFor="filter-cutoff">Filter cutoff </label>
-        <input
-          id="filter-cutoff"
-          data-testid="filter-cutoff"
-          type="range"
-          min={0}
-          max={1}
-          step={0.001}
-          value={cutoffNorm}
-          disabled={!ready}
-          onChange={handleCutoffInput}
-          onPointerUp={handleCutoffCommit}
-          onKeyUp={handleCutoffCommit}
-          onBlur={handleCutoffCommit}
-        />
-        <span data-testid="filter-cutoff-value">{cutoffText}</span>
-      </p>
-      <p data-testid="audio-status">{status}</p>
-      <p data-testid="transport-state">{transportState}</p>
+    <div id="app-root" style={{ display: "flex", flexDirection: "column", height: "100vh", minHeight: 0 }}>
+      <h1 style={{ margin: 0, padding: "4px 8px", fontSize: 14 }}>Fableton</h1>
+      <Toolbar
+        projectName={snapshot.name}
+        audioStatus={audioStatus}
+        audioReady={engine !== null}
+        audioBooting={audioBooting}
+        onBoot={() => void handleBoot()}
+        transportState={transportState}
+        onPlay={handlePlay}
+        onStop={handleStop}
+        canUndo={store.canUndo()}
+        undoLabel={store.undoLabel()}
+        onUndo={handleUndo}
+        canRedo={store.canRedo()}
+        redoLabel={store.redoLabel()}
+        onRedo={handleRedo}
+        autosaveState={autosaveState}
+        autosaveError={autosaveError}
+        onSaveNow={handleSaveNow}
+        onNewProject={handleNewProject}
+        onExport={handleExport}
+        onImportFile={handleImportFile}
+        statusMessage={loadError ?? statusMessage}
+      />
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: 2, minHeight: 0 }}>
+          <ArrangementPanel
+            store={store}
+            commands={projectCommands}
+            onSeek={handleSeek}
+            onOpenClip={setOpenClipId}
+            viewRef={arrangementViewRef}
+          />
+        </div>
+        <div style={{ flex: 1, minHeight: 0, borderTop: "1px solid #333" }}>
+          <PianoRollPanel
+            store={store}
+            commands={projectCommands}
+            clipId={openClipId}
+            onSeek={handleSeek}
+            audition={auditionProxyRef.current}
+            viewRef={pianoRollViewRef}
+          />
+        </div>
+      </div>
+      {/* Referenced so `historyTick` is a real dependency of this render and
+          not flagged unused — the toolbar's undo/redo enablement above reads
+          `store.canUndo()`/`canRedo()` live, which only changes on a document
+          change; this state exists purely to force that re-read. */}
+      <span data-testid="history-tick" style={{ display: "none" }}>
+        {historyTick}
+      </span>
     </div>
   );
 }

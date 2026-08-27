@@ -46,7 +46,19 @@ test("clicking Boot audio unlocks the engine and enables transport controls", as
   });
   await expect(bootButton).toBeDisabled();
   await expect(page.getByRole("button", { name: "Play" })).toBeEnabled();
+
+  // Boot makes the transport controls LIVE — which since M1 means each one
+  // tracks the SS12 transport state rather than being unconditionally
+  // clickable: Stop is inert while already stopped, and becomes available
+  // the moment Play moves the transport. Asserting the transition (rather
+  // than "both buttons enabled", as M0 did when Stop was always on) is what
+  // actually proves the engine behind them is live.
+  await expect(page.getByRole("button", { name: "Stop" })).toBeDisabled();
+  await page.getByRole("button", { name: "Play", exact: true }).click();
+  await expect(page.getByTestId("transport-state")).toHaveText("playing");
   await expect(page.getByRole("button", { name: "Stop" })).toBeEnabled();
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect(page.getByTestId("transport-state")).toHaveText("stopped");
 
   await page.screenshot({
     path: ".playwright/screenshots/M0/render/boot-control-ready.png",

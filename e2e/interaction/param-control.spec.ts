@@ -8,7 +8,25 @@ import { expect, test } from "@playwright/test";
 //
 // The headless half of this seam is covered in src/app/App.test.tsx; this is
 // the proof that the same wiring holds against a real AudioContext.
-test("the cutoff slider writes through the handle and commits once on release", async ({
+//
+// SUSPENDED AT M1, DELIBERATELY. This spec drives M0's one hard-coded control
+// (`data-testid="filter-cutoff"`) and its hard-coded param id
+// `chan:demo-track/dev:demo-filter/cutoff`. Neither survives M1: devices now
+// live on a real, editable document (SS3 — "the document is the source of
+// truth"), the starter document has no filter on its chain, and M1 ships no
+// per-device knob UI at all, because the control kit and channel strips are
+// M2's deliverable (SS18-M2; SS5's control inventory). Building one here to
+// keep this spec green would be inventing M2's UI inside M1.
+//
+// What the spec covers is NOT lost meanwhile:
+//   - the fast path itself (drag writes to the engine, document untouched;
+//     release commits exactly one command) is proved headlessly in
+//     src/state/paramBridge.test.ts and src/app/App.test.tsx;
+//   - `connectParamRegistry` is wired into the live app in src/app/App.tsx,
+//     and the registry is still reachable on the e2e bridge.
+// Un-fixme this the moment M2 renders a real control bound to a real param —
+// the body below then needs only its testids and param id re-pointed.
+test.fixme("the cutoff slider writes through the handle and commits once on release", async ({
   page,
 }) => {
   await page.goto("/");

@@ -1,7 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
-import { renderDemoOffline, type DemoEngine } from "./demo";
+import type { AppProjectEngine } from "./app/engine";
+import { renderDemoOffline } from "./demo";
 
 const container = document.getElementById("root");
 if (!container) {
@@ -19,12 +20,18 @@ if (!container) {
 // which is what proves the SS12 worker clock keeps ticking past the first
 // 200 ms look-ahead window in a real browser (and, in
 // e2e/interaction/clock-worker.spec.ts, that the clock really is a dedicated
-// Worker and not the main-thread fallback).
+// Worker and not the main-thread fallback). M0's demo engine has been
+// replaced by M1's real `ProjectEngine` (SS18-M1) — `transport`/`params`
+// still have the same shape those two specs read, but
+// e2e/interaction/param-control.spec.ts targeted the M0 demo's single
+// exposed filter-cutoff slider, which no longer exists now that devices live
+// on a real, editable document instead of one hard-coded chain; it is
+// superseded pending M2's mixer/control-kit UI.
 declare global {
   interface Window {
     __fabletonDemo?: {
       renderDemoOffline: typeof renderDemoOffline;
-      engine?: DemoEngine;
+      engine?: AppProjectEngine;
     };
   }
 }

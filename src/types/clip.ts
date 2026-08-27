@@ -33,4 +33,11 @@ export interface MidiClip {
   length: Ticks;
   loop?: { start: Ticks; end: Ticks } | undefined;
   notes: Note[];
+  /**
+   * Arrangement-visible label. Optional so every M0 literal stays valid;
+   * absent means "show the track name" (M1 addition, SS18-M1).
+   */
+  name?: string | undefined;
+  /** CSS color override for the clip rectangle; absent/`null` = track color. */
+  color?: string | null | undefined;
 }

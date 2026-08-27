@@ -1,0 +1,752 @@
+// SS2 + SS13 — the single JSON boundary (`ProjectCodec`).
+//
+// `encode` is deterministic: a fixed key order (the declaration order in
+// ../types/document, and for id-keyed records the order of `channelOrder`
+// or lexicographic id order where there is none) and no `undefined`-valued
+// keys, ever. That determinism is what makes SS2's "open -> edit -> save ->
+// reopen byte-stable except for edits" testable — see ./roundTrip.test.ts.
+//
+// `decode`/`decodeValue` are the defensive direction: untrusted JSON in,
+// warnings out. Nothing here throws on malformed input; a structurally
+// unrecoverable file becomes `{ ok: false }`, and a recoverable one becomes
+// `{ ok: true, warnings: [...] }` with the offending bits clamped, defaulted
+// or dropped by `validate` (document.ts invariants 1-8).
+
+import type {
+  AutomationLane,
+  AutoPoint,
+  Channel,
+  ChannelRole,
+  DecodeResult,
+  DeviceState,
+  EncodeOptions,
+  JsonValue,
+  LoadWarning,
+  LoopRegion,
+  MidiClip,
+  Note,
+  Project,
+  ProjectCodec,
+  ProjectFile,
+  SendSpec,
+  SidechainEdge,
+  SourceRef,
+  TempoSegment,
+  TimeSignature,
+} from "../types";
+import { PROJECT_SCHEMA_VERSION } from "../types";
+import { runMigrations } from "./migrations";
+
+const FORMAT_MARKER: ProjectFile["format"] = "fableton.project";
+const NOT_A_PROJECT_FILE = "Not a Fableton project file.";
+
+// -----------------------------------------------------------------------
+// encode
+// -----------------------------------------------------------------------
+
+function canonicalTempoSegment(s: TempoSegment): JsonValue {
+  return { startTick: s.startTick, bpm: s.bpm };
+}
+
+function canonicalTimeSignature(t: TimeSignature): JsonValue {
+  return { numerator: t.numerator, denominator: t.denominator };
+}
+
+function canonicalLoop(l: LoopRegion): JsonValue {
+  return { start: l.start, end: l.end, enabled: l.enabled };
+}
+
+function canonicalSourceRef(s: SourceRef): JsonValue {
+  return { kind: s.kind, deviceId: s.deviceId };
+}
+
+function canonicalSendSpec(s: SendSpec): JsonValue {
+  return { to: s.to, amount: s.amount, tap: s.tap };
+}
+
+function canonicalChannel(c: Channel): JsonValue {
+  return {
+    id: c.id,
+    role: c.role,
+    name: c.name,
+    color: c.color,
+    source: c.source === null ? null : canonicalSourceRef(c.source),
+    chain: [...c.chain],
+    volume: c.volume,
+    pan: c.pan,
+    mute: c.mute,
+    solo: c.solo,
+    sends: c.sends.map(canonicalSendSpec),
+    output: c.output,
+  };
+}
+
+function canonicalDeviceState(d: DeviceState): JsonValue {
+  return {
+    id: d.id,
+    definitionId: d.definitionId,
+    version: d.version,
+    channelId: d.channelId,
+    enabled: d.enabled,
+  };
+}
+
+/** Document invariant 4: `clip.notes` stays sorted by `(start, pitch)`. The
+ *  command layer is what is supposed to maintain that, but encode sorts
+ *  again anyway — cheap, and it is what makes `encode` deterministic (and
+ *  thus SS2's byte-stability) independent of whatever order a caller's
+ *  notes array happens to be in. */
+function compareNotesForEncode(a: Note, b: Note): number {
+  return a.start - b.start || a.pitch - b.pitch;
+}
+
+function canonicalNote(n: Note): JsonValue {
+  const out: { [key: string]: JsonValue } = {
+    id: n.id,
+    start: n.start,
+    dur: n.dur,
+    pitch: n.pitch,
+    vel: n.vel,
+  };
+  if (n.muted !== undefined) out["muted"] = n.muted;
+  return out;
+}
+
+function canonicalClip(c: MidiClip): JsonValue {
+  const out: { [key: string]: JsonValue } = {
+    id: c.id,
+    trackId: c.trackId,
+    start: c.start,
+    length: c.length,
+  };
+  if (c.loop !== undefined) out["loop"] = { start: c.loop.start, end: c.loop.end };
+  out["notes"] = [...c.notes].sort(compareNotesForEncode).map(canonicalNote);
+  if (c.name !== undefined) out["name"] = c.name;
+  if (c.color !== undefined) out["color"] = c.color;
+  return out;
+}
+
+function canonicalAutoPoint(p: AutoPoint): JsonValue {
+  return { t: p.t, v: p.v, curve: p.curve };
+}
+
+function canonicalAutomationLane(l: AutomationLane): JsonValue {
+  return {
+    id: l.id,
+    channelId: l.channelId,
+    paramId: l.paramId,
+    points: l.points.map(canonicalAutoPoint),
+    enabled: l.enabled,
+  };
+}
+
+function canonicalSidechainEdge(s: SidechainEdge): JsonValue {
+  return {
+    from: { channel: s.from.channel, tap: s.from.tap },
+    to: { device: s.to.device, port: s.to.port },
+  };
+}
+
+/** Id-keyed record -> plain object with keys written in `order`. Ids not
+ *  present in `order` are dropped silently (encode assumes a valid
+ *  `Project`; `validate` is what repairs an invalid one before this runs). */
+function canonicalRecord<T>(
+  record: Readonly<Record<string, T>>,
+  order: readonly string[],
+  toJson: (value: T) => JsonValue,
+): JsonValue {
+  const out: { [key: string]: JsonValue } = {};
+  for (const key of order) {
+    const value = record[key];
+    if (value !== undefined) out[key] = toJson(value);
+  }
+  return out;
+}
+
+function lexicographicOrder(record: Readonly<Record<string, unknown>>): string[] {
+  return Object.keys(record).sort();
+}
+
+/** `channelOrder` ids that exist in `channels`, then any orphaned channel
+ *  ids (should not happen in a valid document) appended lexicographically so
+ *  encode never silently drops data. */
+function channelWriteOrder(project: Project): string[] {
+  const known = new Set(Object.keys(project.channels));
+  const ordered = project.channelOrder.filter((id) => known.has(id));
+  const orderedSet = new Set(ordered);
+  const orphaned = Object.keys(project.channels)
+    .filter((id) => !orderedSet.has(id))
+    .sort();
+  return [...ordered, ...orphaned];
+}
+
+function canonicalParamValues(values: Readonly<Record<string, number>>): JsonValue {
+  const out: { [key: string]: JsonValue } = {};
+  for (const key of Object.keys(values).sort()) {
+    const v = values[key];
+    if (v !== undefined) out[key] = v;
+  }
+  return out;
+}
+
+function canonicalProject(p: Project): JsonValue {
+  return {
+    id: p.id,
+    name: p.name,
+    tempo: p.tempo.map(canonicalTempoSegment),
+    timeSignature: canonicalTimeSignature(p.timeSignature),
+    loop: canonicalLoop(p.loop),
+    channelOrder: [...p.channelOrder],
+    channels: canonicalRecord(p.channels, channelWriteOrder(p), canonicalChannel),
+    devices: canonicalRecord(p.devices, lexicographicOrder(p.devices), canonicalDeviceState),
+    clips: canonicalRecord(p.clips, lexicographicOrder(p.clips), canonicalClip),
+    lanes: canonicalRecord(p.lanes, lexicographicOrder(p.lanes), canonicalAutomationLane),
+    sidechains: p.sidechains.map(canonicalSidechainEdge),
+    paramValues: canonicalParamValues(p.paramValues),
+  };
+}
+
+function encode(project: Project, options?: EncodeOptions): string {
+  const savedAt = options?.savedAt ?? new Date().toISOString();
+  const file: { [key: string]: JsonValue } = {
+    format: FORMAT_MARKER,
+    schemaVersion: PROJECT_SCHEMA_VERSION,
+    savedAt,
+    project: canonicalProject(project),
+  };
+  const pretty = options?.pretty ?? true;
+  return pretty ? JSON.stringify(file, null, 2) : JSON.stringify(file);
+}
+
+// -----------------------------------------------------------------------
+// decode — defensive JsonValue -> Project
+// -----------------------------------------------------------------------
+
+function isJsonObject(value: JsonValue): value is { [key: string]: JsonValue } {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function pushWarning(warnings: LoadWarning[], path: string, message: string): void {
+  warnings.push({ path, message });
+}
+
+function asObject(
+  value: JsonValue | undefined,
+  path: string,
+  warnings: LoadWarning[],
+): { [key: string]: JsonValue } {
+  if (value !== undefined && isJsonObject(value)) return value;
+  if (value !== undefined) pushWarning(warnings, path, "Expected an object; using an empty one.");
+  return {};
+}
+
+function asArray(value: JsonValue | undefined, path: string, warnings: LoadWarning[]): JsonValue[] {
+  if (Array.isArray(value)) return value;
+  if (value !== undefined) pushWarning(warnings, path, "Expected an array; using an empty one.");
+  return [];
+}
+
+function asString(
+  value: JsonValue | undefined,
+  path: string,
+  fallback: string,
+  warnings: LoadWarning[],
+): string {
+  if (typeof value === "string") return value;
+  pushWarning(warnings, path, `Expected a string; defaulted to ${JSON.stringify(fallback)}.`);
+  return fallback;
+}
+
+function asFiniteNumber(
+  value: JsonValue | undefined,
+  path: string,
+  fallback: number,
+  warnings: LoadWarning[],
+): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  pushWarning(warnings, path, `Expected a finite number; defaulted to ${fallback}.`);
+  return fallback;
+}
+
+function asBoolean(
+  value: JsonValue | undefined,
+  path: string,
+  fallback: boolean,
+  warnings: LoadWarning[],
+): boolean {
+  if (typeof value === "boolean") return value;
+  pushWarning(warnings, path, `Expected a boolean; defaulted to ${fallback}.`);
+  return fallback;
+}
+
+function asNullableString(
+  value: JsonValue | undefined,
+  path: string,
+  warnings: LoadWarning[],
+): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string") return value;
+  pushWarning(warnings, path, "Expected a string or null; defaulted to null.");
+  return null;
+}
+
+let fallbackCounter = 0;
+/** Only used to fill a structurally-required id the source JSON lacks
+ *  entirely (e.g. a note object with no `id` field at all). Distinct from
+ *  the `IdFactory` commands use — this is a load-time repair, not a
+ *  document edit. */
+function fallbackId(prefix: string): string {
+  fallbackCounter += 1;
+  return `${prefix}-recovered-${fallbackCounter}`;
+}
+
+function parseTempo(raw: JsonValue | undefined, path: string, warnings: LoadWarning[]): TempoSegment[] {
+  const arr = asArray(raw, path, warnings);
+  return arr.map((item, i) => {
+    const obj = asObject(item, `${path}[${i}]`, warnings);
+    return {
+      startTick: Math.round(asFiniteNumber(obj["startTick"], `${path}[${i}].startTick`, 0, warnings)),
+      bpm: asFiniteNumber(obj["bpm"], `${path}[${i}].bpm`, 120, warnings),
+    };
+  });
+}
+
+function parseTimeSignature(raw: JsonValue | undefined, path: string, warnings: LoadWarning[]): TimeSignature {
+  const obj = asObject(raw, path, warnings);
+  return {
+    numerator: asFiniteNumber(obj["numerator"], `${path}.numerator`, 4, warnings),
+    denominator: asFiniteNumber(obj["denominator"], `${path}.denominator`, 4, warnings),
+  };
+}
+
+function parseLoop(raw: JsonValue | undefined, path: string, warnings: LoadWarning[]): LoopRegion {
+  const obj = asObject(raw, path, warnings);
+  return {
+    start: Math.round(asFiniteNumber(obj["start"], `${path}.start`, 0, warnings)),
+    end: Math.round(asFiniteNumber(obj["end"], `${path}.end`, 0, warnings)),
+    enabled: asBoolean(obj["enabled"], `${path}.enabled`, false, warnings),
+  };
+}
+
+function parseSourceRef(
+  raw: JsonValue | undefined,
+  path: string,
+  warnings: LoadWarning[],
+): SourceRef | null {
+  if (raw === undefined || raw === null) return null;
+  const obj = asObject(raw, path, warnings);
+  if (obj["kind"] !== "instrument") {
+    pushWarning(warnings, `${path}.kind`, "Unknown source kind; dropped.");
+    return null;
+  }
+  return { kind: "instrument", deviceId: asString(obj["deviceId"], `${path}.deviceId`, "", warnings) };
+}
+
+function parseSendSpec(raw: JsonValue, path: string, warnings: LoadWarning[]): SendSpec {
+  const obj = asObject(raw, path, warnings);
+  const tapRaw = obj["tap"];
+  const tap: SendSpec["tap"] = tapRaw === "post" ? "post" : "pre";
+  if (tapRaw !== "pre" && tapRaw !== "post") {
+    pushWarning(warnings, `${path}.tap`, 'Expected "pre" or "post"; defaulted to "pre".');
+  }
+  return {
+    to: asString(obj["to"], `${path}.to`, "", warnings),
+    amount: asString(obj["amount"], `${path}.amount`, "", warnings),
+    tap,
+  };
+}
+
+const CHANNEL_ROLES: readonly ChannelRole[] = ["track", "group", "return", "master"];
+
+function parseChannel(raw: JsonValue, key: string, path: string, warnings: LoadWarning[]): Channel {
+  const obj = asObject(raw, path, warnings);
+  const roleRaw = obj["role"];
+  const role: ChannelRole = (CHANNEL_ROLES as readonly string[]).includes(roleRaw as string)
+    ? (roleRaw as ChannelRole)
+    : "track";
+  if (role !== roleRaw) pushWarning(warnings, `${path}.role`, 'Unknown role; defaulted to "track".');
+
+  const idRaw = obj["id"];
+  if (typeof idRaw === "string" && idRaw !== key) {
+    pushWarning(warnings, `${path}.id`, "id did not match its record key; record key wins.");
+  }
+
+  const chain = asArray(obj["chain"], `${path}.chain`, warnings).filter(
+    (v): v is string => typeof v === "string",
+  );
+
+  const output = obj["output"] === null ? null : asString(obj["output"], `${path}.output`, "", warnings) || null;
+
+  return {
+    id: key,
+    role,
+    name: asString(obj["name"], `${path}.name`, "", warnings),
+    color: asNullableString(obj["color"], `${path}.color`, warnings),
+    source: parseSourceRef(obj["source"], `${path}.source`, warnings),
+    chain,
+    volume: asString(obj["volume"], `${path}.volume`, `chan:${key}/vol`, warnings),
+    pan: asString(obj["pan"], `${path}.pan`, `chan:${key}/pan`, warnings),
+    mute: asBoolean(obj["mute"], `${path}.mute`, false, warnings),
+    solo: asBoolean(obj["solo"], `${path}.solo`, false, warnings),
+    sends: asArray(obj["sends"], `${path}.sends`, warnings).map((v, i) =>
+      parseSendSpec(v, `${path}.sends[${i}]`, warnings),
+    ),
+    output,
+  };
+}
+
+function parseDeviceState(raw: JsonValue, key: string, path: string, warnings: LoadWarning[]): DeviceState {
+  const obj = asObject(raw, path, warnings);
+  return {
+    id: key,
+    definitionId: asString(obj["definitionId"], `${path}.definitionId`, "", warnings),
+    version: Math.round(asFiniteNumber(obj["version"], `${path}.version`, 1, warnings)),
+    channelId: asString(obj["channelId"], `${path}.channelId`, "", warnings),
+    enabled: asBoolean(obj["enabled"], `${path}.enabled`, true, warnings),
+  };
+}
+
+function parseNote(raw: JsonValue, path: string, warnings: LoadWarning[]): Note {
+  const obj = asObject(raw, path, warnings);
+  const id = typeof obj["id"] === "string" ? obj["id"] : fallbackId("note");
+  if (typeof obj["id"] !== "string") pushWarning(warnings, `${path}.id`, "Missing id; a new one was generated.");
+  const out: Note = {
+    id,
+    start: Math.max(0, Math.round(asFiniteNumber(obj["start"], `${path}.start`, 0, warnings))),
+    dur: Math.max(1, Math.round(asFiniteNumber(obj["dur"], `${path}.dur`, 1, warnings))),
+    pitch: clampInt(asFiniteNumber(obj["pitch"], `${path}.pitch`, 60, warnings), 0, 127),
+    vel: clampInt(asFiniteNumber(obj["vel"], `${path}.vel`, 100, warnings), 1, 127),
+  };
+  if (typeof obj["muted"] === "boolean") out.muted = obj["muted"];
+  return out;
+}
+
+function clampInt(v: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(v)));
+}
+
+function parseClip(raw: JsonValue, key: string, path: string, warnings: LoadWarning[]): MidiClip {
+  const obj = asObject(raw, path, warnings);
+  const clip: MidiClip = {
+    id: key,
+    trackId: asString(obj["trackId"], `${path}.trackId`, "", warnings),
+    start: Math.max(0, Math.round(asFiniteNumber(obj["start"], `${path}.start`, 0, warnings))),
+    length: Math.max(1, Math.round(asFiniteNumber(obj["length"], `${path}.length`, 1, warnings))),
+    notes: asArray(obj["notes"], `${path}.notes`, warnings).map((v, i) =>
+      parseNote(v, `${path}.notes[${i}]`, warnings),
+    ),
+  };
+  const loopRaw = obj["loop"];
+  if (loopRaw !== undefined && loopRaw !== null) {
+    const loopObj = asObject(loopRaw, `${path}.loop`, warnings);
+    clip.loop = {
+      start: Math.round(asFiniteNumber(loopObj["start"], `${path}.loop.start`, 0, warnings)),
+      end: Math.round(asFiniteNumber(loopObj["end"], `${path}.loop.end`, clip.length, warnings)),
+    };
+  }
+  if (typeof obj["name"] === "string") clip.name = obj["name"];
+  const colorRaw = obj["color"];
+  if (colorRaw === null) clip.color = null;
+  else if (typeof colorRaw === "string") clip.color = colorRaw;
+  return clip;
+}
+
+function parseAutoPoint(raw: JsonValue, path: string, warnings: LoadWarning[]): AutoPoint {
+  const obj = asObject(raw, path, warnings);
+  return {
+    t: Math.round(asFiniteNumber(obj["t"], `${path}.t`, 0, warnings)),
+    v: asFiniteNumber(obj["v"], `${path}.v`, 0, warnings),
+    curve: Math.min(1, Math.max(-1, asFiniteNumber(obj["curve"], `${path}.curve`, 0, warnings))),
+  };
+}
+
+function parseAutomationLane(
+  raw: JsonValue,
+  key: string,
+  path: string,
+  warnings: LoadWarning[],
+): AutomationLane {
+  const obj = asObject(raw, path, warnings);
+  const points = asArray(obj["points"], `${path}.points`, warnings)
+    .map((v, i) => parseAutoPoint(v, `${path}.points[${i}]`, warnings))
+    .sort((a, b) => a.t - b.t);
+  return {
+    id: key,
+    channelId: asString(obj["channelId"], `${path}.channelId`, "", warnings),
+    paramId: asString(obj["paramId"], `${path}.paramId`, "", warnings),
+    points,
+    enabled: asBoolean(obj["enabled"], `${path}.enabled`, true, warnings),
+  };
+}
+
+const SIDECHAIN_TAPS: readonly SidechainEdge["from"]["tap"][] = ["preFx", "postFx", "postFader"];
+
+function parseSidechainEdge(raw: JsonValue, path: string, warnings: LoadWarning[]): SidechainEdge {
+  const obj = asObject(raw, path, warnings);
+  const fromObj = asObject(obj["from"], `${path}.from`, warnings);
+  const toObj = asObject(obj["to"], `${path}.to`, warnings);
+  const tapRaw = fromObj["tap"];
+  const tap: SidechainEdge["from"]["tap"] = (SIDECHAIN_TAPS as readonly string[]).includes(
+    tapRaw as string,
+  )
+    ? (tapRaw as SidechainEdge["from"]["tap"])
+    : "postFx";
+  if (tap !== tapRaw) pushWarning(warnings, `${path}.from.tap`, 'Unknown tap; defaulted to "postFx".');
+  return {
+    from: { channel: asString(fromObj["channel"], `${path}.from.channel`, "", warnings), tap },
+    to: { device: asString(toObj["device"], `${path}.to.device`, "", warnings), port: "sc" },
+  };
+}
+
+function parseParamValues(
+  raw: JsonValue | undefined,
+  path: string,
+  warnings: LoadWarning[],
+): Record<string, number> {
+  const obj = asObject(raw, path, warnings);
+  const out: Record<string, number> = {};
+  for (const key of Object.keys(obj)) {
+    const v = obj[key];
+    if (typeof v === "number" && Number.isFinite(v)) out[key] = v;
+    else pushWarning(warnings, `${path}.${key}`, "Expected a finite number; entry dropped.");
+  }
+  return out;
+}
+
+type ParseOutcome = { readonly project: Project } | { readonly error: string };
+
+function parseProject(raw: JsonValue, warnings: LoadWarning[]): ParseOutcome {
+  if (!isJsonObject(raw)) return { error: NOT_A_PROJECT_FILE };
+
+  const idRaw = raw["id"];
+  const id = typeof idRaw === "string" && idRaw.length > 0 ? idRaw : fallbackId("project");
+  if (id !== idRaw) pushWarning(warnings, "id", "Missing or invalid project id; a new one was generated.");
+
+  const name = asString(raw["name"], "name", "Untitled", warnings);
+
+  const tempoParsed = parseTempo(raw["tempo"], "tempo", warnings);
+  const tempo: TempoSegment[] = tempoParsed.length > 0 ? tempoParsed : [{ startTick: 0, bpm: 120 }];
+
+  const timeSignature = parseTimeSignature(raw["timeSignature"], "timeSignature", warnings);
+  const loop = parseLoop(raw["loop"], "loop", warnings);
+
+  const channelsObj = asObject(raw["channels"], "channels", warnings);
+  const channels: Record<string, Channel> = {};
+  for (const key of Object.keys(channelsObj)) {
+    const value = channelsObj[key];
+    if (value !== undefined) channels[key] = parseChannel(value, key, `channels.${key}`, warnings);
+  }
+
+  const channelOrder = asArray(raw["channelOrder"], "channelOrder", warnings).filter(
+    (v): v is string => typeof v === "string",
+  );
+
+  const devicesObj = asObject(raw["devices"], "devices", warnings);
+  const devices: Record<string, DeviceState> = {};
+  for (const key of Object.keys(devicesObj)) {
+    const value = devicesObj[key];
+    if (value !== undefined) devices[key] = parseDeviceState(value, key, `devices.${key}`, warnings);
+  }
+
+  const clipsObj = asObject(raw["clips"], "clips", warnings);
+  const clips: Record<string, MidiClip> = {};
+  for (const key of Object.keys(clipsObj)) {
+    const value = clipsObj[key];
+    if (value !== undefined) clips[key] = parseClip(value, key, `clips.${key}`, warnings);
+  }
+
+  const lanesObj = asObject(raw["lanes"], "lanes", warnings);
+  const lanes: Record<string, AutomationLane> = {};
+  for (const key of Object.keys(lanesObj)) {
+    const value = lanesObj[key];
+    if (value !== undefined) lanes[key] = parseAutomationLane(value, key, `lanes.${key}`, warnings);
+  }
+
+  const sidechains = asArray(raw["sidechains"], "sidechains", warnings).map((v, i) =>
+    parseSidechainEdge(v, `sidechains[${i}]`, warnings),
+  );
+
+  const paramValues = parseParamValues(raw["paramValues"], "paramValues", warnings);
+
+  const project: Project = {
+    id,
+    name,
+    tempo,
+    timeSignature,
+    loop,
+    channelOrder,
+    channels,
+    devices,
+    clips,
+    lanes,
+    sidechains,
+    paramValues,
+  };
+  return { project };
+}
+
+// -----------------------------------------------------------------------
+// validate — document.ts invariants 1-8, repaired in place
+// -----------------------------------------------------------------------
+
+function compareNotes(a: Note, b: Note): number {
+  return a.start - b.start || a.pitch - b.pitch;
+}
+
+function notesAlreadySorted(notes: readonly Note[]): boolean {
+  for (let i = 1; i < notes.length; i++) {
+    const prev = notes[i - 1];
+    const cur = notes[i];
+    if (prev === undefined || cur === undefined) continue;
+    if (compareNotes(prev, cur) > 0) return false;
+  }
+  return true;
+}
+
+/**
+ * Validates + repairs document.ts invariants 1-5 in place (8 is structural
+ * — the parser above never produces an `undefined`-valued key — and 6/7
+ * name devices/params this package has no registry to check against, so
+ * they are left to the app-shell's own consistency pass). Returns one
+ * warning per repair made.
+ */
+function validateProject(project: Project): LoadWarning[] {
+  const warnings: LoadWarning[] = [];
+
+  // Invariant 1: tempo non-empty, sorted, starts at 0.
+  const tempoOk =
+    project.tempo.length > 0 &&
+    project.tempo[0]?.startTick === 0 &&
+    project.tempo.every((seg, i) => i === 0 || (project.tempo[i - 1]?.startTick ?? 0) <= seg.startTick);
+  if (!tempoOk) {
+    const bpm = project.tempo[0]?.bpm ?? 120;
+    project.tempo = [{ startTick: 0, bpm }];
+    pushWarning(warnings, "tempo", "Tempo map was invalid; reset to a single 120 bpm segment.");
+  }
+
+  // Invariant 2: channelOrder is a permutation of Object.keys(channels).
+  const channelKeys = Object.keys(project.channels);
+  const orderSet = new Set(project.channelOrder);
+  const missing = channelKeys.filter((k) => !orderSet.has(k)).sort();
+  const stale = project.channelOrder.filter((k) => !(k in project.channels));
+  if (missing.length > 0 || stale.length > 0) {
+    project.channelOrder = [...project.channelOrder.filter((k) => k in project.channels), ...missing];
+    pushWarning(warnings, "channelOrder", "channelOrder repaired to match channels.");
+  }
+
+  // Invariant 3 (partial): clip.trackId names an existing channel; orphans
+  // are dropped (there is no channel to invent).
+  for (const clipId of Object.keys(project.clips)) {
+    const clip = project.clips[clipId];
+    if (clip !== undefined && !(clip.trackId in project.channels)) {
+      delete project.clips[clipId];
+      pushWarning(warnings, `clips.${clipId}`, "Clip referenced a missing channel; dropped.");
+    }
+  }
+
+  // Invariants 4 + 5: notes sorted by (start, pitch); ticks/velocity/pitch
+  // in range. The parser already clamps on the way in, so this only catches
+  // a `Project` handed to `validate()` directly (e.g. after a command
+  // storm in a test) rather than one that went through `decode`.
+  for (const clipId of Object.keys(project.clips)) {
+    const clip = project.clips[clipId];
+    if (clip === undefined) continue;
+    let changed = false;
+    for (const note of clip.notes) {
+      const dur = Math.max(1, Math.round(note.dur));
+      const pitch = clampInt(note.pitch, 0, 127);
+      const vel = clampInt(note.vel, 1, 127);
+      const start = Math.max(0, Math.round(note.start));
+      if (dur !== note.dur || pitch !== note.pitch || vel !== note.vel || start !== note.start) {
+        note.dur = dur;
+        note.pitch = pitch;
+        note.vel = vel;
+        note.start = start;
+        changed = true;
+      }
+    }
+    if (!notesAlreadySorted(clip.notes)) {
+      clip.notes = [...clip.notes].sort(compareNotes);
+      changed = true;
+    }
+    if (changed) {
+      pushWarning(warnings, `clips.${clipId}.notes`, "Notes clamped and/or resorted to satisfy invariants.");
+    }
+  }
+
+  return warnings;
+}
+
+// -----------------------------------------------------------------------
+// public factory
+// -----------------------------------------------------------------------
+
+function withMigratedFrom(base: {
+  ok: true;
+  project: Project;
+  warnings: readonly LoadWarning[];
+}, migratedFrom: number | undefined): DecodeResult {
+  return migratedFrom === undefined ? base : { ...base, migratedFrom };
+}
+
+function withSchemaVersion(
+  base: { ok: false; error: string },
+  schemaVersion: number | undefined,
+): DecodeResult {
+  return schemaVersion === undefined ? base : { ...base, schemaVersion };
+}
+
+function decodeValue(value: JsonValue): DecodeResult {
+  if (!isJsonObject(value)) {
+    return withSchemaVersion({ ok: false, error: NOT_A_PROJECT_FILE }, undefined);
+  }
+  if (value["format"] !== FORMAT_MARKER) {
+    return withSchemaVersion({ ok: false, error: NOT_A_PROJECT_FILE }, undefined);
+  }
+
+  const schemaVersionRaw = value["schemaVersion"];
+  const schemaVersion = typeof schemaVersionRaw === "number" ? schemaVersionRaw : 0;
+
+  const projectRaw = value["project"];
+  if (projectRaw === undefined) {
+    return withSchemaVersion({ ok: false, error: NOT_A_PROJECT_FILE }, schemaVersion);
+  }
+
+  const migration = runMigrations(schemaVersion, projectRaw);
+  if (migration.error !== undefined) {
+    return withSchemaVersion({ ok: false, error: migration.error }, schemaVersion);
+  }
+
+  const warnings: LoadWarning[] = [];
+  const parsed = parseProject(migration.value, warnings);
+  if ("error" in parsed) {
+    return withSchemaVersion({ ok: false, error: parsed.error }, schemaVersion);
+  }
+
+  const repairWarnings = validateProject(parsed.project);
+  return withMigratedFrom(
+    { ok: true, project: parsed.project, warnings: [...warnings, ...repairWarnings] },
+    migration.migratedFrom,
+  );
+}
+
+function decode(text: string): DecodeResult {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "Not a Fableton project file: the text is not valid JSON." };
+  }
+  return decodeValue(value as JsonValue);
+}
+
+/** Creates a fresh `ProjectCodec`. Stateless (bar an internal fallback-id
+ *  counter used only when a file is missing an id it structurally needs),
+ *  so one instance is safe to share across a whole app session. */
+export function createProjectCodec(): ProjectCodec {
+  return { encode, decode, decodeValue, validate: validateProject };
+}
+
+/** Ready-made shared instance, mirroring `command-undo`'s
+ *  `projectCommands` convenience export. */
+export const projectCodec: ProjectCodec = createProjectCodec();
