@@ -4,7 +4,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeFixture, type Fixture } from "../testing/fixture";
 import { expectLegalProject } from "../testing/invariants";
-import { deviceParamId, rackChainParamId } from "../../params";
+import { deviceParamId, rackChainParamId, rackMacroParamId } from "../../params";
 import { DEFAULT_CHAIN_GAIN_DB } from "./racks";
 import { GATED_REVERB } from "../../presets/factoryRacks";
 
@@ -255,5 +255,72 @@ describe("addRackPreset (factory racks)", () => {
     expect(doc.sidechains).toEqual([]);
     expect(Object.values(doc.devices).some((d) => d.definitionId === "core.gate")).toBe(false);
     expectLegalProject(doc);
+  });
+});
+
+describe("macros", () => {
+  /** A rack holding one filter, and the id of that filter's cutoff param. */
+  function rackWithFilter(): { rackId: string; macroId: string; cutoff: string } {
+    f.store.dispatch(f.commands.addEffect(f.trackId, { definitionId: "core.filter" }));
+    const deviceId = (f.store.getState().channels[f.trackId]?.chain ?? []).at(-1) as string;
+    f.store.dispatch(f.commands.groupIntoRack(f.trackId, [deviceId]));
+    const rackId = rackIds()[0] as string;
+    f.store.dispatch(f.commands.addMacro(rackId, "Sweep"));
+    const macroId = f.store.getState().racks[rackId]?.macros[0]?.id as string;
+    return { rackId, macroId, cutoff: deviceParamId(f.trackId, deviceId, "cutoff") };
+  }
+
+  it("adds a macro as a registry param on the rack's path, at 0", () => {
+    const { rackId, macroId } = rackWithFilter();
+    const macro = f.store.getState().racks[rackId]?.macros[0];
+    expect(macro?.name).toBe("Sweep");
+    expect(macro?.param).toBe(rackMacroParamId(f.trackId, rackId, macroId));
+    // A new macro sits at 0 so adding one never moves what it will be mapped
+    // to.
+    expect(f.store.getState().paramValues[macro?.param ?? ""]).toBe(0);
+    expectLegalProject(f.store.getState());
+  });
+
+  it("maps a target with a range, and re-mapping RE-RANGES rather than duplicating", () => {
+    const { rackId, macroId, cutoff } = rackWithFilter();
+    f.store.dispatch(f.commands.mapMacro(rackId, macroId, cutoff, { min: 200, max: 8000 }));
+    f.store.dispatch(f.commands.mapMacro(rackId, macroId, cutoff, { min: 400, max: 12000 }));
+
+    const targets = f.store.getState().racks[rackId]?.macros[0]?.targets ?? [];
+    // Two ranges for one param would fight each other on every macro write.
+    expect(targets).toEqual([{ paramId: cutoff, min: 400, max: 12000 }]);
+  });
+
+  it("maps INVERTED ranges too — min above max flips the target", () => {
+    const { rackId, macroId, cutoff } = rackWithFilter();
+    f.store.dispatch(f.commands.mapMacro(rackId, macroId, cutoff, { min: 8000, max: 200 }));
+    expect(f.store.getState().racks[rackId]?.macros[0]?.targets[0]).toEqual({
+      paramId: cutoff,
+      min: 8000,
+      max: 200,
+    });
+  });
+
+  it("unmaps one target and removes the macro with its value", () => {
+    const { rackId, macroId, cutoff } = rackWithFilter();
+    f.store.dispatch(f.commands.mapMacro(rackId, macroId, cutoff, { min: 200, max: 8000 }));
+    f.store.dispatch(f.commands.unmapMacro(rackId, macroId, cutoff));
+    expect(f.store.getState().racks[rackId]?.macros[0]?.targets).toEqual([]);
+
+    const param = f.store.getState().racks[rackId]?.macros[0]?.param ?? "";
+    f.store.dispatch(f.commands.removeMacro(rackId, macroId));
+    const doc = f.store.getState();
+    expect(doc.racks[rackId]?.macros).toEqual([]);
+    expect(doc.paramValues[param]).toBeUndefined();
+    expectLegalProject(doc);
+  });
+
+  it("ungrouping the rack takes its macros' values with it", () => {
+    const { rackId, macroId, cutoff } = rackWithFilter();
+    f.store.dispatch(f.commands.mapMacro(rackId, macroId, cutoff, { min: 200, max: 8000 }));
+    const param = f.store.getState().racks[rackId]?.macros[0]?.param ?? "";
+    f.store.dispatch(f.commands.ungroupRack(rackId));
+    expect(f.store.getState().paramValues[param]).toBeUndefined();
+    expectLegalProject(f.store.getState());
   });
 });

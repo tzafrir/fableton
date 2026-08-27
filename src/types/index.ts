@@ -53,6 +53,8 @@ export type { MidiClip, Note } from "./clip";
 
 // --- M1 (SS9, SS10, SS13) ---------------------------------------------------
 
+export { DEFAULT_MACRO_VALUE, MACRO_MAX, MACRO_MIN } from "./document";
+
 export type {
   AutomationLane,
   AutoPoint,

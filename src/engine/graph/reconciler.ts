@@ -31,6 +31,7 @@ import { dbToGain } from "../../devices/harness";
 import type { AppParamRegistry } from "../../params";
 import { p } from "../../params/descriptors";
 import { withParamId } from "../../params";
+import { MACRO_MAX, MACRO_MIN } from "../../types";
 import { audibleChains, audibleChannels } from "./audible";
 import { buildGraph } from "./build";
 import { diffGraph } from "./diff";
@@ -99,6 +100,39 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
    *  node it describes. */
   const muteTargets = new Map<GraphNodeRef, number>();
   const mixerParamIds = new Set<ParamId>();
+  /**
+   * SS7 macros: macro ParamId -> its current targets.
+   *
+   * The map is re-read by the macro's BINDING on every write, rather than
+   * captured when the binding is made: re-mapping a macro changes only this
+   * table, and re-registering the param on every mapping edit would drop the
+   * handle the UI is holding mid-gesture.
+   */
+  const macroTargets = new Map<ParamId, readonly { paramId: ParamId; min: number; max: number }[]>();
+
+  /**
+   * Writes one macro's value out to its targets.
+   *
+   * Called from the macro's binding AND directly after every apply. It is not
+   * routed through the handle in the second case on purpose: a handle skips a
+   * push whose value has not changed (the de-dupe that keeps a knob from
+   * re-writing the same number every frame), and re-applying a macro after a
+   * re-map or a project load has exactly that shape — same value, different
+   * targets.
+   */
+  function fanOutMacro(macroParam: ParamId, value: number): void {
+    const targets = macroTargets.get(macroParam) ?? [];
+    const fraction = (value - MACRO_MIN) / (MACRO_MAX - MACRO_MIN || 1);
+    for (const target of targets) {
+      const bound = params.get(target.paramId);
+      // A target whose device is not mounted (or whose param was renamed)
+      // simply has no handle — the mapping stays in the document, greyed,
+      // exactly as SS7 treats an automation lane pointing at a removed
+      // device.
+      if (bound === undefined) continue;
+      bound.setLive(target.min + fraction * (target.max - target.min), "user");
+    }
+  }
   let disposed = false;
 
   // --- node resolution -------------------------------------------------------
@@ -323,6 +357,31 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
       }
     }
 
+    // SS7 macros. The macro itself is an ordinary registry param (so it
+    // automates, undoes and saves); the FAN-OUT is engine behaviour, written
+    // on the LIVE path only. Target values are therefore derived, never
+    // stored: what the document keeps is the macro's own value, and
+    // re-applying it after a load or an undo puts every target back.
+    macroTargets.clear();
+    for (const rack of Object.values(doc.racks)) {
+      for (const macro of rack.macros) {
+        macroTargets.set(
+          macro.param,
+          macro.targets.map((t) => ({ paramId: t.paramId, min: t.min, max: t.max })),
+        );
+        wanted.set(macro.param, () => {
+          const handle = params.register(
+            withParamId(
+              p.continuous("macro", "Macro", { min: MACRO_MIN, max: MACRO_MAX, default: 0 }),
+              macro.param,
+            ),
+          );
+          seedBase(handle, doc, macro.param);
+          handle.bindMessage((value) => fanOutMacro(macro.param, value));
+        });
+      }
+    }
+
     for (const id of [...mixerParamIds]) {
       if (!wanted.has(id)) {
         params.unregister(id);
@@ -334,6 +393,15 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
         register();
         mixerParamIds.add(id);
       }
+    }
+
+    // Re-assert every macro AFTER registration: its targets are derived
+    // values, so a project load, an undo, or a newly mounted device inside
+    // the rack must be re-driven from the macro's own value rather than left
+    // wherever the target's stale document value put it.
+    for (const [macroParam] of macroTargets) {
+      const handle = params.get(macroParam);
+      if (handle !== undefined) fanOutMacro(macroParam, handle.live());
     }
   }
 

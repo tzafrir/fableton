@@ -12,8 +12,13 @@ import {
   type FakeAudioContext,
 } from "../../devices/harness/testing/fakeAudio";
 import { createDeviceHost, createDeviceRegistry, deviceInstance } from "../../devices/harness";
-import { createParamRegistry, type AppParamRegistry } from "../../params";
-import type { DeviceDefinition, Project } from "../../types";
+import {
+  createParamRegistry,
+  deviceParamId,
+  rackMacroParamId,
+  type AppParamRegistry,
+} from "../../params";
+import type { DeviceDefinition, Project, ProjectSnapshot } from "../../types";
 import { p } from "../../params/descriptors";
 import { REWIRE_WAIT_MS, createGraphReconciler, type GraphReconciler } from "./reconciler";
 import { channelUtilRef, sendRef } from "./ids";
@@ -648,5 +653,85 @@ describe("device replace (same instance id, new channel or definition)", () => {
       }),
     );
     expect(reconciler.mountedDevice("fx1")).toBeUndefined();
+  });
+});
+
+describe("rack macros (SS7)", () => {
+  /** One track hosting a rack whose single chain holds a `test.fx`, plus a
+   *  macro mapped to that device's `mix` over an explicit range. */
+  function macroDoc(options: { min: number; max: number; value: number }) {
+    const doc = routingDoc({
+      channels: [
+        { id: "t1", role: "track", chain: ["rack-1"], output: "master" },
+        { id: "master", role: "master", output: null },
+      ],
+      devices: [{ id: "d1", definitionId: "test.fx", channelId: "t1" }],
+      racks: [{ id: "rack-1", channelId: "t1", chains: [{ id: "c1", devices: ["d1"] }] }],
+    });
+    const macroParam = rackMacroParamId("t1", "rack-1", "m1");
+    const target = deviceParamId("t1", "d1", "mix");
+    doc.racks["rack-1"]!.macros = [
+      {
+        id: "m1",
+        name: "Macro 1",
+        param: macroParam,
+        targets: [{ paramId: target, min: options.min, max: options.max }],
+      },
+    ];
+    doc.paramValues[macroParam] = options.value;
+    return { doc, macroParam, target };
+  }
+
+  it("registers the macro and drives its target from the saved value", async () => {
+    const { doc, macroParam, target } = macroDoc({ min: 0, max: 100, value: 127 });
+    await reconciler.apply(doc as unknown as ProjectSnapshot);
+
+    expect(params.get(macroParam)).toBeDefined();
+    // A macro's targets are DERIVED, never stored: applying the document has
+    // to re-drive them from the macro's own value, or a reload would leave
+    // every mapped param wherever its stale value put it.
+    expect(params.get(target)?.live()).toBeCloseTo(100, 6);
+  });
+
+  it("fans a macro move out across its range", async () => {
+    const { doc, macroParam, target } = macroDoc({ min: 20, max: 60, value: 0 });
+    await reconciler.apply(doc as unknown as ProjectSnapshot);
+    expect(params.get(target)?.live()).toBeCloseTo(20, 6);
+
+    params.get(macroParam)?.setLive(64, "user"); // about half of 0..127
+    expect(params.get(target)?.live()).toBeCloseTo(20 + (64 / 127) * 40, 4);
+  });
+
+  it("honours an INVERTED range", async () => {
+    const { doc, macroParam, target } = macroDoc({ min: 100, max: 0, value: 0 });
+    await reconciler.apply(doc as unknown as ProjectSnapshot);
+    expect(params.get(target)?.live()).toBeCloseTo(100, 6);
+    params.get(macroParam)?.setLive(127, "user");
+    expect(params.get(target)?.live()).toBeCloseTo(0, 6);
+  });
+
+  it("re-mapping a macro takes effect without dropping the handle", async () => {
+    const { doc, macroParam, target } = macroDoc({ min: 0, max: 100, value: 127 });
+    await reconciler.apply(doc as unknown as ProjectSnapshot);
+    const handle = params.get(macroParam);
+
+    doc.racks["rack-1"]!.macros[0]!.targets[0] = { paramId: target, min: 0, max: 50 };
+    await reconciler.apply(doc as unknown as ProjectSnapshot);
+
+    // The same handle: re-registering would drop the one a control is
+    // holding mid-gesture.
+    expect(params.get(macroParam)).toBe(handle);
+    expect(params.get(target)?.live()).toBeCloseTo(50, 6);
+  });
+
+  it("unregisters a macro whose rack is gone", async () => {
+    const { doc, macroParam } = macroDoc({ min: 0, max: 100, value: 0 });
+    await reconciler.apply(doc as unknown as ProjectSnapshot);
+    expect(params.get(macroParam)).toBeDefined();
+
+    doc.racks = {};
+    doc.channels["t1"]!.chain = [];
+    await reconciler.apply(doc as unknown as ProjectSnapshot);
+    expect(params.get(macroParam)).toBeUndefined();
   });
 });

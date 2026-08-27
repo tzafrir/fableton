@@ -128,6 +128,13 @@ export interface RackChain {
  * anything else; the FAN-OUT is engine behaviour (M4 of the rack plan), not
  * document data beyond the target list.
  */
+/** A macro's range: MIDI-CC-like, so it reads the same as a mapped CC. */
+export const MACRO_MIN = 0;
+export const MACRO_MAX = 127;
+/** A new macro sits at 0, so adding one never moves what it is about to be
+ *  mapped to. */
+export const DEFAULT_MACRO_VALUE = 0;
+
 export interface RackMacro {
   id: RackMacroId;
   name: string;

@@ -422,6 +422,39 @@ function DevicePanel({
   );
 }
 
+/** Every param of every device inside a rack, as macro targets. */
+export function rackParamChoices(
+  doc: ProjectSnapshot,
+  rack: ProjectSnapshot["racks"][string],
+): { paramId: ParamId; label: string; min: number; max: number }[] {
+  const out: { paramId: ParamId; label: string; min: number; max: number }[] = [];
+  for (const chain of rack.chains) {
+    for (const deviceId of chain.devices) {
+      const device = doc.devices[deviceId];
+      const def = device === undefined ? undefined : definitionsById.get(device.definitionId);
+      if (device === undefined || def === undefined) continue;
+      for (const desc of def.params) {
+        out.push({
+          paramId: deviceParamId(rack.channelId, deviceId, desc.id),
+          label: `${def.label} ${desc.label}`,
+          min: desc.min,
+          max: desc.max,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/** A mapped target's short name, for the unmap chip. */
+function labelForParam(doc: ProjectSnapshot, paramId: ParamId): string {
+  const parsed = paramId.split("/");
+  const local = parsed[parsed.length - 1] ?? paramId;
+  const deviceSeg = parsed[1]?.replace("dev:", "") ?? "";
+  const def = definitionsById.get(doc.devices[deviceSeg]?.definitionId ?? "");
+  return def === undefined ? local : `${def.label} ${local}`;
+}
+
 /**
  * SS7 rack: the split/sum container, drawn as a column of parallel chains.
  *
@@ -517,6 +550,15 @@ function RackPanel({
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <button
           type="button"
+          data-testid={`rack-add-macro-${rackId}`}
+          title="Add a macro knob"
+          onClick={() => dispatch(commands.addMacro(rackId))}
+          style={tinyButton}
+        >
+          + Macro
+        </button>
+        <button
+          type="button"
           data-testid={`rack-add-chain-${rackId}`}
           title="Add a parallel chain"
           onClick={() => dispatch(commands.addRackChain(rackId))}
@@ -556,6 +598,87 @@ function RackPanel({
           </button>
         </span>
       </div>
+
+      {/* Macros (SS7): one knob fanned out to N params inside the rack. The
+          target menu lists exactly the rack's own device params — a bounded,
+          meaningful list, unlike "every param in the project". */}
+      {rack.macros.length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
+          {rack.macros.map((macro) => {
+            const handle = engine?.params.get(macro.param);
+            return (
+              <div
+                key={macro.id}
+                data-testid={`macro-${rackId}-${macro.id}`}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 2,
+                  border: "1px solid #333",
+                  borderRadius: 3,
+                  padding: 3,
+                  minWidth: 74,
+                }}
+              >
+                {handle === undefined ? (
+                  <span style={{ fontSize: 10, color: "#444" }}>{macro.name}</span>
+                ) : (
+                  <Knob
+                    handle={handle}
+                    size={30}
+                    label={macro.name}
+                    testId={`macro-knob-${rackId}-${macro.id}`}
+                    onShowAutomation={
+                      onShowAutomation === undefined ? undefined : () => onShowAutomation(macro.param)
+                    }
+                  />
+                )}
+                <select
+                  data-testid={`macro-map-${rackId}-${macro.id}`}
+                  aria-label={`Map ${macro.name}`}
+                  value=""
+                  onChange={(e) => {
+                    const target = rackParamChoices(doc, rack).find((c) => c.paramId === e.target.value);
+                    if (target === undefined) return;
+                    // A fresh mapping spans the target's whole range; the
+                    // range is then editable by re-mapping (the command
+                    // re-ranges rather than adding a second entry).
+                    dispatch(
+                      commands.mapMacro(rackId, macro.id, target.paramId, {
+                        min: target.min,
+                        max: target.max,
+                      }),
+                    );
+                  }}
+                  style={{ fontSize: 9, maxWidth: 70, background: "#181818", color: "#bbb" }}
+                >
+                  <option value="" disabled>
+                    map…
+                  </option>
+                  {rackParamChoices(doc, rack).map((choice) => (
+                    <option key={choice.paramId} value={choice.paramId}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </select>
+                {macro.targets.map((target) => (
+                  <button
+                    key={target.paramId}
+                    type="button"
+                    data-testid={`macro-unmap-${rackId}-${macro.id}`}
+                    title={`Unmap ${target.paramId}`}
+                    onClick={() => dispatch(commands.unmapMacro(rackId, macro.id, target.paramId))}
+                    style={{ ...tinyButton, fontSize: 8, maxWidth: 70, overflow: "hidden" }}
+                  >
+                    {labelForParam(doc, target.paramId)} ✕
+                  </button>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {rack.chains.map((chain) => {
         const gain = engine?.params.get(chain.gain);

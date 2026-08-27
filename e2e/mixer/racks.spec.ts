@@ -123,3 +123,61 @@ test("audio flows through a rack, and a muted chain stops contributing", async (
 
   await page.getByRole("button", { name: "Stop" }).click();
 });
+
+test("a macro knob drives a device param inside the rack", async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(() => page.evaluate(() => window.__fabletonDemo?.store !== undefined), { timeout: 10_000 })
+    .toBe(true);
+  await page.getByRole("button", { name: "Boot audio" }).click();
+  await expect(page.getByTestId("audio-status")).toHaveText(/^ready/, { timeout: 10_000 });
+  await page.getByTestId("tab-mixer").click();
+
+  const trackId = (
+    (await page.locator('[data-testid^="strip-"][data-role="track"]').first().getAttribute("data-testid")) ?? ""
+  ).replace("strip-", "");
+  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId("add-effect-select").selectOption({ label: "Filter" });
+
+  const deviceId = (
+    (await page.locator(".fbl-device-chain > .fbl-device").first().getAttribute("data-testid")) ?? ""
+  ).replace("device-", "");
+  await page.getByTestId(`device-group-${deviceId}`).click();
+  const rackId = ((await page.locator(".fbl-rack").getAttribute("data-testid")) ?? "").replace("rack-", "");
+
+  await page.getByTestId(`rack-add-macro-${rackId}`).click();
+  const macroId = (
+    (await page.locator(`[data-testid^="macro-${rackId}-"]`).getAttribute("data-testid")) ?? ""
+  ).replace(`macro-${rackId}-`, "");
+
+  // The target menu offers the rack's OWN device params — a bounded list.
+  await page.getByTestId(`macro-map-${rackId}-${macroId}`).selectOption({ label: "Filter Cutoff" });
+
+  const cutoff = async (): Promise<number> =>
+    page.evaluate((id) => {
+      const values = window.__fabletonDemo?.store?.getState().paramValues ?? {};
+      const key = Object.keys(values).find((k) => k.includes(id) && k.endsWith("/cutoff"));
+      return key === undefined ? -1 : (values[key] ?? -1);
+    }, deviceId);
+
+  const before = await cutoff();
+
+  // Drag the macro knob to the top of its sweep.
+  const knob = page.getByTestId(`macro-knob-${rackId}-${macroId}`);
+  const box = await knob.boundingBox();
+  if (box === null) throw new Error("no macro knob");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y - 200, { steps: 10 });
+  await page.mouse.up();
+
+  // The macro's own value is what the document stores; the TARGET is derived
+  // and lives only on the live path — so read it off the registry.
+  const live = await page.evaluate((id) => {
+    const handles = window.__fabletonDemo?.engine?.params.list() ?? [];
+    const handle = handles.find((h) => h.desc.id.includes(id) && h.desc.id.endsWith("/cutoff"));
+    return handle?.live() ?? -1;
+  }, deviceId);
+
+  expect(live).toBeGreaterThan(before);
+});

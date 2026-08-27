@@ -496,6 +496,19 @@ export interface ProjectCommands {
    * the instances, which only a command can do.
    */
   addRackPreset(channelId: ChannelId, spec: RackPresetSpec, index?: number | undefined): Command;
+  /** A macro knob: one control fanned out to N params (SS7). */
+  addMacro(rackId: RackId, name?: string | undefined): Command;
+  removeMacro(rackId: RackId, macroId: RackMacroId): Command;
+  renameMacro(rackId: RackId, macroId: RackMacroId, name: string): Command;
+  /** Maps (or re-ranges) one target. `min`/`max` are in the TARGET's real
+   *  units, and `min > max` is legal — it inverts the target. */
+  mapMacro(
+    rackId: RackId,
+    macroId: RackMacroId,
+    paramId: ParamId,
+    range: { min: number; max: number },
+  ): Command;
+  unmapMacro(rackId: RackId, macroId: RackMacroId, paramId: ParamId): Command;
   setChainMuted(rackId: RackId, chainId: RackChainId, muted: boolean): Command;
   setChainSolo(rackId: RackId, chainId: RackChainId, solo: boolean): Command;
   setRackEnabled(rackId: RackId, enabled: boolean): Command;

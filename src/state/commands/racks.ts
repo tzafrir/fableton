@@ -11,6 +11,7 @@
 // grouping into a rack moves ids between lists, never rebuilds a device, so
 // param values and automation lanes survive grouping and ungrouping intact.
 
+import { DEFAULT_MACRO_VALUE } from "../../types";
 import type {
   ChannelId,
   Command,
@@ -21,7 +22,7 @@ import type {
   RackChainId,
   RackId,
 } from "../../types";
-import { deviceParamId, isDeviceParamId, rackChainParamId } from "../../params";
+import { deviceParamId, isDeviceParamId, rackChainParamId, rackMacroParamId } from "../../params";
 import { clampInt, detachFromChains, makeCommand, type DraftProject } from "./util";
 
 export type RackCommands = Pick<
@@ -34,6 +35,11 @@ export type RackCommands = Pick<
   | "addRackPreset"
   | "removeRackChain"
   | "moveDeviceToChain"
+  | "addMacro"
+  | "removeMacro"
+  | "renameMacro"
+  | "mapMacro"
+  | "unmapMacro"
   | "setChainMuted"
   | "setChainSolo"
   | "setRackEnabled"
@@ -44,6 +50,8 @@ export type RackCommands = Pick<
 /** A new chain sits at unity gain, centred — the neutral parallel branch. */
 export const DEFAULT_CHAIN_GAIN_DB = 0;
 export const DEFAULT_CHAIN_PAN = 0;
+
+
 
 function makeChain(
   channelId: ChannelId,
@@ -277,6 +285,68 @@ export function createRackCommands(ids: IdFactory): RackCommands {
         if (list === undefined) return;
         const at = index === undefined ? list.devices.length : clampInt(index, 0, list.devices.length);
         list.devices.splice(at, 0, deviceId);
+      });
+    },
+
+    addMacro(rackId, name): Command {
+      const macroId = ids.macro();
+      return makeCommand("Add Macro", (doc) => {
+        const rack = doc.racks[rackId];
+        if (rack === undefined) return;
+        const param = rackMacroParamId(rack.channelId, rackId, macroId);
+        rack.macros.push({
+          id: macroId,
+          name: name ?? `Macro ${String(rack.macros.length + 1)}`,
+          param,
+          targets: [],
+        });
+        doc.paramValues[param] = DEFAULT_MACRO_VALUE;
+      });
+    },
+
+    removeMacro(rackId, macroId): Command {
+      return makeCommand("Remove Macro", (doc) => {
+        const rack = doc.racks[rackId];
+        if (rack === undefined) return;
+        const macro = rack.macros.find((m) => m.id === macroId);
+        if (macro === undefined) return;
+        delete doc.paramValues[macro.param];
+        rack.macros = rack.macros.filter((m) => m.id !== macroId);
+      });
+    },
+
+    renameMacro(rackId, macroId, name): Command {
+      return makeCommand(
+        "Rename Macro",
+        (doc) => {
+          const macro = doc.racks[rackId]?.macros.find((m) => m.id === macroId);
+          if (macro !== undefined) macro.name = name;
+        },
+        { coalesceKey: `rack.macro.name.${rackId}.${macroId}` },
+      );
+    },
+
+    mapMacro(rackId, macroId, paramId, range): Command {
+      return makeCommand("Map Macro", (doc) => {
+        const macro = doc.racks[rackId]?.macros.find((m) => m.id === macroId);
+        if (macro === undefined) return;
+        const existing = macro.targets.find((t) => t.paramId === paramId);
+        // Re-mapping an already-mapped param RE-RANGES it rather than adding
+        // a second entry: two ranges for one param would fight each other.
+        if (existing !== undefined) {
+          existing.min = range.min;
+          existing.max = range.max;
+          return;
+        }
+        macro.targets.push({ paramId, min: range.min, max: range.max });
+      });
+    },
+
+    unmapMacro(rackId, macroId, paramId): Command {
+      return makeCommand("Unmap Macro", (doc) => {
+        const macro = doc.racks[rackId]?.macros.find((m) => m.id === macroId);
+        if (macro === undefined) return;
+        macro.targets = macro.targets.filter((t) => t.paramId !== paramId);
       });
     },
 
