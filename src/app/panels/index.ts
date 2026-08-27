@@ -4,3 +4,7 @@ export { PianoRollPanel } from "./PianoRollPanel";
 export type { PianoRollPanelProps } from "./PianoRollPanel";
 export { Toolbar } from "./Toolbar";
 export type { ToolbarProps } from "./Toolbar";
+export { MixerPanel } from "./MixerPanel";
+export type { MixerPanelProps } from "./MixerPanel";
+export { DeviceChainPanel, carryValuesForSwap } from "./DeviceChainPanel";
+export type { DeviceChainPanelProps } from "./DeviceChainPanel";

@@ -32,7 +32,7 @@ import type {
 } from "../types";
 import { createProjectEngine, type AppProjectEngine } from "./engine";
 import { createUndoRedoHandler } from "./keyboard";
-import { ArrangementPanel, PianoRollPanel, Toolbar } from "./panels";
+import { ArrangementPanel, DeviceChainPanel, MixerPanel, PianoRollPanel, Toolbar } from "./panels";
 import { bootstrapProject, type BootstrapResult } from "./persistence";
 
 export interface AppProps {
@@ -72,6 +72,9 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   // --- which clip the piano roll shows ---
   const [openClipId, setOpenClipId] = useState<ClipId | null>(null);
   const [tool, setTool] = useState<ToolMode>("select");
+  // SS18-M2: the bottom pane tabs between the piano roll and the mixer.
+  const [bottomTab, setBottomTab] = useState<"pianoroll" | "mixer">("pianoroll");
+  const [selectedChannelId, setSelectedChannelId] = useState<ChannelId | null>(null);
   // SS10 "Snapping": the fixed-grid override + triplet toggle. Ephemeral UI
   // state (SS13) owned here and pushed into BOTH editors, so the arrangement
   // and the piano roll always snap the same way.
@@ -369,17 +372,81 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
             viewRef={arrangementViewRef}
           />
         </div>
-        <div style={{ flex: 1, minHeight: 0, borderTop: "1px solid #333" }}>
-          <PianoRollPanel
-            store={store}
-            commands={projectCommands}
-            clipId={openClipId}
-            tool={tool}
-            grid={gridSettings}
-            onSeek={handleSeek}
-            audition={auditionProxyRef.current}
-            viewRef={pianoRollViewRef}
-          />
+        <div style={{ flex: 1, minHeight: 0, borderTop: "1px solid #333", display: "flex", flexDirection: "column" }}>
+          <div role="tablist" style={{ display: "flex", gap: 2, padding: "2px 8px", borderBottom: "1px solid #292929" }}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={bottomTab === "pianoroll"}
+              data-testid="tab-pianoroll"
+              onClick={() => setBottomTab("pianoroll")}
+              style={{
+                fontSize: 11,
+                padding: "2px 10px",
+                background: bottomTab === "pianoroll" ? "#2a2f3a" : "transparent",
+                color: "#ccc",
+                border: "1px solid #333",
+                borderRadius: "4px 4px 0 0",
+                cursor: "pointer",
+              }}
+            >
+              Piano Roll
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={bottomTab === "mixer"}
+              data-testid="tab-mixer"
+              onClick={() => setBottomTab("mixer")}
+              style={{
+                fontSize: 11,
+                padding: "2px 10px",
+                background: bottomTab === "mixer" ? "#2a2f3a" : "transparent",
+                color: "#ccc",
+                border: "1px solid #333",
+                borderRadius: "4px 4px 0 0",
+                cursor: "pointer",
+              }}
+            >
+              Mixer
+            </button>
+          </div>
+          {/* The piano roll view is a canvas component built imperatively per
+              (store, commands) — hiding it with CSS instead of unmounting
+              keeps its viewport/selection alive across tab flips. */}
+          <div style={{ flex: 1, minHeight: 0, display: bottomTab === "pianoroll" ? "block" : "none" }}>
+            <PianoRollPanel
+              store={store}
+              commands={projectCommands}
+              clipId={openClipId}
+              tool={tool}
+              grid={gridSettings}
+              onSeek={handleSeek}
+              audition={auditionProxyRef.current}
+              viewRef={pianoRollViewRef}
+            />
+          </div>
+          {bottomTab === "mixer" && (
+            <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+              <div style={{ flex: 1, minWidth: 0, borderRight: "1px solid #292929" }}>
+                <MixerPanel
+                  store={store}
+                  commands={projectCommands}
+                  engine={engine}
+                  selectedChannelId={selectedChannelId}
+                  onSelectChannel={setSelectedChannelId}
+                />
+              </div>
+              <div style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
+                <DeviceChainPanel
+                  store={store}
+                  commands={projectCommands}
+                  engine={engine}
+                  channelId={selectedChannelId}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
       {/* Referenced so `historyTick` is a real dependency of this render and
