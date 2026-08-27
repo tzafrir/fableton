@@ -111,3 +111,30 @@ test("loop toggle flips the transport's loop and undoes", async ({ page }) => {
   await page.getByTestId("undo-button").click();
   await expect(loop).toHaveAttribute("aria-pressed", "false");
 });
+
+test("tracks rename from the mixer too, not only from the arrangement", async ({ page }) => {
+  await freshProject(page);
+  await page.getByTestId("tab-mixer").click();
+  const trackId = (
+    (await page.locator('[data-testid^="strip-"][data-role="track"]').first().getAttribute("data-testid")) ?? ""
+  ).replace("strip-", "");
+
+  const name = page.getByTestId(`strip-name-${trackId}`);
+  await expect(name).toHaveText("Track 1");
+  await name.dblclick();
+  const field = page.getByTestId(`strip-rename-${trackId}`);
+  await field.fill("Drums");
+  await field.press("Enter");
+  await expect(page.getByTestId(`strip-name-${trackId}`)).toHaveText("Drums");
+
+  // The arrangement header is the same channel, so it follows.
+  await page.getByTestId("tab-pianoroll").click();
+  await expect(page.locator(".fbl-arr-header-name").first()).toHaveText("Drums");
+
+  // Escape abandons rather than committing what was typed.
+  await page.getByTestId("tab-mixer").click();
+  await page.getByTestId(`strip-name-${trackId}`).dblclick();
+  await page.getByTestId(`strip-rename-${trackId}`).fill("Discarded");
+  await page.getByTestId(`strip-rename-${trackId}`).press("Escape");
+  await expect(page.getByTestId(`strip-name-${trackId}`)).toHaveText("Drums");
+});

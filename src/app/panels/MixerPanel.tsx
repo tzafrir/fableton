@@ -149,6 +149,24 @@ function Strip({
   const sendTargets = returns.filter((ret) => ret.id !== channel.id);
   const targets = outputTargets(doc, channel);
 
+  const [renaming, setRenaming] = useState(false);
+  // Unmounting the input fires `blur`, so Escape would otherwise commit the
+  // very text it just discarded. A REF, not the state: the blur handler still
+  // closes over the render in which `renaming` was true. (Same latch the
+  // arrangement header's rename needed, for the same reason.)
+  const abandoned = useRef(false);
+  const commitRename = (raw: string): void => {
+    if (abandoned.current) {
+      abandoned.current = false;
+      return;
+    }
+    setRenaming(false);
+    const next = raw.trim();
+    if (next.length > 0 && next !== channel.name) {
+      dispatch(commands.renameChannel(channel.id, next));
+    }
+  };
+
   const roleColor =
     channel.role === "master" ? "#7a5" : channel.role === "group" ? "#a97" : channel.role === "return" ? "#79a" : "#888";
 
@@ -169,21 +187,54 @@ function Strip({
         background: selected ? "#20242c" : "transparent",
       }}
     >
-      <span
-        data-testid={`strip-name-${channel.id}`}
-        style={{
-          fontSize: 11,
-          color: channel.color ?? "#ddd",
-          borderBottom: `2px solid ${roleColor}`,
-          maxWidth: 80,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-        title={`${channel.name} (${channel.role})`}
-      >
-        {channel.name}
-      </span>
+      {/* Double-click to rename, the same gesture the arrangement header
+          uses. Renaming existed only there, which is the wrong half of the
+          app to look in when you are mixing. */}
+      {renaming ? (
+        <input
+          data-testid={`strip-rename-${channel.id}`}
+          aria-label={`Rename ${channel.name}`}
+          defaultValue={channel.name}
+          autoFocus
+          onBlur={(e) => commitRename(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            // Escape must ABANDON: clearing the flag first means the blur
+            // that `remove` triggers cannot commit the discarded text.
+            if (e.key === "Escape") {
+              abandoned.current = true;
+              setRenaming(false);
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          style={{
+            fontSize: 11,
+            width: 78,
+            background: "#181818",
+            color: "#ddd",
+            border: "1px solid #555",
+            borderRadius: 2,
+          }}
+        />
+      ) : (
+        <span
+          data-testid={`strip-name-${channel.id}`}
+          onDoubleClick={() => setRenaming(true)}
+          style={{
+            fontSize: 11,
+            color: channel.color ?? "#ddd",
+            borderBottom: `2px solid ${roleColor}`,
+            maxWidth: 80,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            cursor: "text",
+          }}
+          title={`${channel.name} (${channel.role}) — double-click to rename`}
+        >
+          {channel.name}
+        </span>
+      )}
 
       {/* sends — one slim knob per return (SS6) */}
       {channel.role !== "master" && sendTargets.length > 0 && (
