@@ -21,7 +21,7 @@ import type {
   RackChainId,
   RackId,
 } from "../../types";
-import { isDeviceParamId, rackChainParamId } from "../../params";
+import { deviceParamId, isDeviceParamId, rackChainParamId } from "../../params";
 import { clampInt, detachFromChains, makeCommand, type DraftProject } from "./util";
 
 export type RackCommands = Pick<
@@ -31,6 +31,7 @@ export type RackCommands = Pick<
   | "ungroupRack"
   | "addRackChain"
   | "addEffectToChain"
+  | "addRackPreset"
   | "removeRackChain"
   | "moveDeviceToChain"
   | "setChainMuted"
@@ -164,6 +165,63 @@ export function createRackCommands(ids: IdFactory): RackCommands {
         );
         rack.chains.push(chain);
         seedChainParams(doc, chain);
+      });
+    },
+
+    addRackPreset(channelId, spec, index): Command {
+      // Every id is minted HERE, before `run` — redo replays patches, so an
+      // id generated inside `run` would differ between the first dispatch and
+      // any later replay.
+      const rackId = ids.rack();
+      const chains = spec.chains.map((chain) => ({
+        id: ids.chain(),
+        name: chain.name,
+        devices: chain.devices.map((device) => ({ id: ids.device(), spec: device })),
+      }));
+      return makeCommand(`Add ${spec.name}`, (doc) => {
+        const channel = doc.channels[channelId];
+        if (channel === undefined) return;
+        const rackChains: RackChain[] = [];
+        for (const [i, chain] of chains.entries()) {
+          const built = makeChain(
+            channelId,
+            rackId,
+            chain.id,
+            chain.name ?? `Chain ${String(i + 1)}`,
+            chain.devices.map((d) => d.id),
+          );
+          rackChains.push(built);
+          seedChainParams(doc, built);
+          for (const device of chain.devices) {
+            doc.devices[device.id] = {
+              id: device.id,
+              definitionId: device.spec.definitionId,
+              version: device.spec.version ?? 1,
+              channelId,
+              enabled: true,
+            };
+            for (const [localId, value] of Object.entries(device.spec.params ?? {})) {
+              doc.paramValues[deviceParamId(channelId, device.id, localId)] = value;
+            }
+            const tap = device.spec.sidechainFromHost;
+            if (tap !== undefined) {
+              doc.sidechains.push({
+                from: { channel: channelId, tap },
+                to: { device: device.id, port: "sc" },
+              });
+            }
+          }
+        }
+        doc.racks[rackId] = {
+          id: rackId,
+          channelId,
+          name: spec.name,
+          enabled: true,
+          chains: rackChains,
+          macros: [],
+        };
+        const at = index === undefined ? channel.chain.length : clampInt(index, 0, channel.chain.length);
+        channel.chain.splice(at, 0, rackId);
       });
     },
 

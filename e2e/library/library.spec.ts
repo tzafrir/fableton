@@ -34,6 +34,7 @@ test("the whole device library is reachable from the menus", async ({ page }) =>
     "Saturator",
     "Overdrive",
     "Distortion",
+    "Gate",
   ]);
 
   const instrumentOptions = page.getByTestId("instrument-select").locator("option:not([disabled])");

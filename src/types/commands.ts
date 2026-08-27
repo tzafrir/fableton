@@ -291,6 +291,29 @@ export interface GroupInit {
   color?: string | null | undefined;
 }
 
+/** One device inside a rack preset's chain. */
+export interface RackPresetDevice {
+  definitionId: DeviceDefinitionId;
+  version?: number | undefined;
+  /** DEVICE-LOCAL param id -> value, applied as the instance is created. */
+  params?: Readonly<Record<string, number>> | undefined;
+  /** Adds an SS6 sidechain edge feeding this device's `sc` port from the
+   *  HOSTING channel at the given tap. `preFx` is the only same-channel tap
+   *  the routing rules allow, and the one gated reverb keys from. */
+  sidechainFromHost?: "preFx" | "postFx" | "postFader" | undefined;
+}
+
+export interface RackPresetChain {
+  name?: string | undefined;
+  devices: readonly RackPresetDevice[];
+}
+
+/** A named parallel-chain patch (see `ProjectCommands.addRackPreset`). */
+export interface RackPresetSpec {
+  name: string;
+  chains: readonly RackPresetChain[];
+}
+
 /** Init for a new device instance (`addEffect`, `setInstrument`). */
 export interface DeviceInit {
   definitionId: DeviceDefinitionId;
@@ -463,6 +486,16 @@ export interface ProjectCommands {
     chainId: RackChainId,
     index?: number | undefined,
   ): Command;
+  /**
+   * Builds a whole rack — chains, devices, param values and sidechain edges —
+   * in ONE command, so a factory patch is one undo entry and its ids are
+   * minted eagerly like every other command's (never inside `run`).
+   *
+   * This is what a "rack preset" is: a device preset is a bag of values for
+   * an instance that already exists (SS4), but a rack preset has to CREATE
+   * the instances, which only a command can do.
+   */
+  addRackPreset(channelId: ChannelId, spec: RackPresetSpec, index?: number | undefined): Command;
   setChainMuted(rackId: RackId, chainId: RackChainId, muted: boolean): Command;
   setChainSolo(rackId: RackId, chainId: RackChainId, solo: boolean): Command;
   setRackEnabled(rackId: RackId, enabled: boolean): Command;

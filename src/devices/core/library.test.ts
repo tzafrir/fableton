@@ -29,7 +29,7 @@ import { midiToHz, pluckShapeFromIndex } from "./pluck";
 import { StereoDelay } from "./stereoDelay";
 
 describe("the SS18-M4 library", () => {
-  it("ships a valid library: 5 instruments + 8 effects", () => {
+  it("ships a valid library: 5 instruments + 9 effects", () => {
     for (const def of CORE_DEVICES) expect(() => validateDefinition(def)).not.toThrow();
     const instruments = CORE_DEVICES.filter((d) => d.kind === "instrument");
     const effects = CORE_DEVICES.filter((d) => d.kind === "audioEffect");
@@ -45,6 +45,7 @@ describe("the SS18-M4 library", () => {
       "core.distortion",
       "core.eq3",
       "core.filter",
+      "core.gate",
       "core.overdrive",
       "core.reverb",
       "core.saturator",
@@ -57,11 +58,14 @@ describe("the SS18-M4 library", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("exactly the compressor declares the SS6 sidechain port", () => {
+  it("the keyed devices — and only those — declare the SS6 sidechain port", () => {
     const withSc = CORE_DEVICES.filter((d) => d.audioIn.some((port) => port.id === "sc"));
-    expect(withSc.map((d) => d.id)).toEqual(["core.compressor"]);
-    const sc = withSc[0]?.audioIn.find((port) => port.id === "sc");
-    expect(sc?.optional).toBe(true);
+    expect(withSc.map((d) => d.id).sort()).toEqual(["core.compressor", "core.gate"]);
+    for (const def of withSc) {
+      // Optional: an unrouted key must leave the device working (a compressor
+      // self-keys, a gate keys off its own input), not silent.
+      expect(def.audioIn.find((port) => port.id === "sc")?.optional).toBe(true);
+    }
   });
 
   it("every param id is unique within its definition (SS7 public API)", () => {

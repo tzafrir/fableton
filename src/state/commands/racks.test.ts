@@ -6,6 +6,7 @@ import { makeFixture, type Fixture } from "../testing/fixture";
 import { expectLegalProject } from "../testing/invariants";
 import { deviceParamId, rackChainParamId } from "../../params";
 import { DEFAULT_CHAIN_GAIN_DB } from "./racks";
+import { GATED_REVERB } from "../../presets/factoryRacks";
 
 let f: Fixture;
 beforeEach(() => {
@@ -217,5 +218,42 @@ describe("removal", () => {
     expect(f.store.getState().racks[rackId]).toEqual(before);
     expect(f.store.getState().devices[a]).toBeDefined();
     expectLegalProject(f.store.getState());
+  });
+});
+
+describe("addRackPreset (factory racks)", () => {
+  it("builds the Gated Reverb patch in ONE command", () => {
+    f.store.dispatch(f.commands.addRackPreset(f.trackId, GATED_REVERB));
+    const doc = f.store.getState();
+    const rackId = rackIds()[0] as string;
+    const rack = doc.racks[rackId];
+
+    expect(rack?.name).toBe("Gated Reverb");
+    // A dry chain beside the wet one: the gate cuts the TAIL, and the dry hit
+    // has to survive it.
+    expect(rack?.chains.map((c) => c.name)).toEqual(["Dry", "Gated Verb"]);
+    expect(rack?.chains[0]?.devices).toEqual([]);
+
+    const wet = rack?.chains[1]?.devices ?? [];
+    expect(wet).toHaveLength(2);
+    expect(wet.map((id) => doc.devices[id]?.definitionId)).toEqual(["core.reverb", "core.gate"]);
+    // Seeded values, not descriptor defaults.
+    expect(doc.paramValues[deviceParamId(f.trackId, wet[0] as string, "mix")]).toBe(100);
+
+    // The key: the gate opens from the channel's PRE-FX tap — the dry hit —
+    // which is the same-channel edge Phase 0 made legal.
+    const edge = doc.sidechains.find((e) => e.to.device === wet[1]);
+    expect(edge?.from).toEqual({ channel: f.trackId, tap: "preFx" });
+    expectLegalProject(doc);
+  });
+
+  it("is one undo entry, devices and edge included", () => {
+    f.store.dispatch(f.commands.addRackPreset(f.trackId, GATED_REVERB));
+    f.store.undo();
+    const doc = f.store.getState();
+    expect(doc.racks).toEqual({});
+    expect(doc.sidechains).toEqual([]);
+    expect(Object.values(doc.devices).some((d) => d.definitionId === "core.gate")).toBe(false);
+    expectLegalProject(doc);
   });
 });

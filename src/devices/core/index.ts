@@ -15,6 +15,7 @@
 export { Distortion, Overdrive } from "./overdrive";
 export { DrumMachine, PADS } from "./drumMachine";
 export { Filter } from "./filter";
+export { Gate } from "./gate";
 export { FmSynth } from "./fmSynth";
 export { Kick } from "./kick";
 export { PolySynth } from "./polySynth";
@@ -32,6 +33,7 @@ import { Kick } from "./kick";
 import { Distortion, Overdrive } from "./overdrive";
 import { Eq3 } from "./eq3";
 import { Filter } from "./filter";
+import { Gate } from "./gate";
 import { Pluck } from "./pluck";
 import { PolySynth } from "./polySynth";
 import { Reverb } from "./reverb";
@@ -56,4 +58,5 @@ export const CORE_DEVICES = [
   Saturator,
   Overdrive,
   Distortion,
+  Gate,
 ] as const;

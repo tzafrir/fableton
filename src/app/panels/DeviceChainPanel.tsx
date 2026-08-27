@@ -13,6 +13,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CORE_DEVICES } from "../../devices/core";
+import { FACTORY_RACKS } from "../../presets/factoryRacks";
 import { presetStore } from "../../presets/store";
 import { deviceParamId } from "../../params";
 import type { AppProjectEngine } from "../engine";
@@ -829,6 +830,28 @@ export function DeviceChainPanel({
         {effectDefs.map((d) => (
           <option key={d.id} value={d.id}>
             {d.label}
+          </option>
+        ))}
+      </select>
+
+      {/* Factory racks: a whole patch (chains, devices, routing) as one
+          undoable command. `Gated Reverb` is the one the racks plan aimed at. */}
+      <select
+        data-testid="add-factory-rack"
+        aria-label="Add a factory rack"
+        value=""
+        onChange={(e) => {
+          const preset = FACTORY_RACKS.find((rack) => rack.name === e.target.value);
+          if (preset !== undefined) dispatch(commands.addRackPreset(channel.id, preset));
+        }}
+        style={{ fontSize: 11, background: "#181818", color: "#bbb", alignSelf: "center" }}
+      >
+        <option value="" disabled>
+          + Rack preset…
+        </option>
+        {FACTORY_RACKS.map((rack) => (
+          <option key={rack.name} value={rack.name}>
+            {rack.name}
           </option>
         ))}
       </select>
