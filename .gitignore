@@ -10,6 +10,11 @@ playwright-report/
 blob-report/
 playwright/.cache/
 
+# Agent scratch: review/verification probes write throwaway specs and their
+# own vitest config here. Never part of a milestone checkpoint.
+.probe/
+**/__probe__/
+
 # Editors / OS
 .DS_Store
 *.suo
