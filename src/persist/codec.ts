@@ -12,7 +12,7 @@
 // `{ ok: true, warnings: [...] }` with the offending bits clamped, defaulted
 // or dropped by `validate` (document.ts invariants 1-8).
 
-import { findRoutingCycle } from "../engine/graph/validate";
+import { findRoutingCycle, sidechainIsFeedForward } from "../engine/graph/validate";
 import type {
   AutomationLane,
   AutoPoint,
@@ -773,15 +773,20 @@ function validateProject(project: Project): LoadWarning[] {
   // one-node cycle, and this is its targeted repair.
   const validEdges = project.sidechains.filter((edge) => {
     const device = project.devices[edge.to.device];
-    return (
-      device !== undefined &&
-      edge.from.channel in project.channels &&
-      device.channelId !== edge.from.channel
-    );
+    if (device === undefined) return false;
+    if (!(edge.from.channel in project.channels)) return false;
+    // A same-channel edge is legal from the `preFx` tap only: that tap is the
+    // channel input, upstream of every device in the chain, so it is
+    // feed-forward rather than a loop (gated reverb keys a gate exactly this
+    // way). The other two taps sit downstream and really would cycle.
+    if (device.channelId === edge.from.channel) {
+      return sidechainIsFeedForward(edge.from.channel, device.channelId, edge.from.tap);
+    }
+    return true;
   });
   if (validEdges.length !== project.sidechains.length) {
     project.sidechains = validEdges;
-    pushWarning(warnings, "sidechains", "Sidechain edges with missing/self endpoints dropped.");
+    pushWarning(warnings, "sidechains", "Sidechain edges with missing endpoints, or self-keyed from a downstream tap, dropped.");
   }
 
   // Routing cycles (SS6): broken by clearing the cycle's first channel's

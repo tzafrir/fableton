@@ -12,7 +12,10 @@
 // the check runs against the WOULD-BE document, so a rejected edit never
 // reaches the store at all.
 
-import type { ChannelId, ProjectSnapshot } from "../../types";
+import type { ChannelId, ProjectSnapshot, SidechainEdge } from "../../types";
+
+/** The three SS6 tap points. */
+export type SidechainTap = SidechainEdge["from"]["tap"];
 
 export interface RoutingEdgeShape {
   readonly channels: Readonly<
@@ -27,9 +30,29 @@ export interface RoutingEdgeShape {
   >;
   readonly devices: ProjectSnapshot["devices"];
   readonly sidechains: readonly {
-    readonly from: { readonly channel: ChannelId };
+    readonly from: { readonly channel: ChannelId; readonly tap?: SidechainTap | undefined };
     readonly to: { readonly device: string };
   }[];
+}
+
+/**
+ * A same-channel sidechain is a cycle ONLY from a tap downstream of the
+ * device. The channel spine is
+ *
+ *   input -> [chain devices] -> postfx -> mute -> vol -> pan -> post
+ *
+ * so `preFx` (which resolves to `input`) sits UPSTREAM of every device in
+ * that channel's chain: keying a device from it runs parallel to the main
+ * path and is ordinary feed-forward — that is exactly how a gated reverb
+ * keys its gate off the dry hit. `postFx` and `postFader` sit downstream of
+ * the device, so keying from those really does close a loop.
+ */
+export function sidechainIsFeedForward(
+  sourceChannel: ChannelId,
+  deviceChannel: ChannelId,
+  tap: SidechainTap | undefined,
+): boolean {
+  return sourceChannel === deviceChannel && tap === "preFx";
 }
 
 /** channel -> set of channels it feeds (output + sends + sidechains). */
@@ -49,7 +72,12 @@ export function routingAdjacency(doc: RoutingEdgeShape): Map<ChannelId, Set<Chan
   }
   for (const edge of doc.sidechains) {
     const device = doc.devices[edge.to.device];
-    if (device !== undefined) out(edge.from.channel).add(device.channelId);
+    if (device === undefined) continue;
+    // A same-channel preFx key adds no edge BETWEEN channels — it is an
+    // intra-channel feed-forward split, so recording it as `c -> c` would
+    // report a self-loop that does not exist in the audio graph.
+    if (sidechainIsFeedForward(edge.from.channel, device.channelId, edge.from.tap)) continue;
+    out(edge.from.channel).add(device.channelId);
   }
   return adj;
 }

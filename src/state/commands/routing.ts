@@ -19,7 +19,7 @@ import type {
   ProjectCommands,
   SidechainEdge,
 } from "../../types";
-import { routingCycleError } from "../../engine/graph/validate";
+import { routingCycleError, sidechainIsFeedForward } from "../../engine/graph/validate";
 import { deviceParamId, isChannelParamId, isDeviceParamId, sendParamId } from "../../params";
 import {
   defaultMixerParamValues,
@@ -54,7 +54,7 @@ function wouldLoop(
   mutate: (draft: {
     channels: Record<ChannelId, { id: ChannelId; output: ChannelId | null; sends: { to: ChannelId }[] }>;
     devices: Record<string, { channelId: ChannelId }>;
-    sidechains: { from: { channel: ChannelId }; to: { device: string } }[];
+    sidechains: { from: { channel: ChannelId; tap?: SidechainEdge["from"]["tap"] }; to: { device: string } }[];
   }) => void,
 ): string | null {
   // A shallow-ish copy is enough: only channels/sends/sidechains are read by
@@ -70,7 +70,7 @@ function wouldLoop(
       Object.values(doc.devices).map((d) => [d.id, { channelId: d.channelId }]),
     ),
     sidechains: doc.sidechains.map((e) => ({
-      from: { channel: e.from.channel },
+      from: { channel: e.from.channel, tap: e.from.tap },
       to: { device: e.to.device },
     })),
   };
@@ -322,12 +322,23 @@ export function createRoutingCommands(ids: IdFactory): RoutingCommands {
             if (doc.channels[copy.from.channel] === undefined) return "unknown source channel";
             const device = doc.devices[copy.to.device];
             if (device === undefined) return "unknown device";
-            if (device.channelId === copy.from.channel) {
-              return "a device cannot sidechain its own channel";
+            // Same-channel keying is a cycle only from a tap DOWNSTREAM of
+            // the device; `preFx` resolves to the channel input, upstream of
+            // every device in its chain, so keying from it is feed-forward.
+            // That is precisely how a gate keys off its own channel's dry
+            // signal (gated reverb). See `sidechainIsFeedForward`.
+            if (
+              device.channelId === copy.from.channel &&
+              !sidechainIsFeedForward(copy.from.channel, device.channelId, copy.from.tap)
+            ) {
+              return `a device cannot sidechain its own channel from the ${copy.from.tap} tap (it would loop); use preFx`;
             }
             return wouldLoop(doc, (draft) => {
               draft.sidechains = draft.sidechains.filter((e) => e.to.device !== copy.to.device);
-              draft.sidechains.push({ from: { channel: copy.from.channel }, to: { device: copy.to.device } });
+              draft.sidechains.push({
+                from: { channel: copy.from.channel, tap: copy.from.tap },
+                to: { device: copy.to.device },
+              });
             });
           },
         },

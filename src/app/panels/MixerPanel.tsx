@@ -143,6 +143,10 @@ function Strip({
   const volume = engine?.params.get(channel.volume);
   const pan = engine?.params.get(channel.pan);
   const returns = returnsOf(doc);
+  // A return may feed another return, but never itself — `setSend`'s canRun
+  // rejects a self-send, so rendering the control made a button that did
+  // nothing when clicked.
+  const sendTargets = returns.filter((ret) => ret.id !== channel.id);
   const targets = outputTargets(doc, channel);
 
   const roleColor =
@@ -182,21 +186,49 @@ function Strip({
       </span>
 
       {/* sends — one slim knob per return (SS6) */}
-      {channel.role !== "master" && returns.length > 0 && (
+      {channel.role !== "master" && sendTargets.length > 0 && (
         <div style={{ display: "flex", gap: 2 }} data-testid={`sends-${channel.id}`}>
-          {returns.map((ret) => {
+          {sendTargets.map((ret) => {
             const send = channel.sends.find((s) => s.to === ret.id);
             const handle = send !== undefined ? engine?.params.get(send.amount) : undefined;
             if (send !== undefined && handle !== undefined) {
               return (
-                <Knob
-                  key={ret.id}
-                  handle={handle}
-                  size={26}
-                  label={ret.name.replace("Return ", "")}
-                  testId={`send-${channel.id}-${ret.id}`}
-                  onShowAutomation={showAutomation(send.amount)}
-                />
+                <span key={ret.id} style={{ display: "inline-flex", flexDirection: "column", alignItems: "center" }}>
+                  <Knob
+                    handle={handle}
+                    size={26}
+                    label={ret.name.replace("Return ", "")}
+                    testId={`send-${channel.id}-${ret.id}`}
+                    onShowAutomation={showAutomation(send.amount)}
+                  />
+                  {/* SS6: "send taps at pre-fader (post-chain) or post-fader".
+                      The tap has been in the document and honoured by the
+                      graph since M2 — this is the control that reaches it. */}
+                  <button
+                    type="button"
+                    data-testid={`send-tap-${channel.id}-${ret.id}`}
+                    aria-label={`Send to ${ret.name}: ${send.tap === "pre" ? "pre" : "post"}-fader`}
+                    title={
+                      send.tap === "pre"
+                        ? "Pre-fader: the send ignores this channel's fader (still muted by M)"
+                        : "Post-fader: the send follows this channel's fader"
+                    }
+                    onClick={() => dispatch(commands.setSend(channel.id, ret.id, send.tap === "pre" ? "post" : "pre"))}
+                    style={{
+                      marginTop: 1,
+                      fontSize: 8,
+                      lineHeight: 1.4,
+                      padding: "0 4px",
+                      background: send.tap === "pre" ? "#3a5a7a" : "#222",
+                      color: send.tap === "pre" ? "#cfe6ff" : "#888",
+                      border: "1px solid #444",
+                      borderRadius: 2,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {send.tap === "pre" ? "PRE" : "POST"}
+                  </button>
+                </span>
               );
             }
             if (send !== undefined) {

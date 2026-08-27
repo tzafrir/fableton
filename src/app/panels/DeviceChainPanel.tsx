@@ -267,25 +267,32 @@ function DevicePanel({
             value={scEdge?.from.channel ?? ""}
             onChange={(e) => {
               const from = e.target.value;
-              if (from === "") dispatch(commands.removeSidechain(deviceId, "sc"));
-              else {
-                const edge: SidechainEdge = {
-                  from: { channel: from, tap: scEdge?.from.tap ?? "postFader" },
-                  to: { device: deviceId, port: "sc" },
-                };
-                dispatch(commands.setSidechain(edge));
+              if (from === "") {
+                dispatch(commands.removeSidechain(deviceId, "sc"));
+                return;
               }
+              // Keying this device's OWN channel is legal only from `preFx`
+              // (the channel input, upstream of the whole chain) — so that is
+              // what a same-channel pick lands on, rather than offering a tap
+              // the routing rules will reject. This is the gated-reverb path.
+              const sameChannel = from === channelId;
+              const keptTap = scEdge?.from.tap ?? "postFader";
+              const edge: SidechainEdge = {
+                from: { channel: from, tap: sameChannel ? "preFx" : keptTap },
+                to: { device: deviceId, port: "sc" },
+              };
+              dispatch(commands.setSidechain(edge));
             }}
             style={{ fontSize: 10, background: "#181818", color: "#bbb" }}
           >
             <option value="">None</option>
-            {doc.channelOrder
-              .filter((id) => id !== channelId)
-              .map((id) => (
-                <option key={id} value={id}>
-                  {doc.channels[id]?.name ?? id}
-                </option>
-              ))}
+            {doc.channelOrder.map((id) => (
+              <option key={id} value={id}>
+                {id === channelId
+                  ? `${doc.channels[id]?.name ?? id} (this channel)`
+                  : (doc.channels[id]?.name ?? id)}
+              </option>
+            ))}
           </select>
           {scEdge !== undefined && (
             <select
@@ -302,8 +309,12 @@ function DevicePanel({
               style={{ fontSize: 10, background: "#181818", color: "#bbb" }}
             >
               <option value="preFx">Pre FX</option>
-              <option value="postFx">Post FX</option>
-              <option value="postFader">Post Fader</option>
+              <option value="postFx" disabled={scEdge.from.channel === channelId}>
+                Post FX
+              </option>
+              <option value="postFader" disabled={scEdge.from.channel === channelId}>
+                Post Fader
+              </option>
             </select>
           )}
         </div>

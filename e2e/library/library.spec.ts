@@ -82,20 +82,30 @@ test("SS6 Audio From: the compressor's sidechain picker writes a real edge", asy
   // only valid sources for a fresh project's track are siblings.
   await page.getByTestId("add-track-button").click();
   await expect(page.locator('[data-testid^="strip-"][data-role="track"]')).toHaveCount(2);
+  const kickId = (
+    (await page
+      .locator('[data-testid^="strip-"][data-role="track"]')
+      .last()
+      .getAttribute("data-testid")) ?? ""
+  ).replace("strip-", "");
+  expect(kickId).not.toBe(trackId);
 
   await page.getByTestId(`strip-${trackId}`).click();
   await page.getByTestId("add-effect-select").selectOption({ label: "Compressor" });
 
   const scSource = page.locator('[data-testid^="sc-source-"]');
   await expect(scSource).toBeVisible();
-  // Options: every OTHER channel (the device's own channel is excluded).
+  // Options: "None" plus every channel — including the device's OWN, which
+  // Phase 0 made a legal source from the preFx tap (gated reverb keys that
+  // way). So a CROSS-channel probe has to name the sibling explicitly rather
+  // than taking whatever sorts first.
   const optionCount = await scSource.locator("option").count();
-  expect(optionCount).toBeGreaterThan(1); // "None" + at least the master
+  expect(optionCount).toBeGreaterThan(2); // None + own + at least one other
 
-  const firstOther = await scSource.locator("option:not([value=''])").first().getAttribute("value");
-  await scSource.selectOption(firstOther ?? "");
+  await scSource.selectOption(kickId);
   const tapSelect = page.locator('[data-testid^="sc-tap-"]');
   await expect(tapSelect).toBeVisible();
+  // A cross-channel key defaults to post-fader and may move anywhere.
   await expect(tapSelect).toHaveValue("postFader");
   await tapSelect.selectOption("preFx");
   await expect(tapSelect).toHaveValue("preFx");
