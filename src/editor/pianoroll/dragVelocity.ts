@@ -18,8 +18,11 @@ import type { DragHandler, DragUpdate, GestureStart } from "../../types/gesture"
 import type { NoteId } from "../../types/ids";
 import type { ContextRef, PianoRollContext } from "./context";
 import type { PianoRollHit, PianoRollNoteHit } from "./hits";
-import { stalkX, velocityAtY } from "./layout";
+import { stalkX, velocityAtY, type RONote } from "./layout";
 import { HANDLER_IDS, type VelocityPreview } from "./preview";
+
+/** Reused across frames — `update` runs on every pointermove. */
+const CANDIDATES: RONote[] = [];
 
 function sweepEdits(
   ctx: PianoRollContext,
@@ -29,12 +32,20 @@ function sweepEdits(
   alwaysInclude: NoteId | null,
 ): NoteVelocityEdit[] {
   const out: NoteVelocityEdit[] = [];
-  for (const note of ctx.notes()) {
+  // The sweep is an x-range, so it is a tick range: SS9's binary search keeps
+  // this O(swept) per pointermove instead of O(notes in the clip).
+  CANDIDATES.length = 0;
+  const from = ctx.viewport.tAt(fromPx);
+  const to = ctx.viewport.tAt(toPx) + 1;
+  let sawAlways = false;
+  for (const note of ctx.notesInRange(from, to, CANDIDATES)) {
     const x = stalkX(ctx.viewport, note);
-    if ((x >= fromPx && x <= toPx) || note.id === alwaysInclude) {
+    if (x >= fromPx && x <= toPx) {
       out.push({ id: note.id, vel });
+      if (note.id === alwaysInclude) sawAlways = true;
     }
   }
+  if (alwaysInclude !== null && !sawAlways) out.push({ id: alwaysInclude, vel });
   return out;
 }
 

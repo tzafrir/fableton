@@ -190,7 +190,14 @@ test.describe("piano roll note editing (SS9/SS10)", () => {
     await dragTo(page, marqueeTo);
     await dragEnd(page);
 
-    const selected = await scanColorRects(page, "piano-roll-panel", "overlay", NOTE_SELECTED_FILL);
+    // The velocity lane is excluded for the same reason `scanNotes` excludes
+    // it: a SELECTED note's stalk is drawn in `velocityStalkSelected`, which
+    // is the same `#f2c14e` as `noteSelectedFill`, so an unbounded scan counts
+    // every selected note twice (body + stalk). Probe artifact, not an app
+    // defect — see `scanColorRects`'s `excludeBottomCssPx` doc.
+    const selected = await scanColorRects(page, "piano-roll-panel", "overlay", NOTE_SELECTED_FILL, {
+      excludeBottomCssPx: VELOCITY_LANE_HEIGHT_PX,
+    });
     expect(selected.length, "exactly A and B should be selected, not C").toBe(2);
     const coversA = selected.some((r) => Math.abs(r.x - a.x) < 3 && Math.abs(r.y - a.y) < 3);
     const coversB = selected.some((r) => Math.abs(r.x - b.x) < 3 && Math.abs(r.y - b.y) < 3);

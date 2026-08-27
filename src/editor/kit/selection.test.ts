@@ -88,12 +88,30 @@ describe("applySelectionClick (SS10)", () => {
     expect(s.ids()).toEqual(["a", "b"]);
   });
 
-  it("a plain click on an already-selected item KEEPS the group", () => {
-    // This is what lets a drag that starts on one member of a multi-selection
-    // move all of them (SS10 DragMove over n notes).
+  // SS10's `Pending` row gives a plain click one meaning — "select" — so on
+  // the RELEASE path it reduces a multi-selection to the item clicked; the
+  // keyboard verbs that follow then act on that item, not on the old group.
+  it("a plain click on an already-selected item selects just that item", () => {
     const s = createSelectionModel();
     s.set(["a", "b", "c"]);
     applySelectionClick(s, "b", modifiers());
+    expect(s.ids()).toEqual(["b"]);
+  });
+
+  // ...and the DRAG path opts out, which is what lets a drag that starts on
+  // one member of a multi-selection move all of them (SS10 DragMove over n
+  // notes).
+  it("a plain press KEEPS the group with `keepGroup` (the drag path)", () => {
+    const s = createSelectionModel();
+    s.set(["a", "b", "c"]);
+    applySelectionClick(s, "b", modifiers(), { keepGroup: true });
     expect(s.ids()).toEqual(["a", "b", "c"]);
+  });
+
+  it("`keepGroup` still replaces the selection on an UNselected item", () => {
+    const s = createSelectionModel();
+    s.set(["a", "b"]);
+    applySelectionClick(s, "z", modifiers(), { keepGroup: true });
+    expect(s.ids()).toEqual(["z"]);
   });
 });

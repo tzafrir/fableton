@@ -128,6 +128,50 @@ describe("the mounted arrangement", () => {
     expect(view.scene.clip(CLIP_1)?.start).toBe(BAR);
   });
 
+  // The selection outline is drawn in the OVERLAY from the clip's live
+  // geometry, so a clip that moves without a pointer gesture (arrow key,
+  // undo/redo, a toolbar verb) has to dirty the overlay too — otherwise the
+  // highlight stays painted around the clip's OLD rectangle.
+  it("repaints the overlay too when a SELECTED clip moves without a gesture", () => {
+    const { view, store, commands, canvases } = mount();
+    view.selection.set([CLIP_1]);
+    view.host.renderer.flush();
+    const overlay = canvasOf(canvases, "overlay");
+    const before = overlay.calls.length;
+    store.dispatch(commands.moveClips([CLIP_1], { ticks: 240, tracks: 0 }));
+    view.host.renderer.flush();
+    expect(overlay.calls.length).toBeGreaterThan(before);
+
+    const afterMove = overlay.calls.length;
+    store.undo();
+    view.host.renderer.flush();
+    expect(overlay.calls.length).toBeGreaterThan(afterMove);
+  });
+
+  // SS15's imperative bridge: the toolbar's grid override has to reach the
+  // live view, and `setGrid` is the only route (the piano roll's twin is
+  // covered in pianoRoll.test.ts).
+  it("pushes a grid override into the live view (SS10's override menu)", () => {
+    const { view } = mount();
+    const before = view.host.grid.gridTicks();
+    view.setGrid({ mode: "fixed", denominator: 4 });
+    const quarter = view.host.grid.gridTicks();
+    expect(quarter).toBe(BAR / 4);
+    expect(quarter).not.toBe(before);
+    // The triplet toggle is the other half of SS10's override menu.
+    view.setGrid({ triplet: true });
+    expect(view.host.grid.gridTicks()).toBe((BAR / 4 / 3) * 2);
+  });
+
+  it("solos a channel from the lane header", () => {
+    const { view, store } = mount();
+    const header = view.element.querySelector<HTMLElement>(".fbl-arr-header");
+    const buttons = [...(header?.querySelectorAll("button") ?? [])];
+    const solo = buttons.find((b) => (b.textContent ?? "").toUpperCase().includes("S"));
+    solo?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(store.getState().channels[TRACK_A]?.solo).toBe(true);
+  });
+
   it("rebuilds the lane headers when the lane set changes", () => {
     const { view, store, commands } = mount();
     store.dispatch(commands.addTrack({ id: "chan-c", name: "Track C", index: 1 }));
@@ -156,6 +200,32 @@ describe("the mounted arrangement", () => {
     expect(created?.trackId).toBe(TRACK_A);
     expect(view.selection.ids()).toEqual([created?.id]);
     expect(store.undoLabel()).toBe("Create Clip");
+  });
+
+  // SS9: "every drag ... commits exactly one command on release" and SS13:
+  // "one user gesture = one command = one undo entry". An undo that lands
+  // MID-drag (the toolbar button, or the shell's global Cmd+Z) changes the
+  // document the live preview was derived from, so the gesture is aborted
+  // instead of committing a delta against geometry that no longer exists.
+  it("aborts a live drag when the document changes underneath it", () => {
+    const { view, store, commands } = mount();
+    store.dispatch(commands.moveClips([CLIP_2], { ticks: BAR, tracks: 0 }));
+    const gestures = view.host.gestures;
+    const y = view.host.viewport.pxPerRow / 2;
+    gestures.pointerDown({ pointerId: 1, point: point(view, 100, y), button: 0, buttons: 1, modifiers: NO_MODS });
+    gestures.pointerMove({ pointerId: 1, point: point(view, 300, y), button: 0, buttons: 1, modifiers: NO_MODS });
+    expect(gestures.phase).toBe("dragging");
+
+    store.undo();
+    expect(gestures.phase).toBe("idle");
+
+    // The release commits nothing: the gesture is already over.
+    gestures.pointerUp({ pointerId: 1, point: point(view, 300, y), button: 0, buttons: 0, modifiers: NO_MODS });
+    expect(store.getState().clips[CLIP_1]?.start).toBe(0);
+    expect(store.getState().clips[CLIP_2]?.start).toBe(BAR * 2);
+    // ...so the redo the undo created is still reachable.
+    expect(store.canRedo()).toBe(true);
+    expect(store.redoLabel()).toBe("Move Clips");
   });
 
   it("opens the piano roll on a double-clicked clip", () => {

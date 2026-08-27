@@ -13,6 +13,7 @@ import {
   importProjectFile,
   projectCodec,
 } from "../persist";
+import { DEFAULT_GRID_SETTINGS } from "../editor/kit";
 import { connectParamRegistry, createEmptyProject, projectCommands } from "../state";
 import type {
   AuditionSink,
@@ -20,6 +21,7 @@ import type {
   ChannelId,
   ClipId,
   DocumentStore,
+  GridSettings,
   PianoRollView,
   Project,
   ProjectStorage,
@@ -70,6 +72,14 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   // --- which clip the piano roll shows ---
   const [openClipId, setOpenClipId] = useState<ClipId | null>(null);
   const [tool, setTool] = useState<ToolMode>("select");
+  // SS10 "Snapping": the fixed-grid override + triplet toggle. Ephemeral UI
+  // state (SS13) owned here and pushed into BOTH editors, so the arrangement
+  // and the piano roll always snap the same way.
+  const [gridSettings, setGridSettings] = useState<GridSettings>(DEFAULT_GRID_SETTINGS);
+
+  const handleGridChange = useCallback((next: Partial<GridSettings>) => {
+    setGridSettings((current) => ({ ...current, ...next }));
+  }, []);
 
   const arrangementViewRef = useRef<ArrangementView | null>(null);
   const pianoRollViewRef = useRef<PianoRollView | null>(null);
@@ -261,6 +271,16 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
 
   const handleNewProject = useCallback(() => {
     if (docState === null) return;
+    // SS13: FLUSH FIRST. The pending ~2 s debounce still holds the edits of
+    // the project that is open, and `replaceDocument` clears the store's dirty
+    // flag — so a replacement that skips this drops every edit made inside the
+    // window, and on a first run (nothing autosaved yet) the whole project,
+    // because the timer would then fire against the NEW document and write it
+    // under the NEW id. `flush()` encodes the outgoing bytes SYNCHRONOUSLY
+    // (see `createAutosave`), so the swap below stays immediate: no window in
+    // which the user's next click lands on a document that is about to be
+    // replaced.
+    void docState.autosave.flush();
     setOpenClipId(null);
     docState.store.replaceDocument(createEmptyProject());
     setStatusMessage(null);
@@ -282,6 +302,9 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
           setStatusMessage(result.error);
           return;
         }
+        // Same rule as New above: the outgoing project's pending autosave is
+        // captured before its document is replaced (SS13).
+        void docState.autosave.flush();
         setOpenClipId(null);
         docState.store.replaceDocument(result.project);
         setStatusMessage(
@@ -324,8 +347,11 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
         onRedo={handleRedo}
         tool={tool}
         onToolChange={setTool}
+        gridSettings={gridSettings}
+        onGridChange={handleGridChange}
         autosaveState={autosaveState}
         autosaveError={autosaveError}
+        autosaveAvailable={docState.storage.available}
         onSaveNow={handleSaveNow}
         onNewProject={handleNewProject}
         onExport={handleExport}
@@ -337,6 +363,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
           <ArrangementPanel
             store={store}
             commands={projectCommands}
+            grid={gridSettings}
             onSeek={handleSeek}
             onOpenClip={setOpenClipId}
             viewRef={arrangementViewRef}
@@ -348,6 +375,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
             commands={projectCommands}
             clipId={openClipId}
             tool={tool}
+            grid={gridSettings}
             onSeek={handleSeek}
             audition={auditionProxyRef.current}
             viewRef={pianoRollViewRef}

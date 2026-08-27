@@ -118,6 +118,18 @@ describe("document subscription", () => {
     view.dispose();
   });
 
+  // The regression the id-diff exists for: a note created BEFORE existing
+  // content does not sort last, so the patch stream's single `add` names an
+  // untouched note. Selecting that one would point SS10's selection-centric
+  // keyboard map at content the user never touched.
+  it("selects a created note that sorts before the existing ones", () => {
+    const { view, store, commands, clipId } = mount();
+    store.dispatch(commands.addNotes(clipId, [{ id: "later", start: 1920, dur: 240, pitch: 64, vel: 90 }]));
+    store.dispatch(commands.addNotes(clipId, [{ id: "first", start: 0, dur: 240, pitch: 55, vel: 90 }]));
+    expect(view.selection.ids()).toEqual(["first"]);
+    view.dispose();
+  });
+
   it("drops deleted notes from the selection", () => {
     const { view, store, commands, clipId } = mount();
     view.selection.set(["n1"]);
@@ -171,6 +183,37 @@ describe("real DOM events reach the FSM", () => {
     view.dispose();
   });
 
+  // SS10 "Snapping": "a fixed-grid override menu and a triplet toggle". The
+  // menu is toolbar chrome, so it has to reach an ALREADY-MOUNTED editor.
+  it("setGrid re-points snapping and note creation (SS10's override menu)", () => {
+    const { view, store } = mount();
+    const clipId = Object.keys(store.getState().clips)[0] ?? "";
+    const element = view.element;
+    const notesOf = () => store.getState().clips[clipId]?.notes ?? [];
+    const dblclick = (x: number, y: number): void => {
+      for (const detail of [1, 2]) {
+        element.dispatchEvent(pointerEvent("pointerdown", x, y, detail));
+        element.dispatchEvent(pointerEvent("pointerup", x, y, detail));
+      }
+    };
+
+    // Default (adaptive at the default zoom) = a 1/16 note.
+    dblclick(300, 182);
+    expect(notesOf().some((note) => note.dur === 240)).toBe(true);
+
+    view.setGrid({ mode: "fixed", denominator: 4 });
+    dblclick(500, 214);
+    const quarter = notesOf().find((note) => note.dur === 960);
+    expect(quarter).toBeDefined();
+    expect(quarter!.start % 960).toBe(0);
+
+    // ...and the triplet toggle: a 1/4 triplet is 640 ticks.
+    view.setGrid({ triplet: true });
+    dblclick(700, 230);
+    expect(notesOf().some((note) => note.dur === 640)).toBe(true);
+    view.dispose();
+  });
+
   it("the cursor follows the hovered zone", () => {
     const { view } = mount();
     view.element.dispatchEvent(pointerEvent("pointermove", 8, 182));
@@ -185,6 +228,80 @@ describe("real DOM events reach the FSM", () => {
     view.element.dispatchEvent(pointerEvent("pointerdown", 48, 5));
     view.element.dispatchEvent(pointerEvent("pointerup", 48, 5));
     expect(seeks).toEqual([960]);
+    view.dispose();
+  });
+
+  // The roll's viewport is CLIP-RELATIVE (SS10: `Note.start` is clip-relative,
+  // and the grid dims past `clipLength`), while the transport and the
+  // arrangement speak SONG ticks. The two crossings — the playhead in, the
+  // ruler scrub out — are the only places the clip's start may appear.
+  describe("the clip-relative time axis (SS9 coordinate discipline)", () => {
+    const moveClipTo = (m: ReturnType<typeof mount>, tick: number) => {
+      m.store.dispatch(m.commands.moveClips([m.clipId], { ticks: tick, tracks: 0 }));
+    };
+    const playheadX = (m: ReturnType<typeof mount>) =>
+      m.view.element.querySelector<HTMLElement>(".fbl-playhead")?.style.transform;
+
+    it("puts the playhead at the clip's origin when the transport is there", () => {
+      const m = mount();
+      moveClipTo(m, 7680);
+      m.view.setPlayheadTicks(7680);
+      expect(playheadX(m)).toBe("translateX(0px)");
+      // ...and one quarter note into the clip, one quarter note in.
+      m.view.setPlayheadTicks(7680 + 960);
+      expect(playheadX(m)).toBe("translateX(48px)");
+      m.view.dispose();
+    });
+
+    it("re-projects the playhead when a different clip is opened", () => {
+      const m = mount();
+      moveClipTo(m, 7680);
+      m.view.setPlayheadTicks(7680);
+      expect(playheadX(m)).toBe("translateX(0px)");
+      // Back to a clip at song tick 0: the same transport position is now
+      // 7680 ticks INTO the roll.
+      moveClipTo(m, -7680);
+      m.view.setClip(null);
+      m.view.setClip(m.clipId);
+      expect(playheadX(m)).toBe(`translateX(${String(Math.round(7680 * 0.05))}px)`);
+      m.view.dispose();
+    });
+
+    it("reports a ruler scrub in SONG ticks", () => {
+      const m = mount();
+      moveClipTo(m, 7680);
+      m.view.element.dispatchEvent(pointerEvent("pointerdown", 0, 5));
+      m.view.element.dispatchEvent(pointerEvent("pointerup", 0, 5));
+      // x = 0 is the clip's own start, which is song tick 7680 — not 0.
+      expect(m.seeks).toEqual([7680]);
+      m.view.dispose();
+    });
+  });
+
+  // SS9's `ViewportLimits`: "maxTick/maxRow follow the content". Without this
+  // the roll kept the kit's 1024-bar placeholder, so a one-bar clip could be
+  // scrolled a thousand empty bars past its own end. The playhead's transform
+  // is `(tick - scrollTicks) * pxPerTick`, so it reads the scroll back out.
+  it("limits horizontal scrolling to the clip's own extent", () => {
+    const { view, store, commands, clipId } = mount();
+    const BAR = 3840;
+    store.dispatch(commands.trimClips([{ id: clipId, start: 0, length: BAR }]));
+    view.setPlayheadTicks(0);
+
+    const scrollToTheEnd = (): void => {
+      view.element.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: 1e7, shiftKey: true, bubbles: true, cancelable: true }),
+      );
+    };
+    scrollToTheEnd();
+    const playhead = view.element.querySelector<HTMLElement>(".fbl-playhead");
+    // One bar of clip plus the two-bar tail — not the kit's 1024-bar default.
+    expect(playhead?.style.transform).toBe(`translateX(${String(-Math.round(BAR * 3 * 0.05))}px)`);
+
+    // ...and the extent follows a lengthened clip.
+    store.dispatch(commands.trimClips([{ id: clipId, start: 0, length: BAR * 4 }]));
+    scrollToTheEnd();
+    expect(playhead?.style.transform).toBe(`translateX(${String(-Math.round(BAR * 6 * 0.05))}px)`);
     view.dispose();
   });
 });
@@ -204,16 +321,18 @@ describe("redrawScopeOf (SS13 targeted updates)", () => {
 });
 
 describe("createdNoteIds", () => {
-  it("reads ids out of the patch stream (SS13)", () => {
-    expect(
-      createdNoteIds(
-        [
-          { op: "add", path: ["clips", "c1", "notes", 0], value: { id: "a" } },
-          { op: "add", path: ["clips", "other", "notes", 0], value: { id: "b" } },
-          { op: "replace", path: ["clips", "c1", "notes", 0, "pitch"], value: 61 },
-        ],
-        "c1",
-      ),
-    ).toEqual(["a"]);
+  it("reports the ids that were not there before", () => {
+    const previous = new Set(["a", "b"]);
+    expect(createdNoteIds(previous, [{ id: "new" }, { id: "a" }, { id: "b" }])).toEqual(["new"]);
+    expect(createdNoteIds(previous, [{ id: "a" }, { id: "b" }])).toEqual([]);
+  });
+
+  // The reason this is an id diff and not a patch read: `clip.notes` is a
+  // SORTED array, so immer reports a note inserted at the front as `replace`
+  // on every shifted index plus one `add` carrying the note that ended up at
+  // the tail — a pre-existing note.
+  it("names the created note even when it does not sort last", () => {
+    const previous = new Set(["a", "b"]);
+    expect(createdNoteIds(previous, [{ id: "front" }, { id: "a" }, { id: "b" }])).toEqual(["front"]);
   });
 });

@@ -27,6 +27,15 @@ const RULER_HEIGHT_PX = 26; // ditto
 const LANE_HEIGHT_PX = 56; // ditto, DEFAULT_LANE_HEIGHT_PX
 const CLIP_FILL = { r: 79, g: 123, b: 214 }; // DEFAULT_THEME.clipFill #4f7bd6
 const ROW_WHITE = { r: 30, g: 33, b: 40 }; // DEFAULT_PIANO_ROLL_THEME.rowWhite #1e2128
+// src/editor/pianoroll/layout.ts — the roll's ruler and velocity lane share
+// the note rows' canvas stack, and both are uniform blocks taller than a row
+// band, so a row-band measurement has to exclude them.
+const PR_RULER_HEIGHT_PX = 26;
+const PR_VELOCITY_LANE_HEIGHT_PX = 72;
+const ROW_BAND_BOUNDS = {
+  excludeTopCssPx: PR_RULER_HEIGHT_PX,
+  excludeBottomCssPx: PR_VELOCITY_LANE_HEIGHT_PX,
+};
 
 test.describe("arrangement view", () => {
   test("renders the starter clip with real content, at two zoom levels", async ({ page }) => {
@@ -101,7 +110,7 @@ test.describe("piano roll", () => {
     // must actually be painted, not just an empty background rect.
     const rowPixelsBefore = await countMatchingPixels(page, "piano-roll-panel", "fbl-layer-grid", ROW_WHITE, 10, 4);
     expect(rowPixelsBefore, "row-band pixels drawn before zoom").toBeGreaterThan(50);
-    const runBefore = await longestVerticalRun(page, "piano-roll-panel", "fbl-layer-grid", 20);
+    const runBefore = await longestVerticalRun(page, "piano-roll-panel", "fbl-layer-grid", 20, ROW_BAND_BOUNDS);
 
     await page.screenshot({
       path: ".playwright/screenshots/M1/render/piano-roll-zoom-1-default.png",
@@ -133,7 +142,7 @@ test.describe("piano roll", () => {
 
     // The row band height must have grown with the vertical zoom — proof the
     // second screenshot is a genuinely different zoom level, structurally.
-    const runAfter = await longestVerticalRun(page, "piano-roll-panel", "fbl-layer-grid", 20);
+    const runAfter = await longestVerticalRun(page, "piano-roll-panel", "fbl-layer-grid", 20, ROW_BAND_BOUNDS);
     expect(runAfter, "row band run length after vertical zoom-in").toBeGreaterThan(runBefore * 1.3);
 
     expect(errors.consoleErrors, "console errors").toEqual([]);

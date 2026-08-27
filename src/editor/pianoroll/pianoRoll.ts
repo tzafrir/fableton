@@ -10,7 +10,7 @@
 // whether a change touched THIS clip, so an edit somewhere else in the project
 // costs one array comparison, not a re-index.
 
-import type { Patch, ProjectSnapshot } from "../../types/commands";
+import type { Patch } from "../../types/commands";
 import type { ClipId, NoteId } from "../../types/ids";
 import type {
   CreatePianoRoll,
@@ -19,6 +19,8 @@ import type {
   ToolMode,
 } from "../../types/editor";
 import type { Ticks } from "../../types/time";
+import { ticksPerBar } from "../../time";
+import type { GridSettings } from "../../types/viewport";
 import { createEditorHost, type KitEditorHost } from "../kit/host";
 import { createSelectionModel } from "../kit/selection";
 import { DEFAULT_PX_PER_ROW } from "../kit/viewport";
@@ -43,6 +45,11 @@ export const DEFAULT_ROW_HEIGHT_PX = DEFAULT_PX_PER_ROW;
 /** Pitches shown when the clip is empty (a comfortable two octaves at C4). */
 const DEFAULT_LOW_PITCH = 55;
 const DEFAULT_HIGH_PITCH = 79;
+
+/** Empty bars kept scrollable past the end of the clip, so the last note is
+ *  never glued to the right edge. SS9: "`maxTick`/`maxRow` follow the
+ *  content" — the arrangement's `CONTENT_TAIL_BARS`, roll flavour. */
+const CONTENT_TAIL_BARS = 2;
 
 export interface PianoRollViewOptions extends PianoRollOptions {
   theme?: PianoRollTheme | undefined;
@@ -72,17 +79,25 @@ export function redrawScopeOf(
   return scope;
 }
 
-/** Note ids an "add" patch created inside `clipId` (SS13's patch stream). */
-export function createdNoteIds(patches: readonly Patch[], clipId: ClipId): NoteId[] {
+/**
+ * Note ids that appeared in the clip since the last change.
+ *
+ * NOT read off the patch ops: `clip.notes` is a SORTED ARRAY, and immer diffs
+ * a grown array as `replace` on every shifted index plus ONE `add` carrying
+ * whatever ended up at the new tail. Reading the `add`'s value therefore
+ * names a pre-existing note whenever the created note does not sort last —
+ * so a note created left of / below existing content would hand the keyboard
+ * map (which is selection-centric, SS10) a note the user never touched.
+ * Comparing id sets is exact for every creation verb: dbl-click, paint,
+ * `DragDup` and `Cmd/Ctrl+D` alike.
+ */
+export function createdNoteIds(
+  previousIds: ReadonlySet<NoteId>,
+  notes: readonly { readonly id: NoteId }[],
+): NoteId[] {
   const out: NoteId[] = [];
-  for (const patch of patches) {
-    if (patch.op !== "add") continue;
-    const [clips, id, notes] = patch.path;
-    if (clips !== "clips" || id !== clipId || notes !== "notes") continue;
-    const value = patch.value as { id?: unknown } | null;
-    if (value !== null && typeof value === "object" && typeof value.id === "string") {
-      out.push(value.id);
-    }
+  for (const note of notes) {
+    if (!previousIds.has(note.id)) out.push(note.id);
   }
   return out;
 }
@@ -113,6 +128,10 @@ export const createPianoRoll: CreatePianoRoll = (
       theme,
     }),
     viewport: { pxPerRow: DEFAULT_ROW_HEIGHT_PX, limits: { minRow: 0, maxRow: MAX_PITCH + 1 } },
+    // The ruler is drawn INSIDE this canvas stack, so row 0 starts below it:
+    // without this the row zoom would anchor 20 px (1.25 rows) off the pitch
+    // under the cursor (SS9 "keeps time under cursor fixed", row axis).
+    rowOriginPx: () => layout.noteTopPx,
     grid: options.grid,
     hitTesters: [createPianoRollHitTester(ref)],
     dragHandlers: createPianoRollDragHandlers(ref),
@@ -121,6 +140,9 @@ export const createPianoRoll: CreatePianoRoll = (
   });
 
   const layout: PianoRollLayout = createPianoRollLayout(host.viewport);
+
+  /** The transport position, as last pushed by the shell — in SONG ticks. */
+  let playheadSongTicks: Ticks = 0;
 
   context = createPianoRollContext({
     store: options.store,
@@ -141,6 +163,23 @@ export const createPianoRoll: CreatePianoRoll = (
     },
   });
   const ctx = context;
+
+  // --- scroll extents -------------------------------------------------------
+
+  /** SS9's `ViewportLimits` contract: "maxTick/maxRow follow the content".
+   *  The roll's content is the clip: its length, or the end of its longest
+   *  note when a note sticks out past it, plus a two-bar tail. */
+  const updateLimits = (): void => {
+    const doc = options.store.getState();
+    const bar = ticksPerBar(doc.timeSignature);
+    let end = ctx.clipLength();
+    for (const note of ctx.notes()) {
+      const noteEnd = note.start + note.dur;
+      if (noteEnd > end) end = noteEnd;
+    }
+    host.viewport.setLimits({ maxTick: Math.max(bar, end + bar * CONTENT_TAIL_BARS) });
+  };
+  updateLimits();
 
   // --- vertical framing -----------------------------------------------------
 
@@ -172,15 +211,18 @@ export const createPianoRoll: CreatePianoRoll = (
 
   // --- document + selection subscriptions -----------------------------------
 
-  const pruneSelection = (doc: ProjectSnapshot): void => {
+  /** The clip's note ids as of the last change this view saw. */
+  const noteIdsOf = (notes: readonly { readonly id: NoteId }[]): Set<NoteId> =>
+    new Set(notes.map((note) => note.id));
+
+  let knownNoteIds: Set<NoteId> = noteIdsOf(ctx.notes());
+
+  const pruneSelection = (live: ReadonlySet<NoteId> | null): void => {
     if (selection.size === 0) return;
-    const clipId = ctx.clipId;
-    const notes = clipId === null ? undefined : doc.clips[clipId]?.notes;
-    if (notes === undefined) {
+    if (live === null) {
       selection.clear();
       return;
     }
-    const live = new Set(notes.map((note) => note.id));
     const gone = selection.ids().filter((id) => !live.has(id));
     if (gone.length > 0) selection.remove(gone);
   };
@@ -188,13 +230,16 @@ export const createPianoRoll: CreatePianoRoll = (
   const unsubscribeStore = options.store.onChange((change) => {
     const clipId = ctx.clipId;
     if (clipId === null) return;
-    // A note created by click/paint/duplicate becomes the selection, so the
-    // keyboard map can act on it straight away.
     const scope = redrawScopeOf(change.patches, clipId);
     if (scope === "none") return;
-    const created = createdNoteIds(change.patches, clipId);
+    const notes: readonly { readonly id: NoteId }[] | undefined = change.doc.clips[clipId]?.notes;
+    // A note created by click/paint/duplicate becomes the selection, so the
+    // keyboard map can act on it straight away.
+    const created = notes === undefined ? [] : createdNoteIds(knownNoteIds, notes);
+    knownNoteIds = notes === undefined ? new Set() : noteIdsOf(notes);
     if (created.length > 0 && change.source === "command") selection.set(created);
-    pruneSelection(change.doc);
+    pruneSelection(notes === undefined ? null : knownNoteIds);
+    updateLimits();
     if (scope === "all") host.renderer.invalidateAll();
     else ctx.invalidateContent();
   });
@@ -218,10 +263,22 @@ export const createPianoRoll: CreatePianoRoll = (
     setClip(clipId: ClipId | null): void {
       if (ctx.clipId === clipId) return;
       ctx.clipId = clipId;
+      knownNoteIds = noteIdsOf(ctx.notes());
       selection.clear();
       audition.stopAll();
       revealPitches();
+      updateLimits();
+      // The clip moved under the playhead's song tick: re-project it onto the
+      // new clip's axis (see `setPlayheadTicks`).
+      host.playhead.setTicks(playheadSongTicks - ctx.clipStart());
       host.renderer.invalidateAll();
+    },
+
+    setGrid(settings: Partial<GridSettings>): void {
+      // SS10's grid override menu. The host's `Grid` already re-notifies (and
+      // the host already invalidates grid + content) when the division
+      // actually changes, so this is a pass-through.
+      host.grid.setSettings(settings);
     },
 
     setTool(tool: ToolMode): void {
@@ -231,8 +288,13 @@ export const createPianoRoll: CreatePianoRoll = (
     },
 
     setPlayheadTicks(tick: Ticks): void {
-      // SS9: a DOM transform, never a canvas invalidation.
-      host.playhead.setTicks(tick);
+      // The shell speaks SONG ticks; this viewport is CLIP-RELATIVE (SS10:
+      // `Note.start` is clip-relative, and the grid shades past
+      // `xOf(clipLength())`), so the offset is applied here — the one place
+      // the two axes meet on the way in. SS9: a DOM transform, never a canvas
+      // invalidation.
+      playheadSongTicks = tick;
+      host.playhead.setTicks(tick - ctx.clipStart());
     },
 
     focus(): void {

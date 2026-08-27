@@ -9,6 +9,7 @@
 // duplicate is on `primary` and not on `Alt` in this editor.
 
 import type { Command } from "../../types/commands";
+import type { ClipId } from "../../types/ids";
 import type { ClickInfo, DragHandler, DragUpdate, GestureStart } from "../../types/gesture";
 import type { LayerFrame } from "../../types/render";
 import type { Ticks } from "../../types/time";
@@ -54,6 +55,10 @@ export function createMoveDragHandler(
     };
   };
 
+  /** SS10's `Esc` column is "revert": `begin` replaces the selection, so the
+   *  abort restores it (the marquee row already does). */
+  let baseSelection: readonly ClipId[] = [];
+
   return {
     id: MOVE_HANDLER_ID,
     priority: 10,
@@ -64,6 +69,7 @@ export function createMoveDragHandler(
     },
 
     begin(start: GestureStart<ArrangementHit>): MovePreview {
+      baseSelection = context.selection.ids();
       if (start.hit.kind === "clip" && !context.selection.has(start.hit.clipId)) {
         // Dragging an unselected clip selects it first, so the ghosts and the
         // command agree with what the user sees highlighted.
@@ -80,19 +86,25 @@ export function createMoveDragHandler(
     commit(update: DragUpdate<ArrangementHit, MovePreview>): Command | null {
       const { ghosts, deltaTicks, deltaRows, duplicate } = update.preview;
       if (ghosts.length === 0) return null;
+      // A drag that ends where it started is not an edit: no command, no undo
+      // entry (SS13 — one gesture, at most one entry). This holds for the
+      // duplicate flavour too: a copy stacked exactly on its original is
+      // invisible, permanently shadows the original in hit-testing (later
+      // clips win) and silently doubles that bar at playback. The piano
+      // roll's `DragDup` guards the same case.
+      if (deltaTicks === 0 && deltaRows === 0) return null;
       const ids = ghosts.map((ghost) => ghost.clipId);
       if (duplicate) {
         context.selectCreatedClips();
         return context.commands.duplicateClips(ids, { ticks: deltaTicks, tracks: deltaRows });
       }
-      // A drag that ends where it started is not an edit: no command, no undo
-      // entry (SS13 — one gesture, at most one entry).
-      if (deltaTicks === 0 && deltaRows === 0) return null;
       return context.commands.moveClips(ids, { ticks: deltaTicks, tracks: deltaRows });
     },
 
     cancel(): void {
-      // Zero document traffic (SS9): the ghosts simply disappear.
+      // Zero document traffic (SS9): the ghosts simply disappear, and the
+      // selection goes back to what it was before `begin` touched it.
+      context.selection.set(baseSelection);
     },
 
     click(start: GestureStart<ArrangementHit>, info: ClickInfo): Command | null {

@@ -66,10 +66,14 @@ export type UndoRedoOutcome = "undo" | "redo" | "ignored";
  * `preventDefault()` is called only when the key was actually consumed, so a
  * plain `Ctrl+Z` typed into a text field still reaches the field (browsers
  * also run their native undo there, which is the field's job, not ours).
+ *
+ * Auto-repeat is HONOURED (`event.repeat` is not a reason to bail): holding
+ * `Cmd/Ctrl+Z` walks back through the history one entry per repeat, which is
+ * how a user actually unwinds a long edit chain. Each dispatch is an
+ * independent `store.undo()`, so repeats need no special handling.
  */
 export function createUndoRedoHandler(store: DocumentStore): (event: KeyLike) => UndoRedoOutcome {
   return (event: KeyLike): UndoRedoOutcome => {
-    if (event.repeat === true) return "ignored";
     if (!primaryHeld(event)) return "ignored";
     if (isEditableTarget(event.target)) return "ignored";
 

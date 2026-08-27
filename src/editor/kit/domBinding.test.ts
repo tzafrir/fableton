@@ -45,6 +45,8 @@ function setup() {
   const dispatched: Command[] = [];
   const command: Command = { label: "Move", run: () => undefined };
   const seen: { xPx: number; tick: number }[] = [];
+  /** `ClickInfo.clickCount` as the handler received it, per release. */
+  const clicks: number[] = [];
 
   const handler: DragHandler<Hit, number> = {
     id: "d",
@@ -56,6 +58,10 @@ function setup() {
     },
     commit: () => command,
     cancel: () => undefined,
+    click: (_start, info) => {
+      clicks.push(info.clickCount);
+      return null;
+    },
   };
   const tester: HitTester<Hit> = { id: "all", hitTest: () => ({ kind: "any", cursor: "grab" }) };
 
@@ -75,7 +81,7 @@ function setup() {
     ],
   });
 
-  return { element, viewport, engine, dispatched, seen };
+  return { element, viewport, engine, dispatched, seen, clicks };
 }
 
 let ctx: ReturnType<typeof setup>;
@@ -161,6 +167,61 @@ describe("gesture engine — DOM binding", () => {
     const event = new KeyboardEvent("keydown", { key: "F5", bubbles: true, cancelable: true });
     ctx.element.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(false);
+  });
+
+  // SS10's `Pending` row gives a single click exactly one meaning. A drag that
+  // ends near where it started is still a DRAG, so the click that follows it
+  // must count as the first of a new streak — otherwise the double-click verb
+  // ("dbl-click empty: create ...") fires on a plain click and writes an
+  // undoable edit the user never asked for.
+  it("a completed drag ends the multi-click streak", () => {
+    ctx.element.dispatchEvent(pointerEvent("pointerdown", { clientX: 150, clientY: 60 }));
+    ctx.element.dispatchEvent(pointerEvent("pointermove", { clientX: 400, clientY: 60 }));
+    ctx.element.dispatchEvent(pointerEvent("pointerup", { clientX: 400, clientY: 60, buttons: 0 }));
+    expect(ctx.dispatched.map((c) => c.label)).toEqual(["Move"]);
+
+    ctx.element.dispatchEvent(pointerEvent("pointerdown", { clientX: 150, clientY: 60 }));
+    ctx.element.dispatchEvent(pointerEvent("pointerup", { clientX: 150, clientY: 60, buttons: 0 }));
+    expect(ctx.clicks).toEqual([1]);
+  });
+
+  it("still counts a real double click (the streak is only broken by a drag)", () => {
+    for (let i = 0; i < 2; i += 1) {
+      ctx.element.dispatchEvent(pointerEvent("pointerdown", { clientX: 150, clientY: 60 }));
+      ctx.element.dispatchEvent(pointerEvent("pointerup", { clientX: 150, clientY: 60, buttons: 0 }));
+    }
+    expect(ctx.clicks).toEqual([1, 2]);
+  });
+
+  // The engine swallows every key but `Esc` while a gesture is live; that is
+  // only true if the event also stops here. The app shell binds undo/redo on
+  // `window` (SS13), and a keydown that merely had `preventDefault()` called
+  // still bubbles there — undoing the document mid-drag.
+  it("does not let a consumed key escape to a window-level shortcut", () => {
+    const atWindow: string[] = [];
+    const spy = (e: Event) => atWindow.push((e as KeyboardEvent).key);
+    window.addEventListener("keydown", spy);
+    try {
+      ctx.element.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }));
+      expect(atWindow).toEqual([]);
+
+      // Mid-drag, EVERY key is consumed — including the shell's undo.
+      ctx.element.dispatchEvent(pointerEvent("pointerdown", { clientX: 150, clientY: 60 }));
+      ctx.element.dispatchEvent(pointerEvent("pointermove", { clientX: 400, clientY: 60 }));
+      expect(ctx.engine.phase).toBe("dragging");
+      ctx.element.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "z", metaKey: true, ctrlKey: true, bubbles: true, cancelable: true }),
+      );
+      expect(atWindow).toEqual([]);
+      expect(ctx.engine.phase).toBe("dragging");
+
+      // An UNhandled key still reaches the window (idle, no binding for it).
+      ctx.element.dispatchEvent(pointerEvent("pointerup", { clientX: 400, clientY: 60, buttons: 0 }));
+      ctx.element.dispatchEvent(new KeyboardEvent("keydown", { key: "F5", bubbles: true, cancelable: true }));
+      expect(atWindow).toEqual(["F5"]);
+    } finally {
+      window.removeEventListener("keydown", spy);
+    }
   });
 
   it("suppresses the context menu (right-click is an editor verb)", () => {

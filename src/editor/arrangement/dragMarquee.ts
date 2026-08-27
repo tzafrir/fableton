@@ -8,7 +8,7 @@
 
 import type { Command } from "../../types/commands";
 import type { ClipId } from "../../types/ids";
-import type { DragHandler, DragUpdate, GestureStart } from "../../types/gesture";
+import type { ClickInfo, DragHandler, DragUpdate, GestureStart } from "../../types/gesture";
 import type { LayerFrame } from "../../types/render";
 import type { Ticks } from "../../types/time";
 import type { ArrangementTheme } from "./constants";
@@ -98,8 +98,13 @@ export function createMarqueeDragHandler(
       context.selection.set(preview.base);
     },
 
-    click(): Command | null {
-      context.selection.clear();
+    click(_start: GestureStart<ArrangementHit>, info: ClickInfo): Command | null {
+      // SS10 `Pending`: "click: select (`Shift` adds, `Ctrl` toggles)". This
+      // handler claims Shift/Ctrl presses on a lane, so an ADDITIVE click that
+      // merely missed a clip must leave the selection alone — clearing it
+      // would throw away exactly what the user was adding to. Both siblings
+      // guard the same case (`dragCreate.click`, `pianoroll/dragMarquee`).
+      if (!info.modifiers.shift && !info.modifiers.primary) context.selection.clear();
       return null;
     },
 

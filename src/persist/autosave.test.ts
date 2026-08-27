@@ -79,7 +79,18 @@ class FakeStore implements DocumentStore {
   }
   replaceDocument(project: Project): void {
     this.project = project;
+    // The real store clears `dirty` here ("a freshly loaded document matches
+    // what is on disk") and emits a `load` change; autosave has to notice
+    // that the document under it was swapped.
     this.dirty = false;
+    const change: DocumentChange = {
+      source: "load",
+      label: "Load Project",
+      patches: [{ op: "replace", path: [], value: project }],
+      inverse: [],
+      doc: this.getState(),
+    };
+    for (const cb of this.listeners) cb(change);
   }
   isDirty(): boolean {
     return this.dirty;
@@ -272,6 +283,263 @@ describe("createAutosave", () => {
 
     expect(await storage.read("custom-key")).not.toBeNull();
     expect(await storage.read(store.getState().id)).toBeNull();
+
+    autosave.dispose();
+  });
+  // --- SS13: the document can be REPLACED under a live autosave -------------
+
+  it("writes a replaced document (New/Import) under ITS OWN key", async () => {
+    const projectA = makeFixtureProject();
+    const store = new FakeStore(projectA);
+    const storage = createMemoryProjectStorage();
+    const codec = createProjectCodec();
+    const autosave = createAutosave({ store, storage, codec });
+
+    const projectB = { ...makeFixtureProject(), id: "prj-imported", name: "Imported Song" };
+    store.replaceDocument(projectB);
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+
+    // The import landed in its own slot ("one slot per project id"), and the
+    // project that was open before it is untouched.
+    expect(await storage.list()).toEqual(["prj-imported"]);
+    const written = await storage.read("prj-imported");
+    expect(JSON.parse(written ?? "{}")).toMatchObject({ project: { name: "Imported Song" } });
+    expect(await storage.read(projectA.id)).toBeNull();
+
+    autosave.dispose();
+  });
+
+  it("keeps the previous project's slot intact when a new document replaces it", async () => {
+    const projectA = makeFixtureProject();
+    const store = new FakeStore(projectA);
+    const storage = createMemoryProjectStorage();
+    const codec = createProjectCodec();
+    const autosave = createAutosave({ store, storage, codec });
+
+    store.edit((p) => {
+      p.name = "A edited";
+    });
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+
+    store.replaceDocument({ ...makeFixtureProject(), id: "prj-b", name: "B" });
+    store.edit((p) => {
+      p.name = "B edited";
+    });
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+
+    expect(JSON.parse((await storage.read(projectA.id)) ?? "{}")).toMatchObject({
+      project: { name: "A edited" },
+    });
+    expect(JSON.parse((await storage.read("prj-b")) ?? "{}")).toMatchObject({
+      project: { name: "B edited" },
+    });
+    // Newest-first, so a reopen resumes B (SS13 "resume the last autosave").
+    expect((await storage.list())[0]).toBe("prj-b");
+
+    autosave.dispose();
+  });
+
+  it("flush() persists a replaced document even though the store is not dirty", async () => {
+    const store = new FakeStore(makeFixtureProject());
+    const storage = createMemoryProjectStorage();
+    const codec = createProjectCodec();
+    const autosave = createAutosave({ store, storage, codec });
+
+    store.replaceDocument({ ...makeFixtureProject(), id: "prj-imported", name: "Imported Song" });
+    expect(store.isDirty()).toBe(false);
+    await autosave.flush();
+
+    expect(await storage.read("prj-imported")).not.toBeNull();
+    expect(autosave.status.state).toBe("saved");
+
+    autosave.dispose();
+  });
+
+  // --- SS2 "byte-stable except for edits": nothing may be lost mid-write ----
+
+  it("does not lose an edit that lands while a write is in flight", async () => {
+    const store = new FakeStore(makeFixtureProject());
+    const storage = createMemoryProjectStorage();
+    const codec = createProjectCodec();
+    const realWrite = storage.write.bind(storage);
+    // A slow backend: the edit below lands while these bytes are in flight.
+    vi.spyOn(storage, "write").mockImplementation(async (key, text) => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await realWrite(key, text);
+    });
+    const autosave = createAutosave({ store, storage, codec });
+
+    store.edit((p) => {
+      p.name = "EDIT-A";
+    });
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS);
+    store.edit((p) => {
+      p.name = "EDIT-B";
+    });
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS + 200);
+
+    expect(JSON.parse((await storage.read(store.getState().id)) ?? "{}")).toMatchObject({
+      project: { name: "EDIT-B" },
+    });
+    expect(store.isDirty()).toBe(false);
+
+    autosave.dispose();
+  });
+
+  // Rule 5: `flush()` is what New/Import call in the statement BEFORE
+  // `replaceDocument`, so its payload has to be encoded synchronously — a
+  // capture deferred behind an await encodes the INCOMING document under the
+  // INCOMING id, and the outgoing project's slot is never written at all.
+  it("captures its bytes synchronously, so a replace right after flush() cannot steal them", async () => {
+    const store = new FakeStore(makeFixtureProject());
+    const storage = createMemoryProjectStorage();
+    const codec = createProjectCodec();
+    const autosave = createAutosave({ store, storage, codec });
+    const outgoingId = store.getState().id;
+
+    store.edit((p) => {
+      p.name = "OUTGOING EDIT";
+    });
+    // No debounce has fired: the edit lives only in the store.
+    expect(await storage.read(outgoingId)).toBeNull();
+
+    // Exactly what App.tsx's New/Import do — no await in between.
+    const flushed = autosave.flush();
+    store.replaceDocument({ ...makeFixtureProject(), id: "prj-incoming", name: "INCOMING" });
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_DEBOUNCE_MS * 3);
+    await flushed;
+
+    expect(JSON.parse((await storage.read(outgoingId)) ?? "{}")).toMatchObject({
+      project: { name: "OUTGOING EDIT" },
+    });
+    // ...and the incoming document lands in its OWN slot (rule 1).
+    expect(JSON.parse((await storage.read("prj-incoming")) ?? "{}")).toMatchObject({
+      project: { name: "INCOMING" },
+    });
+
+    autosave.dispose();
+  });
+
+  // Rule 4: two writes to the same slot must not overlap. With a backend whose
+  // latency depends on the payload, an unserialized autosave lets the SECOND
+  // write finish first (and call `markSaved`), after which the FIRST lands and
+  // overwrites the slot with the OLDER document — leaving stale bytes on disk
+  // that nothing will ever rewrite, because the store is no longer dirty.
+  it("never lets an older write land after a newer one", async () => {
+    const store = new FakeStore(makeFixtureProject());
+    const storage = createMemoryProjectStorage();
+    const codec = createProjectCodec();
+    const realWrite = storage.write.bind(storage);
+    vi.spyOn(storage, "write").mockImplementation(async (key, text) => {
+      // "A" is slow, "B" is fast: out-of-order completion, if allowed.
+      await new Promise((resolve) => setTimeout(resolve, text.includes('"A"') ? 500 : 10));
+      await realWrite(key, text);
+    });
+    const autosave = createAutosave({ store, storage, codec }, { debounceMs: 10 });
+
+    store.edit((p) => {
+      p.name = "A";
+    });
+    await vi.advanceTimersByTimeAsync(10); // write #1 ("A") starts, slowly
+    store.edit((p) => {
+      p.name = "B";
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    await autosave.flush();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(JSON.parse((await storage.read(store.getState().id)) ?? "{}")).toMatchObject({
+      project: { name: "B" },
+    });
+    expect(store.isDirty()).toBe(false);
+
+    autosave.dispose();
+  });
+
+  // A failed write must not park the document forever: the store stays dirty,
+  // so autosave retries on a backoff instead of waiting for the user to make
+  // another edit (SS13 — the app's only implicit save path).
+  it("retries a failed write on a backoff", async () => {
+    const store = new FakeStore(makeFixtureProject());
+    const storage = createMemoryProjectStorage();
+    const codec = createProjectCodec();
+    const realWrite = storage.write.bind(storage);
+    let failures = 0;
+    vi.spyOn(storage, "write").mockImplementation(async (key, text) => {
+      if (failures < 1) {
+        failures += 1;
+        throw new Error("QuotaExceeded");
+      }
+      await realWrite(key, text);
+    });
+    const autosave = createAutosave({ store, storage, codec }, { debounceMs: 10 });
+
+    store.edit((p) => {
+      p.name = "RETRIED";
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(autosave.status.state).toBe("error");
+    expect(await storage.read(store.getState().id)).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(autosave.status.state).toBe("saved");
+    expect(JSON.parse((await storage.read(store.getState().id)) ?? "{}")).toMatchObject({
+      project: { name: "RETRIED" },
+    });
+
+    autosave.dispose();
+  });
+
+  it("gives up after a bounded number of failed retries", async () => {
+    const store = new FakeStore(makeFixtureProject());
+    const storage = createMemoryProjectStorage();
+    const codec = createProjectCodec();
+    let attempts = 0;
+    vi.spyOn(storage, "write").mockImplementation(async () => {
+      attempts += 1;
+      await Promise.resolve();
+      throw new Error("nope");
+    });
+    const autosave = createAutosave({ store, storage, codec }, { debounceMs: 10 });
+
+    store.edit((p) => {
+      p.name = "DOOMED";
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(autosave.status.state).toBe("error");
+    // The first attempt plus a bounded number of retries — never a spin.
+    expect(attempts).toBeGreaterThan(1);
+    expect(attempts).toBeLessThanOrEqual(4);
+
+    autosave.dispose();
+  });
+
+  it("flush() writes the newest state even when it arrives mid-write", async () => {
+    const store = new FakeStore(makeFixtureProject());
+    const storage = createMemoryProjectStorage();
+    const codec = createProjectCodec();
+    const realWrite = storage.write.bind(storage);
+    vi.spyOn(storage, "write").mockImplementation(async (key, text) => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await realWrite(key, text);
+    });
+    const autosave = createAutosave({ store, storage, codec }, { debounceMs: 10 });
+
+    store.edit((p) => {
+      p.name = "A";
+    });
+    await vi.advanceTimersByTimeAsync(10); // the write for "A" is now in flight
+    store.edit((p) => {
+      p.name = "B";
+    });
+    const flushed = autosave.flush();
+    await vi.advanceTimersByTimeAsync(200);
+    await flushed;
+
+    expect(JSON.parse((await storage.read(store.getState().id)) ?? "{}")).toMatchObject({
+      project: { name: "B" },
+    });
+    expect(store.isDirty()).toBe(false);
 
     autosave.dispose();
   });

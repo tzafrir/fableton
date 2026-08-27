@@ -28,8 +28,15 @@ export interface KitEditorHost<THit extends HitTarget = HitTarget>
   readonly gestures: KitGestureEngine<THit>;
 }
 
+/** The kit's widening of `EditorHostOptions`: `rowOriginPx` is passed
+ *  straight through to the gesture engine (see `KitGestureEngineOptions`). */
+export interface KitEditorHostOptions<THit extends HitTarget = HitTarget>
+  extends EditorHostOptions<THit> {
+  rowOriginPx?: number | (() => number) | undefined;
+}
+
 export function createEditorHost<THit extends HitTarget>(
-  options: EditorHostOptions<THit>,
+  options: KitEditorHostOptions<THit>,
 ): KitEditorHost<THit> {
   const viewport: Viewport = createViewport(options.viewport);
   const grid: Grid = createGrid({ viewport, settings: options.grid });
@@ -64,11 +71,25 @@ export function createEditorHost<THit extends HitTarget>(
     hitTesters: options.hitTesters,
     dragHandlers: options.dragHandlers,
     keyBindings: options.keyBindings,
+    ...(options.rowOriginPx === undefined ? {} : { rowOriginPx: options.rowOriginPx }),
   });
 
   // An adaptive grid changes division under zoom: the grid layer must follow.
   const unsubscribeGrid = grid.onChange(() => {
     renderer.invalidate(["grid", "content"]);
+  });
+
+  // SS9: "Every drag operates on a preview ... and commits exactly one command
+  // on release." A document change that lands while a gesture is LIVE cannot
+  // be that command — the engine dispatches only after it has returned to
+  // `idle` — so it came from outside the gesture: the toolbar's Undo button, a
+  // global shortcut, another view. The live preview was derived from the
+  // document as it was at pointerdown, so continuing would commit a delta
+  // against geometry that no longer exists (and would silently truncate the
+  // redo tail). Abort the gesture instead, with zero document traffic —
+  // exactly what `Esc` does.
+  const unsubscribeStore = options.store.onChange(() => {
+    if (gestures.phase !== "idle") gestures.cancel();
   });
 
   const measure = (): void => {
@@ -108,6 +129,7 @@ export function createEditorHost<THit extends HitTarget>(
       disposed = true;
       observer?.disconnect();
       unsubscribeGrid();
+      unsubscribeStore();
       gestures.dispose();
       playhead.dispose();
       renderer.dispose();

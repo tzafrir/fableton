@@ -142,8 +142,17 @@ export interface AutosaveStatus {
  */
 export interface Autosave {
   readonly status: AutosaveStatus;
-  /** Writes now if anything is pending; resolves when the write settles.
-   *  Called on `visibilitychange`/`pagehide` and before an explicit export. */
+  /**
+   * Writes now if anything is pending; resolves when the write settles.
+   * Called on `visibilitychange`/`pagehide`, before an explicit export, and
+   * before New/Import replace the document.
+   *
+   * The payload is captured SYNCHRONOUSLY, before this returns: a caller may
+   * call `flush()` and replace the document in the very next statement and
+   * still be sure the OUTGOING project's bytes are the ones that land in its
+   * slot. (Without that guarantee, New/Import silently destroy every edit
+   * made inside the debounce window.)
+   */
   flush(): Promise<void>;
   onStatusChange(cb: (status: AutosaveStatus) => void): Unsub;
   /** Stops the timer and unsubscribes; does NOT flush. */

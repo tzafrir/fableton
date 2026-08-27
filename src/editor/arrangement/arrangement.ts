@@ -23,6 +23,7 @@ import type { DocumentChange, Patch, ProjectSnapshot } from "../../types/command
 import type { ChannelId, ClipId } from "../../types/ids";
 import type { EditorLayer, LayerFrame } from "../../types/render";
 import type { Ticks } from "../../types/time";
+import type { GridSettings } from "../../types/viewport";
 import { createEditorHost, createSelectionModel, type KitEditorHost } from "../kit";
 import { ticksPerBar } from "../../time";
 import type { ArrangementTheme } from "./constants";
@@ -276,7 +277,13 @@ export function createArrangementView(options: ArrangementViewOptions): KitArran
     if (result.clips) {
       updateLimits();
       pruneSelection(change.doc);
-      renderer.invalidate("content");
+      // The OVERLAY too: the selection outline and the hover highlight are
+      // drawn from `scene.clip(id)` geometry (layers.ts), so a clip that
+      // moves/trims without a pointer gesture — an arrow-key nudge, undo/redo,
+      // a toolbar verb — would otherwise leave its outline painted at the old
+      // position until some unrelated event dirtied the layer. The piano roll
+      // does the same (`ctx.invalidateContent` -> ["content", "overlay"]).
+      renderer.invalidate(["content", "overlay"]);
     }
     if (result.song || result.structure) {
       // A load / replace reports itself as a full rebuild, and it can carry a
@@ -305,6 +312,12 @@ export function createArrangementView(options: ArrangementViewOptions): KitArran
       // Both of these are style writes: playback never dirties a canvas (SS9).
       host?.playhead.setTicks(tick);
       ruler.setPlayheadTicks(tick);
+    },
+
+    setGrid(settings: Partial<GridSettings>): void {
+      // SS10's grid override menu (shared by both editors through the kit's
+      // `Grid`); the host invalidates the grid + content layers itself.
+      host?.grid.setSettings(settings);
     },
 
     reveal(clipId: ClipId): void {

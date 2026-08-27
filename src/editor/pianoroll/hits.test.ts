@@ -27,23 +27,43 @@ describe("zones", () => {
 
   it("hits the left and right edge zones", () => {
     const h = createHarness();
-    // n1 spans x 0..24, so the edge zone is min(6, 40% * 24) = 6 px.
+    // n1 spans x 0..24 and the hit target adds 2 px of slop each side, so the
+    // zones partition x -2..26: edge = min(6, 40% * 28) = 6 px, straddling
+    // each drawn edge (-2..4 and 20..26).
+    expect(hitAt(h, -1, h.yMid(60))?.kind).toBe("note-edge-l");
     expect(hitAt(h, 2, h.yMid(60))?.kind).toBe("note-edge-l");
-    expect(hitAt(h, 6, h.yMid(60))?.kind).toBe("note-edge-l");
-    expect(hitAt(h, 7, h.yMid(60))?.kind).toBe("note-body");
+    expect(hitAt(h, 6, h.yMid(60))?.kind).toBe("note-body");
     expect(hitAt(h, 17, h.yMid(60))?.kind).toBe("note-body");
-    expect(hitAt(h, 18, h.yMid(60))?.kind).toBe("note-edge-r");
+    expect(hitAt(h, 21, h.yMid(60))?.kind).toBe("note-edge-r");
     expect(hitAt(h, 24, h.yMid(60))?.kind).toBe("note-edge-r");
     expect(hitAt(h, 30, h.yMid(60))?.kind).toBe("grid");
   });
 
   it("keeps a body on a very short note (40% rule)", () => {
-    // 120 ticks = 6 px wide: edges are 2.4 px each, body is 1.2 px.
+    // 120 ticks = 6 px wide; with the 2 px slop the target is 10 px, so the
+    // edges are 4 px each and the body — the 20% SS10 promises — is the
+    // middle 2 px (x 2..4 of the drawn note).
     const h = createHarness({ notes: [{ id: "s1", start: 0, dur: 120, pitch: 60, vel: 100 }] });
-    expect(hitAt(h, 1, h.yMid(60))?.kind).toBe("note-edge-l");
+    expect(hitAt(h, -1, h.yMid(60))?.kind).toBe("note-edge-l");
     expect(hitAt(h, 3, h.yMid(60))?.kind).toBe("note-body");
-    expect(hitAt(h, 5, h.yMid(60))?.kind).toBe("note-edge-r");
+    expect(hitAt(h, 7, h.yMid(60))?.kind).toBe("note-edge-r");
     expect(zoneOfNoteX({ x: 0, y: 0, w: 6, h: 16 }, 3)).toBe("note-body");
+  });
+
+  // The reason the zones are measured on the SLOPPED target: at low zoom a
+  // short note's drawn width is a couple of pixels, and giving the slop to the
+  // resize zones alone left it with no grabbable body at all — the note could
+  // be resized but never moved.
+  it("keeps a proportional body at a zoom where the note is 2.4 px wide", () => {
+    const h = createHarness({
+      pxPerTick: 0.005,
+      notes: [{ id: "s1", start: 0, dur: 480, pitch: 60, vel: 100 }],
+    });
+    const kinds = [-2, -1, 0, 1, 2, 3, 4].map((x) => hitAt(h, x, h.yMid(60))?.kind);
+    expect(kinds).toContain("note-body");
+    // ...and the body is the MIDDLE of the target, edges on both sides.
+    expect(kinds[0]).toBe("note-edge-l");
+    expect(kinds[kinds.length - 1]).toBe("note-edge-r");
   });
 
   it("only hits the note on its own pitch row", () => {

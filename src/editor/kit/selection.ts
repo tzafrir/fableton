@@ -75,6 +75,18 @@ export function createSelectionModel<TId extends string = string>(
   };
 }
 
+export interface SelectionClickOptions {
+  /**
+   * `true` on the DRAG path (`DragHandler.begin`): a plain press on a member
+   * of a multi-selection must KEEP the group, or the drag would move only the
+   * item under the pointer. On the RELEASE path (SS10's `Pending` -> click
+   * row) it stays `false`, so a plain click really does "select" — it reduces
+   * the selection to the clicked item, which is what the keyboard verbs that
+   * follow (`Delete`, transpose, `Cmd/Ctrl+D`) then act on.
+   */
+  readonly keepGroup?: boolean | undefined;
+}
+
 /**
  * SS10 `Pending` -> click: "select (`Shift` adds, `Ctrl` toggles)". Written
  * once here so every editor's click handler is a one-liner and the three
@@ -87,6 +99,7 @@ export function applySelectionClick<TId extends string>(
   selection: SelectionModel<TId>,
   id: TId,
   modifiers: Modifiers,
+  options: SelectionClickOptions = {},
 ): void {
   if (modifiers.shift) {
     selection.add([id]);
@@ -96,8 +109,6 @@ export function applySelectionClick<TId extends string>(
     selection.toggle([id]);
     return;
   }
-  // A plain click on an already-selected item keeps the selection, so a drag
-  // that starts on one member of a multi-selection moves the whole group.
-  if (selection.has(id)) return;
+  if (options.keepGroup === true && selection.has(id)) return;
   selection.set([id]);
 }

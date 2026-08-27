@@ -147,19 +147,31 @@ export async function longestVerticalRun(
   containerTestId: string,
   layerClass: string,
   x: number,
+  opts: { excludeTopCssPx?: number; excludeBottomCssPx?: number } = {},
 ): Promise<number> {
+  const excludeTopCssPx = opts.excludeTopCssPx ?? 0;
+  const excludeBottomCssPx = opts.excludeBottomCssPx ?? 0;
   return page.evaluate(
-    ({ containerTestId, layerClass, x }) => {
+    ({ containerTestId, layerClass, x, excludeTopCssPx, excludeBottomCssPx }) => {
       const panel = document.querySelector(`[data-testid="${containerTestId}"]`);
       const canvas = panel?.querySelector<HTMLCanvasElement>(`.${layerClass}`);
       if (!canvas) throw new Error(`no canvas .${layerClass} inside [data-testid="${containerTestId}"]`);
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("no 2d context");
       const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      // The piano roll draws its ruler and its velocity lane INSIDE the same
+      // canvas stack as the note rows, and both are large uniform blocks: a
+      // whole-column scan measures those, not the row banding it claims to.
+      // The caller trims them off (the same discipline `scanNotes` uses for
+      // the velocity lane in `editing-helpers.ts`).
+      const rectForDpr = canvas.getBoundingClientRect();
+      const dpr = rectForDpr.width > 0 ? canvas.width / rectForDpr.width : 1;
+      const from = Math.max(0, Math.round(excludeTopCssPx * dpr));
+      const to = Math.max(from, height - Math.round(excludeBottomCssPx * dpr));
       let best = 0;
       let current = 0;
       let prevKey = "";
-      for (let y = 0; y < height; y += 1) {
+      for (let y = from; y < to; y += 1) {
         const i = (y * width + x) * 4;
         const key = `${String(data[i])},${String(data[i + 1])},${String(data[i + 2])}`;
         if (key === prevKey) current += 1;
@@ -171,7 +183,7 @@ export async function longestVerticalRun(
       }
       return Math.max(best, current);
     },
-    { containerTestId, layerClass, x },
+    { containerTestId, layerClass, x, excludeTopCssPx, excludeBottomCssPx },
   );
 }
 

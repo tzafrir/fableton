@@ -17,7 +17,7 @@ import { DEFAULT_NOTE_VELOCITY, MIN_NOTE_TICKS } from "../../types/editor";
 import { snapCreateTick } from "../kit/snapping";
 import type { ContextRef, PianoRollContext } from "./context";
 import type { PianoRollHit } from "./hits";
-import { noteRect, pitchAtY } from "./layout";
+import { pitchAtY, yOfPitch, type RONote } from "./layout";
 import { HANDLER_IDS, type MarqueePreview, type RectPx } from "./preview";
 
 function normalizedRect(x0: number, y0: number, x1: number, y1: number): RectPx {
@@ -29,14 +29,30 @@ function normalizedRect(x0: number, y0: number, x1: number, y1: number): RectPx 
   };
 }
 
-/** Notes whose rectangle intersects the marquee, in document order. */
+/** Reused across marquee frames: `update` runs on every pointermove. */
+const CANDIDATES: RONote[] = [];
+
+/** Notes whose rectangle intersects the marquee, in document order.
+ *
+ *  SS9's culling rule, on the gesture path: the horizontal span of the
+ *  rectangle is a tick range, so the candidates come from the context's
+ *  binary-searched index instead of a walk over the whole clip on every
+ *  pointermove. */
 export function notesInRect(ctx: PianoRollContext, rect: RectPx): NoteId[] {
+  const { viewport, layout } = ctx;
   const out: NoteId[] = [];
-  for (const note of ctx.notes()) {
-    const r = noteRect(ctx.viewport, ctx.layout, note);
-    const right = r.x + Math.max(r.w, 1);
-    if (right < rect.x0 || r.x > rect.x1) continue;
-    if (r.y + r.h < rect.y0 || r.y > rect.y1) continue;
+  CANDIDATES.length = 0;
+  // A note is at least 1 px wide on screen, so widen the query by that much
+  // before converting back to ticks.
+  const pad = Math.ceil(1 / Math.max(viewport.pxPerTick, 1e-9));
+  const from = viewport.tAt(rect.x0) - pad;
+  const to = viewport.tAt(rect.x1) + pad + 1;
+  for (const note of ctx.notesInRange(from, to, CANDIDATES)) {
+    const x = viewport.xOf(note.start);
+    const right = x + Math.max(note.dur * viewport.pxPerTick, 1);
+    if (right < rect.x0 || x > rect.x1) continue;
+    const y = yOfPitch(viewport, layout, note.pitch);
+    if (y + viewport.pxPerRow < rect.y0 || y > rect.y1) continue;
     out.push(note.id);
   }
   return out;
@@ -126,7 +142,11 @@ export function createMarqueeDragHandler(
           { start: Math.max(0, start0), dur, pitch, vel: DEFAULT_NOTE_VELOCITY },
         ]);
       }
-      ctx.selection.clear();
+      // SS10 `Pending`: "click: select (`Shift` adds, `Ctrl` toggles)". Only a
+      // PLAIN click on empty grid clears — a Shift/Ctrl click that missed a
+      // note by a pixel must leave the additive selection alone, exactly as
+      // `begin` above preserves it for a modified marquee drag.
+      if (!info.modifiers.shift && !info.modifiers.primary) ctx.selection.clear();
       return null;
     },
   };

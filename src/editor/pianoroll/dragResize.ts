@@ -44,6 +44,10 @@ export function createResizeDragHandler(
   edge: ResizeEdge,
 ): DragHandler<PianoRollHit, ResizePreview> {
   const zone = edge === "l" ? "note-edge-l" : "note-edge-r";
+  /** As in `dragMove`: SS10's `Esc` = "revert", including the selection this
+   *  gesture replaced in `begin`. */
+  let baseSelection: readonly string[] = [];
+
   return {
     id: edge === "l" ? HANDLER_IDS.resizeL : HANDLER_IDS.resizeR,
     priority: 30,
@@ -56,7 +60,8 @@ export function createResizeDragHandler(
     begin(start: GestureStart<PianoRollHit>): ResizePreview {
       const ctx = ref();
       const hit = start.hit as PianoRollNoteHit;
-      applySelectionClick(ctx.selection, hit.noteId, start.modifiers);
+      baseSelection = ctx.selection.ids();
+      applySelectionClick(ctx.selection, hit.noteId, start.modifiers, { keepGroup: true });
       const targets = dragTargets(ctx, hit.noteId);
       const spans = targets.map((note) => resizedSpan(note, edge, 0));
       return {
@@ -97,7 +102,9 @@ export function createResizeDragHandler(
     },
 
     cancel(): void {
-      // Nothing to undo: the drag only ever touched the preview.
+      // Nothing to undo: the drag only ever touched the preview — except the
+      // selection `begin` replaced, which goes back.
+      ref().selection.set(baseSelection);
     },
 
     click(start: GestureStart<PianoRollHit>, info: ClickInfo): Command | null {

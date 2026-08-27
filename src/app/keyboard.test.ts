@@ -84,13 +84,21 @@ describe("createUndoRedoHandler", () => {
     expect(store.getState().name).toBe("Renamed");
   });
 
-  it("ignores key-repeat (holding the key down)", () => {
+  // Holding the key down is how a user walks back through a long edit chain,
+  // so auto-repeat steps the history one entry per repeat (SS18-M1's "undo
+  // everywhere" is only usable if the history is walkable).
+  it("honours key-repeat: holding the key steps the history", () => {
     const { store, commands } = makeStore();
-    store.dispatch(commands.renameProject("Renamed"));
+    store.dispatch(commands.renameProject("One"));
+    store.dispatch(commands.renameProject("Two"));
+    store.dispatch(commands.renameProject("Three"));
 
     const handle = createUndoRedoHandler(store);
-    expect(handle(makeEvent({ key: "z", ctrlKey: true, repeat: true }))).toBe("ignored");
-    expect(store.getState().name).toBe("Renamed");
+    expect(handle(makeEvent({ key: "z", ctrlKey: true }))).toBe("undo");
+    expect(handle(makeEvent({ key: "z", ctrlKey: true, repeat: true }))).toBe("undo");
+    expect(handle(makeEvent({ key: "z", ctrlKey: true, repeat: true }))).toBe("undo");
+    expect(store.getState().name).toBe("Untitled");
+    expect(store.canUndo()).toBe(false);
   });
 
   it("backs off while a text field is focused, so field-local undo still works", () => {

@@ -79,6 +79,16 @@ export const CURSORS = {
   ruler: "pointer",
 } as const;
 
+/** One reusable buffer for the range queries below: hover runs on every
+ *  pointermove and must not allocate an array per event. Safe because no two
+ *  of these calls are ever interleaved (they run to completion synchronously).
+ */
+const SCRATCH: RONote[] = [];
+function scratch(): RONote[] {
+  SCRATCH.length = 0;
+  return SCRATCH;
+}
+
 export interface NoteHitResult {
   readonly note: RONote;
   readonly rect: NoteRect;
@@ -100,8 +110,14 @@ export function noteAtPoint(
   if (row < rowOfPitch(MAX_PITCH) || row >= rowOfPitch(MIN_PITCH) + 1) return null;
   const pitch = pitchAtY(viewport, layout, yPx);
 
+  // SS9's culling rule applies to hover too: this runs on every pointermove,
+  // so the candidates come from the binary-searched index, not a walk of the
+  // clip. The window is the hit slop around the pointer; the index's own
+  // left-edge search brings in notes that START further left and reach it.
+  const slopTicks = Math.ceil((NOTE_HIT_SLOP_PX + 1) / Math.max(viewport.pxPerTick, 1e-9));
+  const at = viewport.tAt(xPx);
   let best: NoteHitResult | null = null;
-  for (const note of ctx.notes()) {
+  for (const note of ctx.notesInRange(at - slopTicks, at + slopTicks + 1, scratch())) {
     if (note.pitch !== pitch) continue;
     const rect = noteRect(viewport, layout, note);
     // A note narrower than a pixel is still grabbable (SLOP), and a zero-width
@@ -120,9 +136,13 @@ export function stalkAtPoint(
   yPx: number,
 ): RONote | null {
   const { viewport, layout } = ctx;
+  // A stalk stands at the note's START, so only notes starting within the hit
+  // radius can match — again a range query rather than a full scan.
+  const radiusTicks = Math.ceil((VELOCITY_STALK_HIT_PX + 1) / Math.max(viewport.pxPerTick, 1e-9));
+  const at = viewport.tAt(xPx);
   let best: RONote | null = null;
   let bestScore = Number.POSITIVE_INFINITY;
-  for (const note of ctx.notes()) {
+  for (const note of ctx.notesInRange(at - radiusTicks, at + radiusTicks + 1, scratch())) {
     const dx = Math.abs(stalkX(viewport, note) - xPx);
     if (dx > VELOCITY_STALK_HIT_PX) continue;
     // A chord stacks several stalks on one x; the nearest tip wins.
@@ -136,12 +156,27 @@ export function stalkAtPoint(
   return best;
 }
 
-/** Zone of a note-relative x, per SS10's edge-zone rule. */
-export function zoneOfNoteX(rect: NoteRect, xPx: number): PianoRollNoteHit["kind"] {
-  const width = Math.max(rect.w, 1);
+/**
+ * Zone of a note-relative x, per SS10's edge-zone rule.
+ *
+ * The rule is measured on the TARGET, not on the drawn rectangle: `noteAtPoint`
+ * accepts `NOTE_HIT_SLOP_PX` of slop on each side, and splitting only the drawn
+ * width would hand that slop entirely to the two resize zones — at low zoom a
+ * 2.4 px note would end up ~7% body instead of the 20% `min(6 px, 40%)`
+ * guarantees, i.e. effectively un-draggable. Widening by the same slop keeps
+ * the promise ("short notes always keep a grabbable body") on the target the
+ * user can actually hit.
+ */
+export function zoneOfNoteX(
+  rect: NoteRect,
+  xPx: number,
+  slopPx: number = NOTE_HIT_SLOP_PX,
+): PianoRollNoteHit["kind"] {
+  const left = rect.x - slopPx;
+  const width = Math.max(rect.w, 1) + slopPx * 2;
   const edge = edgeZonePx(width);
-  if (xPx <= rect.x + edge) return "note-edge-l";
-  if (xPx >= rect.x + width - edge) return "note-edge-r";
+  if (xPx <= left + edge) return "note-edge-l";
+  if (xPx >= left + width - edge) return "note-edge-r";
   return "note-body";
 }
 

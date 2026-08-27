@@ -12,8 +12,10 @@
 import type { ClipId, NoteId } from "../../types/ids";
 import type { DocumentStore, ProjectCommands } from "../../types/commands";
 import type { AuditionSink, SelectionModel, ToolMode } from "../../types/editor";
+import type { TickIndex } from "../../types/render";
 import type { Ticks } from "../../types/time";
 import type { Grid, Viewport } from "../../types/viewport";
+import { createTickIndex } from "../kit/tickIndex";
 import type { PianoRollLayout, RONote } from "./layout";
 
 const NO_NOTES: readonly RONote[] = [];
@@ -35,12 +37,29 @@ export interface PianoRollContext {
 
   /** The clip's notes, already sorted by `(start, pitch)` (invariant 4). */
   notes(): readonly RONote[];
+  /** Notes overlapping `[from, to)`, found by binary search — SS9's culling
+   *  rule, shared by the hover hit-tester and the marquee so neither walks
+   *  the whole clip on a pointermove. Appends into `out` when given, so a
+   *  per-frame caller can reuse one array. */
+  notesInRange(from: Ticks, to: Ticks, out?: RONote[]): readonly RONote[];
   noteById(id: NoteId): RONote | undefined;
   /** Selected notes that still exist in the clip, in document order. */
   selectedNotes(): readonly RONote[];
   clipLength(): Ticks;
+  /**
+   * The open clip's position on the SONG timeline (0 when none is open).
+   *
+   * SS9's coordinate discipline has a second axis boundary in this editor,
+   * next to pixels: the roll's whole viewport is CLIP-RELATIVE (`Note.start`
+   * is clip-relative, SS10), while the transport and the arrangement speak
+   * SONG ticks. Every crossing of that boundary goes through this offset —
+   * `seek()` on the way out, `PianoRollView.setPlayheadTicks` on the way in —
+   * so no handler and no layer ever holds a tick in the wrong space.
+   */
+  clipStart(): Ticks;
 
-  /** Ruler drag (the shell wires it to `transport.seek`). */
+  /** Ruler drag (the shell wires it to `transport.seek`). Takes a
+   *  CLIP-RELATIVE tick and reports a SONG tick, per `clipStart()`. */
   seek(tick: Ticks): void;
   /** SS9's layer discipline: a gesture may dirty the overlay and nothing else. */
   invalidateOverlay(): void;
@@ -71,6 +90,13 @@ export function createPianoRollContext(
   let indexedNotes: readonly RONote[] | null = null;
   let byId = new Map<NoteId, RONote>();
 
+  // Same identity-keyed rebuild for the range index (SS9's binary search).
+  const range: TickIndex<RONote> = createTickIndex<RONote>((note) => ({
+    start: note.start,
+    end: note.start + note.dur,
+  }));
+  let rangeIndexed: readonly RONote[] | null = null;
+
   const ctx: PianoRollContext = {
     store: options.store,
     commands: options.commands,
@@ -86,6 +112,15 @@ export function createPianoRollContext(
       const id = ctx.clipId;
       if (id === null) return NO_NOTES;
       return ctx.store.getState().clips[id]?.notes ?? NO_NOTES;
+    },
+
+    notesInRange(from: Ticks, to: Ticks, out?: RONote[]): readonly RONote[] {
+      const notes = ctx.notes();
+      if (notes !== rangeIndexed) {
+        range.rebuild(notes);
+        rangeIndexed = notes;
+      }
+      return range.inRange(from, to, out);
     },
 
     noteById(id: NoteId): RONote | undefined {
@@ -108,8 +143,16 @@ export function createPianoRollContext(
       return ctx.store.getState().clips[id]?.length ?? 0;
     },
 
+    clipStart(): Ticks {
+      const id = ctx.clipId;
+      if (id === null) return 0;
+      return ctx.store.getState().clips[id]?.start ?? 0;
+    },
+
     seek(tick: Ticks): void {
-      options.onSeek?.(tick);
+      // Clip-relative -> song ticks: the shell's `onSeek` reaches
+      // `transport.seek`, which knows only the song timeline.
+      options.onSeek?.(ctx.clipStart() + tick);
     },
 
     invalidateOverlay(): void {

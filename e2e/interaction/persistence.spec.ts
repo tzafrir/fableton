@@ -66,3 +66,48 @@ test("an edit is restored unchanged after Save + full page reload (OPFS)", async
   expect(errors.failedRequests, "failed/non-2xx network requests").toEqual([]);
   await page.screenshot({ path: ".playwright/screenshots/M1/interaction/persistence-after-reload.png" });
 });
+
+// SS13's "~2 s debounce" itself, against the REAL OPFS backend. The spec
+// above force-flushes through the Save button, so without this one the
+// unforced timer path is only ever covered by unit tests over the in-memory
+// double: a regression that stopped `scheduleIfNeeded` from ever firing while
+// leaving `flush()` working would pass the whole suite.
+test("an unforced edit autosaves after the debounce (no Save click)", async ({ page }) => {
+  const errors = collectPageErrors(page);
+  await page.goto("/");
+
+  const clips = await scanColorRects(page, "arrangement-panel", "content", ARR_CLIP_FILL, {
+    minAreaDevicePx: 20,
+  });
+  expect(clips.length, "expected the starter project's demo clip to render").toBeGreaterThan(0);
+  const clip = clips[0] as ColorRect;
+  await page.mouse.dblclick(clip.pageCenterX, clip.pageCenterY);
+  await expect(page.getByTestId("piano-roll-panel")).toBeVisible();
+
+  const panelBox = (await page.getByTestId("piano-roll-panel").boundingBox())!;
+  const beforeCreate = await scanNotes(page, NOTE_FILL);
+  await page.mouse.dblclick(panelBox.x + panelBox.width * 0.7, panelBox.y + panelBox.height - 120);
+  const afterCreate = await scanNotes(page, NOTE_FILL);
+  expect(afterCreate.length).toBe(beforeCreate.length + 1);
+
+  // The write lands on its own, with nothing but time passing — no Save
+  // click anywhere in this test.
+  await expect(page.getByTestId("autosave-status")).toHaveText("Saved", { timeout: 15_000 });
+
+  await page.reload();
+  const clipsAfterReload = await scanColorRects(page, "arrangement-panel", "content", ARR_CLIP_FILL, {
+    minAreaDevicePx: 20,
+  });
+  await page.mouse.dblclick(
+    (clipsAfterReload[0] as ColorRect).pageCenterX,
+    (clipsAfterReload[0] as ColorRect).pageCenterY,
+  );
+  await expect(page.getByTestId("piano-roll-panel")).toBeVisible();
+  const afterReload = await scanNotes(page, NOTE_FILL);
+  expect(afterReload.length, "the debounced write must have carried the new note").toBe(
+    afterCreate.length,
+  );
+
+  expect(errors.consoleErrors).toEqual([]);
+  expect(errors.pageErrors).toEqual([]);
+});

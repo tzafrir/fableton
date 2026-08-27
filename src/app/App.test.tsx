@@ -488,6 +488,111 @@ describe("App — save / export / import (SS13 via the persistence package)", ()
     expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Imported Project");
   });
 
+  // SS10 "Snapping": "Grid is adaptive to zoom (as in Live) with a fixed-grid
+  // override menu and a triplet toggle." Both live in the toolbar (the app's
+  // only chrome) and both must reach the mounted editors — the create-time
+  // `grid` option alone leaves them unreachable at runtime.
+  it("exposes the grid override menu and the triplet toggle", async () => {
+    const storage = createMemoryProjectStorage();
+    await act(async () => {
+      root.render(<App storage={storage} />);
+    });
+    await flushMicrotasks();
+
+    const select = container.querySelector<HTMLSelectElement>("[data-testid=grid-select]")!;
+    expect(select).not.toBeNull();
+    expect([...select.options].map((option) => option.value)).toEqual([
+      "adaptive",
+      "4",
+      "8",
+      "16",
+      "32",
+      "off",
+    ]);
+    expect(select.value).toBe("adaptive");
+
+    await act(async () => {
+      select.value = "8";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(container.querySelector<HTMLSelectElement>("[data-testid=grid-select]")!.value).toBe("8");
+
+    const triplet = container.querySelector<HTMLInputElement>("[data-testid=grid-triplet-toggle]")!;
+    expect(triplet.checked).toBe(false);
+    // A CLICK, not a synthetic `change`: React drives `onChange` for
+    // checkboxes off the click event, so dispatching `change` by hand never
+    // runs the handler — and React restores a controlled checkbox whose value
+    // its state did not agree with, so this assertion fails if the toolbar's
+    // `onGridChange` is not wired.
+    await act(async () => {
+      triplet.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(container.querySelector<HTMLInputElement>("[data-testid=grid-triplet-toggle]")!.checked).toBe(true);
+    // Still "1/8" — the two controls are independent (mode vs triplet).
+    expect(container.querySelector<HTMLSelectElement>("[data-testid=grid-select]")!.value).toBe("8");
+  });
+
+  // SS13: the pending ~2 s debounce still holds the open project's edits, and
+  // `replaceDocument` clears the store's dirty flag — so New/Import have to
+  // flush first or every edit inside the window is silently destroyed (on a
+  // first run, the whole project).
+  it("New flushes the outgoing project's pending autosave first", async () => {
+    const storage = createMemoryProjectStorage();
+    let store: DocumentStore | undefined;
+    await act(async () => {
+      root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
+    });
+    await flushMicrotasks();
+    const outgoingId = store!.getState().id;
+    const commands = createProjectCommands();
+    await act(async () => {
+      store!.dispatch(commands.renameProject("EDITED, NEVER SAVED"));
+    });
+    // No debounce has fired yet: the edit exists only in memory.
+    expect(await storage.read(outgoingId)).toBeNull();
+
+    await act(async () => {
+      button("New").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushMicrotasks();
+
+    const saved = await storage.read(outgoingId);
+    expect(saved).not.toBeNull();
+    expect(JSON.parse(saved!).project.name).toBe("EDITED, NEVER SAVED");
+    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Untitled");
+  });
+
+  it("Import flushes the outgoing project's pending autosave first", async () => {
+    const storage = createMemoryProjectStorage();
+    let store: DocumentStore | undefined;
+    await act(async () => {
+      root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
+    });
+    await flushMicrotasks();
+    const outgoingId = store!.getState().id;
+    const commands = createProjectCommands();
+    await act(async () => {
+      store!.dispatch(commands.renameProject("EDITED, NEVER SAVED"));
+    });
+
+    const incoming = createEmptyProject({ ids: createSequentialIdFactory("other"), name: "Imported Project" });
+    const file = new File([projectCodec.encode(incoming)], "incoming.json", {
+      type: "application/json",
+    });
+    const input = container.querySelector<HTMLInputElement>("[data-testid=import-file-input]")!;
+    await act(async () => {
+      Object.defineProperty(input, "files", { value: [file], configurable: true });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    const saved = await storage.read(outgoingId);
+    expect(saved).not.toBeNull();
+    expect(JSON.parse(saved!).project.name).toBe("EDITED, NEVER SAVED");
+    expect(container.querySelector("[data-testid=project-name]")!.textContent).toBe("Imported Project");
+  });
+
   it("New starts a fresh empty project", async () => {
     const storage = createMemoryProjectStorage();
     let store: DocumentStore | undefined;

@@ -4,7 +4,7 @@
 // in React, never canvas.
 
 import { useCallback, useRef, type ChangeEvent } from "react";
-import type { AutosaveState, ToolMode, TransportState } from "../../types";
+import type { AutosaveState, GridSettings, ToolMode, TransportState } from "../../types";
 
 export interface ToolbarProps {
   projectName: string;
@@ -30,8 +30,19 @@ export interface ToolbarProps {
   tool: ToolMode;
   onToolChange: (tool: ToolMode) => void;
 
+  /** SS10 "Snapping": "Grid is adaptive to zoom (as in Live) with a
+   *  fixed-grid override menu and a triplet toggle." Grid settings are
+   *  ephemeral UI state (SS13); the shell owns them and pushes them into both
+   *  editors. */
+  gridSettings: GridSettings;
+  onGridChange: (settings: Partial<GridSettings>) => void;
+
   autosaveState: AutosaveState;
   autosaveError: string | null;
+  /** False when the storage backend reports `available: false` (SS13: "the
+   *  app must still run, just without autosave"). The status pill must not
+   *  claim "Saved" for a document nothing will ever persist. */
+  autosaveAvailable?: boolean | undefined;
   onSaveNow: () => void;
   onNewProject: () => void;
   onExport: () => void;
@@ -42,7 +53,25 @@ export interface ToolbarProps {
   statusMessage?: string | null | undefined;
 }
 
-function autosaveLabel(state: AutosaveState): string {
+/** The override menu's entries: adaptive, the fixed divisions a composer
+ *  actually reaches for, and "off" (SS10's three `GridSettings.mode`s). */
+const GRID_CHOICES: readonly { value: string; label: string; settings: Partial<GridSettings> }[] = [
+  { value: "adaptive", label: "Grid: Adaptive", settings: { mode: "adaptive" } },
+  { value: "4", label: "Grid: 1/4", settings: { mode: "fixed", denominator: 4 } },
+  { value: "8", label: "Grid: 1/8", settings: { mode: "fixed", denominator: 8 } },
+  { value: "16", label: "Grid: 1/16", settings: { mode: "fixed", denominator: 16 } },
+  { value: "32", label: "Grid: 1/32", settings: { mode: "fixed", denominator: 32 } },
+  { value: "off", label: "Grid: Off", settings: { mode: "off" } },
+];
+
+export function gridChoiceValue(settings: GridSettings): string {
+  if (settings.mode === "adaptive") return "adaptive";
+  if (settings.mode === "off") return "off";
+  return String(settings.denominator);
+}
+
+function autosaveLabel(state: AutosaveState, available: boolean): string {
+  if (!available) return "Not saved";
   switch (state) {
     case "idle":
       return "Saved";
@@ -74,8 +103,11 @@ export function Toolbar({
   onRedo,
   tool,
   onToolChange,
+  gridSettings,
+  onGridChange,
   autosaveState,
   autosaveError,
+  autosaveAvailable = true,
   onSaveNow,
   onNewProject,
   onExport,
@@ -87,6 +119,14 @@ export function Toolbar({
   const handleImportClick = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
+
+  const handleGridChange = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      const choice = GRID_CHOICES.find((entry) => entry.value === event.target.value);
+      if (choice !== undefined) onGridChange(choice.settings);
+    },
+    [onGridChange],
+  );
 
   const handleFileChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
@@ -178,6 +218,28 @@ export function Toolbar({
         </button>
       </span>
 
+      <label className="fbl-toolbar-grid" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>
+          Grid
+        </span>
+        <select value={gridChoiceValue(gridSettings)} onChange={handleGridChange} data-testid="grid-select">
+          {GRID_CHOICES.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        <input
+          type="checkbox"
+          checked={gridSettings.triplet}
+          onChange={(event) => onGridChange({ triplet: event.target.checked })}
+          data-testid="grid-triplet-toggle"
+        />
+        Triplet
+      </label>
+
       <button type="button" onClick={onNewProject}>
         New
       </button>
@@ -199,8 +261,14 @@ export function Toolbar({
         onChange={handleFileChange}
       />
 
-      <span data-testid="autosave-status" title={autosaveError ?? undefined}>
-        {autosaveLabel(autosaveState)}
+      <span
+        data-testid="autosave-status"
+        title={
+          autosaveError ??
+          (autosaveAvailable ? undefined : "This browser has no local project storage (OPFS).")
+        }
+      >
+        {autosaveLabel(autosaveState, autosaveAvailable)}
       </span>
       <span data-testid="audio-status">{audioStatus}</span>
       <span data-testid="transport-state">{transportState}</span>

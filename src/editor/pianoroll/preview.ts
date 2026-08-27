@@ -68,6 +68,9 @@ export interface DupPreview {
   readonly mode: "duplicate" | "velocity";
   /** `false` until the first move decided `mode`. */
   readonly locked: boolean;
+  /** SS10 scopes the `Alt`+vertical velocity verb to "SELECTED note bodies",
+   *  so it is offered only when the grabbed note was already selected. */
+  readonly velocityAllowed: boolean;
   readonly noteIds: readonly NoteId[];
   readonly deltaTicks: Ticks;
   readonly deltaPitch: number;

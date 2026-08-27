@@ -63,6 +63,22 @@ export const DEFAULT_CURSOR = "default";
  */
 export const ZOOM_WHEEL_SENSITIVITY = 0.0025;
 
+/**
+ * The kit's own extension of the frozen `GestureEngineOptions`.
+ *
+ * `rowOriginPx` is the offset from the element's top edge to row 0 of the
+ * viewport's row axis. It is 0 for an editor whose canvas IS the row area
+ * (the arrangement, whose ruler lives in its own grid cell) and
+ * `RULER_HEIGHT_PX` for the piano roll, which draws its ruler inside the same
+ * canvas stack. Only the row zoom anchor needs it: without it,
+ * `Ctrl/Cmd+Shift+wheel` zooms about a pitch other than the one under the
+ * cursor, which is not the "keeps the value under cursor fixed" SS9 asks for.
+ */
+export interface KitGestureEngineOptions<THit extends HitTarget = HitTarget>
+  extends GestureEngineOptions<THit> {
+  rowOriginPx?: number | (() => number) | undefined;
+}
+
 /** The kit's own extension of the frozen `GestureEngine` contract. */
 export interface KitGestureEngine<THit extends HitTarget = HitTarget>
   extends GestureEngine<THit> {
@@ -89,6 +105,12 @@ type AnyHandler<THit extends HitTarget> = DragHandler<THit, unknown>;
 interface ActiveGesture<THit extends HitTarget> {
   readonly handler: AnyHandler<THit>;
   readonly start: GestureStart<THit>;
+  /** The CONTENT the gesture grabbed, frozen at pointerdown: a fractional
+   *  tick and a fractional row, not the pixel they were under. Deltas are
+   *  measured from here (see `buildUpdate`), which is what keeps a ghost
+   *  under the pointer when the viewport scrolls or zooms mid-drag. */
+  readonly startTick: number;
+  readonly startRow: number;
   point: EditorPoint;
   preview: unknown;
   dragging: boolean;
@@ -99,11 +121,17 @@ interface ActiveGesture<THit extends HitTarget> {
  * back the `KitGestureEngine` widening, which the kit's overlay layer needs.
  */
 export function createKitGestureEngine<THit extends HitTarget>(
-  options: GestureEngineOptions<THit>,
+  options: KitGestureEngineOptions<THit>,
 ): KitGestureEngine<THit> {
   const viewport: Viewport = options.viewport;
   const grid: Grid = options.grid;
   const element = options.element;
+  /** Distance from the element top to the row axis origin — see
+   *  `KitGestureEngineOptions.rowOriginPx`. */
+  const rowOriginPx = (): number => {
+    const origin = options.rowOriginPx;
+    return typeof origin === "function" ? origin() : (origin ?? 0);
+  };
 
   let seq = 0;
   const hitTesters: Registration<HitTester<THit>>[] = [];
@@ -120,6 +148,41 @@ export function createKitGestureEngine<THit extends HitTarget>(
   let cursor: string = DEFAULT_CURSOR;
   let active: ActiveGesture<THit> | null = null;
   let disposed = false;
+
+  // --- two-pointer pan/zoom (SS2: "touch gets basics (pan/zoom/select)") ----
+  //
+  // `touch-action: none` on the element hands the browser's own pan/zoom to
+  // this FSM, so the FSM has to provide it: a second pointer cancels whatever
+  // drag was live (zero document traffic, exactly like `Esc`) and the pair
+  // then drives SS9's uniform scroll/zoom — pinch = zoom-to-cursor on the time
+  // axis, centroid movement = pan. `wheelInputOf`'s `pinch` flag covers only
+  // the TRACKPAD flavour, which the browser reports as a ctrl-wheel.
+  const livePointers = new Map<number, { xPx: number; yPx: number }>();
+  interface PinchState {
+    a: number;
+    b: number;
+    distPx: number;
+    centroidXPx: number;
+    centroidYPx: number;
+  }
+  let pinch: PinchState | null = null;
+
+  const pinchGeometry = (a: number, b: number): PinchState | null => {
+    const pa = livePointers.get(a);
+    const pb = livePointers.get(b);
+    if (pa === undefined || pb === undefined) return null;
+    return {
+      a,
+      b,
+      distPx: Math.hypot(pa.xPx - pb.xPx, pa.yPx - pb.yPx),
+      centroidXPx: (pa.xPx + pb.xPx) / 2,
+      centroidYPx: (pa.yPx + pb.yPx) / 2,
+    };
+  };
+
+  const endPinch = (): void => {
+    pinch = null;
+  };
 
   const listeners = new Set<(engine: GestureEngine<THit>) => void>();
   const notify = (): void => {
@@ -166,19 +229,28 @@ export function createKitGestureEngine<THit extends HitTarget>(
     options.dispatch(command);
   };
 
+  /** Fractional tick under a content-origin pixel, at the CURRENT transform. */
+  const exactTickAt = (xPx: number): number => viewport.scrollTicks + xPx / viewport.pxPerTick;
+
   const buildUpdate = (point: EditorPoint, mods: PointerInput["modifiers"]): DragUpdate<THit, unknown> => {
     const a = active as ActiveGesture<THit>;
     const dx = point.xPx - a.start.point.xPx;
     const dy = point.yPx - a.start.point.yPx;
+    // SS9's coordinate discipline: the delta is measured in MUSICAL units,
+    // from the content the gesture grabbed to the content under the pointer
+    // now. Both ends are re-read through the live viewport, so a scroll or a
+    // zoom mid-drag moves the ghost with the pointer instead of stranding it
+    // at a stale pixel offset. With a still viewport this is exactly
+    // `tickDeltaOf(dx)`: one rounding, on the total delta.
+    const deltaTicks = exactTickAt(point.xPx) - a.startTick;
+    const deltaRows = viewport.rowAt(point.yPx) - a.startRow;
     return {
       start: a.start,
       point,
       modifiers: mods,
       deltaPx: { x: dx, y: dy },
-      // Rounded ONCE on the total pixel delta (see viewport.tickDeltaOf), so
-      // a slow drag and a fast drag over the same distance agree exactly.
-      deltaTicks: viewport.tickDeltaOf(dx),
-      deltaRows: viewport.rowDeltaOf(dy),
+      deltaTicks: Math.round(deltaTicks) === 0 ? 0 : Math.round(deltaTicks),
+      deltaRows: deltaRows === 0 ? 0 : deltaRows,
       preview: a.preview,
       viewport,
       grid,
@@ -266,7 +338,20 @@ export function createKitGestureEngine<THit extends HitTarget>(
     },
 
     pointerDown(input: PointerInput): void {
-      if (disposed || active !== null) return;
+      if (disposed) return;
+      livePointers.set(input.pointerId, { xPx: input.point.xPx, yPx: input.point.yPx });
+      if (pinch !== null) return;
+      if (livePointers.size >= 2) {
+        // A second finger: abandon the one-finger verb (no command, SS9's
+        // "zero document traffic") and pan/zoom with the pair instead.
+        const ids = [...livePointers.keys()];
+        const a = ids[ids.length - 2] as number;
+        const b = ids[ids.length - 1] as number;
+        engine.cancel();
+        pinch = pinchGeometry(a, b);
+        return;
+      }
+      if (active !== null) return;
       const hit = hitTest(input.point, input.modifiers);
       // No hit means no verb: editors register a catch-all ("empty") tester
       // when the background is itself a target (SS10 marquee).
@@ -286,7 +371,15 @@ export function createKitGestureEngine<THit extends HitTarget>(
       const handler = ordered(dragHandlers).find((h) => h.claim(start));
       if (handler === undefined) return;
 
-      active = { handler, start, point: input.point, preview: null, dragging: false };
+      active = {
+        handler,
+        start,
+        startTick: exactTickAt(input.point.xPx),
+        startRow: viewport.rowAt(input.point.yPx),
+        point: input.point,
+        preview: null,
+        dragging: false,
+      };
       phase = "pending";
       hover = null;
       if (element) {
@@ -309,6 +402,25 @@ export function createKitGestureEngine<THit extends HitTarget>(
 
     pointerMove(input: PointerInput): void {
       if (disposed) return;
+      if (livePointers.has(input.pointerId)) {
+        livePointers.set(input.pointerId, { xPx: input.point.xPx, yPx: input.point.yPx });
+      }
+      if (pinch !== null) {
+        const next = pinchGeometry(pinch.a, pinch.b);
+        if (next === null) {
+          endPinch();
+          return;
+        }
+        // Pan first (both axes), then zoom about the pinch centre — SS9's
+        // "zoom-to-cursor", with the centroid standing in for the cursor.
+        viewport.scrollBy(pinch.centroidXPx - next.centroidXPx, pinch.centroidYPx - next.centroidYPx);
+        if (pinch.distPx > 0 && next.distPx > 0) {
+          viewport.zoomAt(next.centroidXPx, next.distPx / pinch.distPx);
+        }
+        pinch = next;
+        notify();
+        return;
+      }
       if (active === null) {
         setHover(hitTest(input.point, input.modifiers));
         return;
@@ -335,7 +447,13 @@ export function createKitGestureEngine<THit extends HitTarget>(
     },
 
     pointerUp(input: PointerInput): void {
-      if (disposed || active === null) return;
+      if (disposed) return;
+      livePointers.delete(input.pointerId);
+      if (pinch !== null) {
+        if (input.pointerId === pinch.a || input.pointerId === pinch.b) endPinch();
+        return;
+      }
+      if (active === null) return;
       if (input.pointerId !== active.start.pointerId) return;
       const a = active;
       releaseCapture(input.pointerId);
@@ -366,7 +484,13 @@ export function createKitGestureEngine<THit extends HitTarget>(
     },
 
     pointerCancel(input: PointerInput): void {
-      if (disposed || active === null) return;
+      if (disposed) return;
+      livePointers.delete(input.pointerId);
+      if (pinch !== null) {
+        if (input.pointerId === pinch.a || input.pointerId === pinch.b) endPinch();
+        return;
+      }
+      if (active === null) return;
       if (input.pointerId !== active.start.pointerId) return;
       engine.cancel();
     },
@@ -378,7 +502,10 @@ export function createKitGestureEngine<THit extends HitTarget>(
       const zoom = input.pinch === true || input.modifiers.ctrl || input.modifiers.meta;
       if (zoom) {
         const factor = Math.exp(-input.deltaY * ZOOM_WHEEL_SENSITIVITY);
-        if (input.modifiers.shift) viewport.zoomRowsAt(input.point.yPx, factor);
+        // SS9's zoom-to-cursor is anchored on the ROW under the pointer, and
+        // an editor may draw a ruler inside the same canvas stack (the piano
+        // roll does), so the row axis origin is not always the element top.
+        if (input.modifiers.shift) viewport.zoomRowsAt(input.point.yPx - rowOriginPx(), factor);
         else viewport.zoomAt(input.point.xPx, factor);
       } else if (input.modifiers.shift) {
         // Shift+wheel: the vertical notch drives the horizontal axis. Some
@@ -408,6 +535,14 @@ export function createKitGestureEngine<THit extends HitTarget>(
         engine.cancel();
         return true;
       }
+      // SS9: "every drag ... commits exactly one command on release", and
+      // SS10's drag rows give the drag states exactly one key column (`Esc`).
+      // A key binding that fired mid-gesture would dispatch a SECOND command
+      // for the same gesture, computed from geometry the live preview has
+      // already moved past (and `Delete` would delete the very notes the
+      // ghost is tracking). While a gesture is live the kit swallows every
+      // key but `Esc`.
+      if (active !== null) return true;
       for (const binding of ordered(keyBindings)) {
         const outcome = binding.handle(input);
         if (outcome === null) continue;
@@ -445,6 +580,8 @@ export function createKitGestureEngine<THit extends HitTarget>(
     dispose(): void {
       if (disposed) return;
       engine.cancel();
+      endPinch();
+      livePointers.clear();
       disposed = true;
       detach();
       listeners.clear();
@@ -465,6 +602,17 @@ export function createKitGestureEngine<THit extends HitTarget>(
     // `clickCount` undefined and the FSM carries the gesture's start value.
     const clicks = createClickCounter();
 
+    /** A completed drag ENDS the multi-click streak (SS10's `Pending` row
+     *  gives a single click exactly one meaning). Without this, a marquee or
+     *  move drag that releases within `MULTI_CLICK_SLOP_PX` of where it
+     *  started — or any drag followed by a click near its origin inside
+     *  `MULTI_CLICK_MS` — makes the NEXT single click read as a double click
+     *  and fire a creation verb ("dbl-click empty: create...") the user never
+     *  asked for, i.e. an undoable edit from a plain click. */
+    const breakClickStreakOnDrag = (): void => {
+      if (phase === "dragging") clicks.reset();
+    };
+
     const onPointerDown = (e: PointerEvent): void => {
       // MUST come before anything else. Without it Chrome treats the
       // pointerdown as the start of one of its own default gestures (text
@@ -480,9 +628,12 @@ export function createKitGestureEngine<THit extends HitTarget>(
       e.preventDefault();
       element.focus?.();
       engine.pointerDown(pointerInputOf(element, viewport, e, clicks.register(e)));
+      // A `thresholdPx: 0` verb (the pencil) is already dragging here.
+      breakClickStreakOnDrag();
     };
     const onPointerMove = (e: PointerEvent): void => {
       engine.pointerMove(pointerInputOf(element, viewport, e));
+      breakClickStreakOnDrag();
     };
     const onPointerUp = (e: PointerEvent): void => {
       engine.pointerUp(pointerInputOf(element, viewport, e));
@@ -498,7 +649,16 @@ export function createKitGestureEngine<THit extends HitTarget>(
       if (engine.wheel(wheelInputOf(element, viewport, e))) e.preventDefault();
     };
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (engine.keyDown(keyInputOf(e))) e.preventDefault();
+      if (!engine.keyDown(keyInputOf(e))) return;
+      e.preventDefault();
+      // The kit consumed this key, so nothing outside the editor may act on
+      // it. This is what makes the swallow-everything-but-Esc rule above real:
+      // the app shell binds undo/redo GLOBALLY (SS13's command bus, on
+      // `window`), and a keydown that merely had `preventDefault()` called on
+      // it still bubbles out of the host and would undo the document in the
+      // MIDDLE of a live drag — a second document mutation for one gesture,
+      // against which the ghosts and the committed delta are then stale.
+      e.stopPropagation();
     };
     const onLostCapture = (e: PointerEvent): void => {
       engine.pointerCancel(pointerInputOf(element, viewport, e));

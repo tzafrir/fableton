@@ -17,8 +17,9 @@ import type { ProjectStorage } from "../types";
 
 /**
  * Headless `ProjectStorage`. Keeps everything in a `Map`; `list()` returns
- * keys newest-write-first, which the real OPFS backend cannot promise but
- * this one can, for free.
+ * keys newest-write-first — the same ordering the OPFS backend derives from
+ * each file's `lastModified`, so the double and the real thing agree on the
+ * one property `loadOrCreateProject` depends on.
  */
 export function createMemoryProjectStorage(): ProjectStorage {
   const texts = new Map<string, string>();
@@ -136,14 +137,30 @@ export function createOpfsProjectStorage(options?: OpfsProjectStorageOptions): P
         if (!isNotFound(err)) throw err;
       }
     },
+    /** Newest-first, per the contract in ../types/persist.ts. OPFS CAN tell:
+     *  `dir.values()` yields in an unspecified order, but every entry is a
+     *  `File` carrying `lastModified`, and SS13's "resume the last autosave"
+     *  (loadOrCreate.ts) reads `list()[0]` as the newest slot. Without the
+     *  sort the app resumes an arbitrary project as soon as a second slot
+     *  exists — which New/Import makes routine. */
     async list(): Promise<readonly string[]> {
       if (!available) return [];
       const dir = (await getDir()) as unknown as AsyncIterableDirectoryHandle;
-      const keys: string[] = [];
+      const entries: { key: string; at: number }[] = [];
       for await (const entry of dir.values()) {
-        if (entry.kind === "file" && entry.name.endsWith(".json")) keys.push(decodeFileName(entry.name));
+        if (entry.kind !== "file" || !entry.name.endsWith(".json")) continue;
+        const key = decodeFileName(entry.name);
+        let at = 0;
+        try {
+          at = (await (entry as FileSystemFileHandle).getFile()).lastModified;
+        } catch {
+          // A handle that vanished between iteration and stat: keep the key
+          // (read() will report the miss) but sort it oldest.
+        }
+        entries.push({ key, at });
       }
-      return keys;
+      entries.sort((a, b) => b.at - a.at || a.key.localeCompare(b.key));
+      return entries.map((entry) => entry.key);
     },
   };
 }

@@ -501,13 +501,61 @@ describe("gesture engine — pointer identity (capture semantics)", () => {
     expect(h.dispatched).toEqual([]);
   });
 
-  it("ignores a second pointerdown while a gesture is live", () => {
+  // SS2 Platform: "touch gets basics (pan/zoom/select)". The element sets
+  // `touch-action: none`, so the browser's own pan/zoom is this FSM's job: a
+  // second finger abandons the one-finger verb (zero document traffic, like
+  // `Esc`) and the pair pans/zooms instead.
+  it("a second pointerdown cancels the live drag and starts pan/zoom", () => {
     const h = harness();
     h.down(150, 50);
     h.move(300, 50);
     h.down(150, 50, { pointerId: 5 });
-    expect(h.engine.activeHandlerId).toBe("test.move");
-    expect(h.handler.log.filter((e) => e === "begin")).toHaveLength(1);
+    expect(h.engine.phase).toBe("idle");
+    expect(h.engine.activeHandlerId).toBeNull();
+    expect(h.handler.log).toContain("cancel");
+    expect(h.dispatched).toEqual([]);
+  });
+
+  it("two pointers moving apart zoom about their centre", () => {
+    const h = harness();
+    h.down(300, 100, { pointerId: 1 });
+    h.down(500, 100, { pointerId: 2 });
+    const before = h.viewport.pxPerTick;
+    const anchor = h.viewport.tAt(400);
+    h.move(200, 100, { pointerId: 1 });
+    h.move(600, 100, { pointerId: 2 });
+    expect(h.viewport.pxPerTick).toBeGreaterThan(before);
+    // Zoom-to-cursor, with the centroid standing in for the cursor.
+    expect(Math.abs(h.viewport.xOf(anchor) - 400)).toBeLessThanOrEqual(1);
+    expect(h.dispatched).toEqual([]);
+  });
+
+  it("two pointers moving together pan both axes", () => {
+    const h = harness();
+    h.viewport.setScroll(4000, 4);
+    h.down(300, 100, { pointerId: 1 });
+    h.down(500, 200, { pointerId: 2 });
+    h.move(200, 80, { pointerId: 1 });
+    h.move(400, 180, { pointerId: 2 });
+    // The content followed the fingers: dragging left/up scrolls right/down.
+    expect(h.viewport.scrollTicks).toBe(4000 + 100 / 0.05);
+    expect(h.viewport.scrollRows).toBe(4 + 20 / 16);
+    // The fingers kept their distance, so the zoom came back to where it
+    // started (each move is an incremental pinch, hence the tolerance).
+    expect(h.viewport.pxPerTick).toBeCloseTo(0.05, 12);
+  });
+
+  it("returns to normal single-pointer verbs after the pinch ends", () => {
+    const h = harness();
+    h.down(300, 100, { pointerId: 1 });
+    h.down(500, 100, { pointerId: 2 });
+    h.up(500, 100, { pointerId: 2 });
+    h.up(200, 100, { pointerId: 1 });
+
+    h.down(150, 50);
+    h.move(300, 50);
+    h.up(300, 50);
+    expect(h.dispatched).toHaveLength(1);
   });
 });
 
@@ -672,18 +720,74 @@ describe("gesture engine — uniform wheel bindings (SS9)", () => {
     expect(h.viewport.pxPerTick).toBe(0.05);
   });
 
-  it("re-derives the live preview when the viewport moves under a drag", () => {
+  // SS9's coordinate discipline: a drag's delta is the distance between the
+  // content it GRABBED and the content under the pointer NOW. Both ends are
+  // re-read through the live viewport, so scrolling or zooming mid-drag keeps
+  // the ghost under the cursor instead of stranding it at a stale pixel.
+  it("keeps the grabbed content under the pointer when the viewport ZOOMS under a drag", () => {
     const h = harness();
     h.down(150, 50);
     h.move(300, 50);
     expect((h.engine.preview as Preview).deltaTicks).toBe(3000);
-    // Zooming in doubles px-per-tick: the same 150 px of travel is now half
-    // the musical distance, and the ghost must follow the pointer, not the tick.
+
+    // Zoom anchored at x=400, i.e. NOT where the pointer is: the content
+    // under the pointer changes, so the delta must change with it.
+    const grabbed = 150 / 0.05; // the tick the gesture grabbed
     wheelAt(h, { deltaY: -1000, modifiers: modifiers({ ctrl: true }) });
     const preview = h.engine.preview as Preview;
-    expect(preview.deltaTicks).toBeLessThan(3000);
-    expect(preview.deltaTicks).toBeGreaterThan(0);
+    const underPointer = h.viewport.tAt(300);
+    expect(preview.deltaTicks).toBe(underPointer - grabbed);
     expect(h.dispatched).toEqual([]);
+  });
+
+  it("keeps the grabbed content under the pointer when the viewport SCROLLS under a drag", () => {
+    const h = harness();
+    h.down(150, 50);
+    h.move(300, 50);
+    expect((h.engine.preview as Preview).deltaTicks).toBe(3000);
+
+    // Shift+wheel scrolls the content left under a stationary pointer: the
+    // ghost must travel with the content the pointer is now over.
+    wheelAt(h, { deltaY: 400, modifiers: modifiers({ shift: true }) });
+    expect(h.viewport.scrollTicks).toBe(8000);
+    const preview = h.engine.preview as Preview;
+    expect(preview.deltaTicks).toBe(3000 + 8000);
+    // ...and the ghost is still under the pointer: grabbed tick + delta is
+    // the tick the pointer sits on.
+    expect(150 / 0.05 + preview.deltaTicks).toBe(h.viewport.tAt(300));
+    expect(h.dispatched).toEqual([]);
+  });
+
+  it("anchors the ROW zoom below a ruler drawn inside the canvas (rowOriginPx)", () => {
+    const viewport = createViewport({ pxPerTick: 0.05, pxPerRow: 16, widthPx: 800, heightPx: 400 });
+    const grid = createGrid({ viewport, settings: { mode: "off" } });
+    const engine = createKitGestureEngine<TestHit>({
+      viewport,
+      grid,
+      dispatch: () => undefined,
+      rowOriginPx: 20, // the piano roll's RULER_HEIGHT_PX
+    });
+    const yPx = 120;
+    const rowUnderCursor = viewport.rowAt(yPx - 20);
+    engine.wheel({
+      deltaX: 0,
+      deltaY: -200,
+      point: editorPointOf(viewport, 400, yPx),
+      modifiers: modifiers({ ctrl: true, shift: true }),
+    });
+    expect(viewport.pxPerRow).toBeGreaterThan(16);
+    // The pitch under the cursor stayed put (SS9 zoom-to-cursor, row axis).
+    expect(Math.abs(viewport.yOf(rowUnderCursor) + 20 - yPx)).toBeLessThanOrEqual(0.001);
+  });
+
+  it("commits the scrolled-to position, not the pixel delta", () => {
+    const h = harness();
+    h.down(150, 50);
+    h.move(300, 50);
+    wheelAt(h, { deltaY: 400, modifiers: modifiers({ shift: true }) });
+    h.up(300, 50);
+    expect(h.handler.lastCommit?.deltaTicks).toBe(11_000);
+    expect(h.dispatched).toHaveLength(1);
   });
 });
 
@@ -699,6 +803,44 @@ describe("gesture engine — key bindings are a first-class client (SS10)", () =
     const h = harness({ keyBindings: [binding] });
     expect(h.engine.keyDown({ key: "Delete", modifiers: modifiers() })).toBe(true);
     expect(h.dispatched).toEqual([del]);
+  });
+
+  // SS9: "every drag ... commits exactly one command on release"; SS10 gives
+  // the drag rows exactly one key column (`Esc`). A binding that fired while a
+  // drag was live would make one gesture produce two commands (two undo
+  // entries), computed from geometry the ghost has already moved past.
+  it("swallows every key but Esc while a gesture is live", () => {
+    const dup = command("Duplicate Notes");
+    const binding: KeyBinding = {
+      id: "dup",
+      handle: (input) => (input.key === "d" ? { command: dup } : null),
+    };
+    const h = harness({ keyBindings: [binding] });
+    h.down(150, 50);
+    h.move(300, 50);
+    expect(h.engine.phase).toBe("dragging");
+
+    expect(h.engine.keyDown({ key: "d", modifiers: modifiers({ primary: true }) })).toBe(true);
+    expect(h.dispatched).toEqual([]);
+    expect(h.engine.phase).toBe("dragging");
+
+    h.up(300, 50);
+    expect(h.dispatched).toEqual([h.handler.commandOnCommit]);
+  });
+
+  it("runs bindings again once the gesture is over", () => {
+    const del = command("Delete Notes");
+    const binding: KeyBinding = {
+      id: "delete",
+      handle: (input) => (input.key === "Delete" ? { command: del } : null),
+    };
+    const h = harness({ keyBindings: [binding] });
+    h.down(150, 50);
+    h.move(300, 50);
+    h.engine.keyDown({ key: "Delete", modifiers: modifiers() });
+    h.up(300, 50);
+    h.engine.keyDown({ key: "Delete", modifiers: modifiers() });
+    expect(h.dispatched).toEqual([h.handler.commandOnCommit, del]);
   });
 
   it("passes the key on when a binding returns null", () => {

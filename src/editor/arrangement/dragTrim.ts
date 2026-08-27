@@ -12,6 +12,7 @@ import type { ClickInfo, DragHandler, DragUpdate, GestureStart } from "../../typ
 import type { LayerFrame } from "../../types/render";
 import type { Ticks } from "../../types/time";
 import type { ClipSpan } from "../../types/commands";
+import type { ClipId } from "../../types/ids";
 import { applySelectionClick, snapMoveDelta } from "../kit";
 import type { ArrangementTheme } from "./constants";
 import type { ArrangementContext } from "./context";
@@ -46,6 +47,9 @@ export function createTrimDragHandler(
     return { edge, ghosts: result.ghosts, spans: result.spans, deltaTicks: result.delta };
   };
 
+  /** As in `dragMove`: `Esc` restores the selection `begin` replaced. */
+  let baseSelection: readonly ClipId[] = [];
+
   return {
     id: TRIM_HANDLER_ID,
     priority: 20,
@@ -60,6 +64,7 @@ export function createTrimDragHandler(
     },
 
     begin(start: GestureStart<ArrangementHit>): TrimPreview {
+      baseSelection = context.selection.ids();
       if (start.hit.kind === "clip" && !context.selection.has(start.hit.clipId)) {
         context.selection.set([start.hit.clipId]);
       }
@@ -79,7 +84,8 @@ export function createTrimDragHandler(
     },
 
     cancel(): void {
-      // Ghosts only; nothing to undo.
+      // Ghosts only; nothing to undo — beyond the selection `begin` replaced.
+      context.selection.set(baseSelection);
     },
 
     click(start: GestureStart<ArrangementHit>, info: ClickInfo): Command | null {

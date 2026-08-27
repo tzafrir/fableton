@@ -124,15 +124,6 @@ export function createPianoRollGridLayer(
       drawLines(beat, theme.beatLine);
       drawLines(bar, theme.barLine);
 
-      // --- past the end of the clip ---
-      const length = ctx.clipLength();
-      if (length > 0) {
-        const x = viewport.xOf(length);
-        if (x < frame.widthPx) {
-          c.fillStyle = theme.outsideClip;
-          c.fillRect(x, noteTop, frame.widthPx - x, noteBottom - noteTop);
-        }
-      }
       c.restore();
 
       // --- ruler ---
@@ -203,6 +194,23 @@ export function createPianoRollContentLayer(
       c.save();
       clipToNoteArea(frame, ctx);
       c.lineWidth = 1;
+
+      // --- past the end of the clip ---
+      // DOCUMENT-derived, so it belongs in the CONTENT layer and not in the
+      // grid layer: SS9 fixes the grid layer's only redraw trigger as a
+      // viewport change, so a clip whose length changes (a trim, an undo)
+      // would leave the dim painted at the old length until an unrelated
+      // scroll. Drawn first, UNDER the notes, exactly as it looked when the
+      // grid layer owned it.
+      const length = ctx.clipLength();
+      if (length > 0) {
+        const dimX = viewport.xOf(length);
+        if (dimX < frame.widthPx) {
+          c.fillStyle = theme.outsideClip;
+          c.fillRect(dimX, layout.noteTopPx, frame.widthPx - dimX, layout.noteBottomPx - layout.noteTopPx);
+        }
+      }
+
       for (const note of visible) {
         const rect = noteRect(viewport, layout, note);
         if (rect.y > layout.noteBottomPx || rect.y + rect.h < layout.noteTopPx) continue;
@@ -220,6 +228,7 @@ export function createPianoRollContentLayer(
           Math.max(2, alignPixel(rect.h) - 1),
         );
       }
+
       c.restore();
 
       // --- velocity stalks (SS10: "each note draws a stalk") ---
@@ -229,12 +238,14 @@ export function createPianoRollContentLayer(
         c.rect(0, layout.velocityTopPx, frame.widthPx, layout.velocityLaneHeightPx);
         c.clip();
         c.lineWidth = 2;
+        // SS9: the content layer redraws on DATA or viewport change only, so
+        // it must not paint selection — that is ephemeral state and lives in
+        // the overlay (which is where the selected-stalk tint is drawn, over
+        // the top of these). Reading `selection` here made the highlight
+        // depend on an unrelated content invalidation to ever appear.
+        c.strokeStyle = theme.velocityStalk;
         for (const note of visible) {
-          const x = stalkX(viewport, note);
-          c.strokeStyle = ctx.selection.has(note.id)
-            ? theme.velocityStalkSelected
-            : theme.velocityStalk;
-          vline(c, x, yOfVelocity(layout, note.vel), layout.velocityBottomPx);
+          vline(c, stalkX(viewport, note), yOfVelocity(layout, note.vel), layout.velocityBottomPx);
         }
         c.restore();
       }
@@ -258,6 +269,15 @@ export function createPianoRollOverlayLayer(
   options: PianoRollOverlayOptions,
 ): EditorLayer {
   const theme = options.theme ?? DEFAULT_PIANO_ROLL_THEME;
+  // The overlay is "the ONLY layer redrawing at 60 fps during a gesture"
+  // (SS9), so it culls exactly like the content layer: same binary search,
+  // same identity-keyed rebuild, no O(n) walk on the marquee's frame path.
+  const index: TickIndex<RONote> = createTickIndex<RONote>((note) => ({
+    start: note.start,
+    end: note.start + note.dur,
+  }));
+  let indexed: readonly RONote[] | null = null;
+  const visible: RONote[] = [];
 
   return {
     kind: "overlay",
@@ -267,28 +287,36 @@ export function createPianoRollOverlayLayer(
       const { viewport, layout } = ctx;
       const preview = options.previewOf() as PianoRollPreview | null;
 
+      const selected = ctx.selection.size > 0;
+      visible.length = 0;
+      if (selected) {
+        const notes = ctx.notes();
+        if (notes !== indexed) {
+          index.rebuild(notes);
+          indexed = notes;
+        }
+        const window = viewport.visibleTicks();
+        index.inRange(window.start, window.end, visible);
+      }
+
       c.save();
       c.save();
       clipToNoteArea(frame, ctx);
       c.lineWidth = 1;
 
       // Selected notes (ephemeral state: overlay, never content).
-      if (ctx.selection.size > 0) {
-        const window = viewport.visibleTicks();
-        for (const note of ctx.notes()) {
-          if (!ctx.selection.has(note.id)) continue;
-          if (note.start > window.end || note.start + note.dur < window.start) continue;
-          const rect = noteRect(viewport, layout, note);
-          c.fillStyle = theme.noteSelectedFill;
-          c.fillRect(alignPixel(rect.x), alignPixel(rect.y), Math.max(2, alignPixel(rect.w)), Math.max(2, alignPixel(rect.h) - 1));
-          c.strokeStyle = theme.noteSelectedStroke;
-          c.strokeRect(
-            alignHalfPixel(rect.x),
-            alignHalfPixel(rect.y),
-            Math.max(2, alignPixel(rect.w)),
-            Math.max(2, alignPixel(rect.h) - 1),
-          );
-        }
+      for (const note of visible) {
+        if (!ctx.selection.has(note.id)) continue;
+        const rect = noteRect(viewport, layout, note);
+        c.fillStyle = theme.noteSelectedFill;
+        c.fillRect(alignPixel(rect.x), alignPixel(rect.y), Math.max(2, alignPixel(rect.w)), Math.max(2, alignPixel(rect.h) - 1));
+        c.strokeStyle = theme.noteSelectedStroke;
+        c.strokeRect(
+          alignHalfPixel(rect.x),
+          alignHalfPixel(rect.y),
+          Math.max(2, alignPixel(rect.w)),
+          Math.max(2, alignPixel(rect.h) - 1),
+        );
       }
 
       // Drag ghosts (SS9: previews live here and nowhere else).
@@ -301,11 +329,33 @@ export function createPianoRollOverlayLayer(
           const y = yOfPitch(viewport, layout, ghost.pitch);
           const w = Math.max(2, ghost.dur * viewport.pxPerTick);
           const h = Math.max(2, viewport.pxPerRow - 1);
+          // SS9's culling rule applies hardest HERE: this is the 60 fps layer,
+          // and a preview covers the whole SELECTION (Cmd+A on a long clip),
+          // not the visible window. Off-screen ghosts cost nothing.
+          if (x > frame.widthPx || x + w < 0) continue;
+          if (y > layout.noteBottomPx || y + h < layout.noteTopPx) continue;
           c.fillRect(alignPixel(x), alignPixel(y), alignPixel(w), h);
           c.strokeRect(alignHalfPixel(x), alignHalfPixel(y), alignPixel(w), h);
         }
       }
       c.restore();
+
+      // SS10: "each note draws a stalk" — the SELECTED ones are tinted, and
+      // like every other selection tint that belongs here, over the content
+      // layer's plain stalks.
+      if (layout.velocityLaneHeightPx > 0 && visible.length > 0) {
+        c.save();
+        c.beginPath();
+        c.rect(0, layout.velocityTopPx, frame.widthPx, layout.velocityLaneHeightPx);
+        c.clip();
+        c.lineWidth = 2;
+        c.strokeStyle = theme.velocityStalkSelected;
+        for (const note of visible) {
+          if (!ctx.selection.has(note.id)) continue;
+          vline(c, stalkX(viewport, note), yOfVelocity(layout, note.vel), layout.velocityBottomPx);
+        }
+        c.restore();
+      }
 
       if (preview !== null && typeof preview === "object") {
         if (preview.kind === "marquee") {

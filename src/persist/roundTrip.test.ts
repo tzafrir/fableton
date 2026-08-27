@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { JsonValue } from "../types";
 import { createProjectCodec } from "./codec";
 import { createMemoryProjectStorage } from "./storage";
-import { cloneProject, makeFixtureProject } from "./testing/fixture";
+import { cloneProject, makeFixtureProject, makeRichFixtureProject } from "./testing/fixture";
 
 const FIXED_SAVED_AT = "2026-08-27T00:00:00.000Z"; // pinned per EncodeOptions.savedAt's own doc comment
 
@@ -135,5 +135,33 @@ describe("open -> edit -> save -> reopen", () => {
     const finalText = codec.encode(project, { savedAt: FIXED_SAVED_AT, pretty: false });
     const firstText = codec.encode(makeFixtureProject(), { savedAt: FIXED_SAVED_AT, pretty: false });
     expect(finalText).toBe(firstText);
+  });
+  // The plain fixture leaves several optional document shapes at their empty
+  // value, so a codec that silently dropped them would still pass every test
+  // above. This one carries `clip.loop`, `note.muted`, a non-null clip colour,
+  // a non-empty `channel.chain` and a non-empty `lanes` map — the last one
+  // being ./document.ts's explicit "M1 ships `lanes: {}` and must round-trip
+  // whatever it loads untouched".
+  it("round-trips loop, muted notes, colours, effect chains and automation lanes", async () => {
+    const codec = createProjectCodec();
+    const storage = createMemoryProjectStorage();
+    const project = makeRichFixtureProject();
+
+    const savedText = codec.encode(project, { savedAt: FIXED_SAVED_AT, pretty: false });
+    await storage.write(project.id, savedText);
+    const reopened = codec.decode((await storage.read(project.id)) ?? "");
+    expect(reopened.ok).toBe(true);
+    if (!reopened.ok) return;
+    expect(reopened.warnings).toEqual([]);
+
+    const clip = reopened.project.clips["clip-2"];
+    expect(clip?.loop).toEqual({ start: 0, end: 1920 });
+    expect(clip?.color).toBe("#ff8800");
+    expect(clip?.notes.find((n) => n.id === "note-5")?.muted).toBe(true);
+    expect(reopened.project.channels["chan-track-1"]?.chain).toEqual(["dev-filter-1"]);
+    expect(reopened.project.lanes).toEqual(project.lanes);
+
+    // ...and re-saving the reopened document reproduces the same bytes (SS2).
+    expect(codec.encode(reopened.project, { savedAt: FIXED_SAVED_AT, pretty: false })).toBe(savedText);
   });
 });

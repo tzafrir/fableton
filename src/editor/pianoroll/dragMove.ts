@@ -11,10 +11,13 @@
 // therefore consumed by it (otherwise no duplicate drag could ever snap).
 //
 // SS10 also lists a second `Alt`+body verb in its hit-zone table: "`Alt`
-// +vertical-drag on selected note bodies adjusts velocity without leaving the
-// grid". The two are disambiguated by the dominant axis of the first promoted
-// move and then LOCKED for the rest of the gesture: mostly-vertical =
-// velocity, anything else = duplicate.
+// +vertical-drag on SELECTED note bodies adjusts velocity without leaving the
+// grid". The spec's own qualifier is what separates the two verbs: the
+// velocity sub-mode is offered only when the grabbed note was ALREADY
+// selected, and on an unselected note `Alt`+body is unambiguously `DragDup`.
+// When it is offered, the two are disambiguated by the dominant axis of the
+// first promoted move and then LOCKED for the rest of the gesture:
+// mostly-vertical = velocity, anything else = duplicate.
 
 import type { DragHandler, DragUpdate, GestureStart } from "../../types/gesture";
 import type { Command, NoteVelocityEdit } from "../../types/commands";
@@ -52,6 +55,12 @@ function notesOf(ref: ContextRef, ids: readonly string[]): RONote[] {
 // --- DragMove ---------------------------------------------------------------
 
 export function createMoveDragHandler(ref: ContextRef): DragHandler<PianoRollHit, MovePreview> {
+  // SS10's `Esc` column for this row is "revert", and the gesture's FIRST act
+  // is a selection change (`begin` below) — so the abort has to put the
+  // selection back too, or a cancelled drag still leaves a visible edit. The
+  // marquee row already works this way (`dragMarquee.base`).
+  let baseSelection: readonly string[] = [];
+
   return {
     id: HANDLER_IDS.move,
     priority: 10,
@@ -71,7 +80,8 @@ export function createMoveDragHandler(ref: ContextRef): DragHandler<PianoRollHit
       const hit = anchorOf(start);
       // A drag on an unselected note selects it first, so the gesture and the
       // keyboard always act on the same set (SS10's selection-centric map).
-      applySelectionClick(ctx.selection, hit.noteId, start.modifiers);
+      baseSelection = ctx.selection.ids();
+      applySelectionClick(ctx.selection, hit.noteId, start.modifiers, { keepGroup: true });
       const targets = dragTargets(ctx, hit.noteId);
       return {
         kind: "move",
@@ -122,8 +132,11 @@ export function createMoveDragHandler(ref: ContextRef): DragHandler<PianoRollHit
     },
 
     cancel(preview: MovePreview): void {
-      // "Esc aborts with ZERO document traffic" — only the audition stops.
-      stopAudition(ref(), preview.auditionPitch);
+      // "Esc aborts with ZERO document traffic" — the audition stops and the
+      // selection `begin` replaced goes back.
+      const ctx = ref();
+      stopAudition(ctx, preview.auditionPitch);
+      ctx.selection.set(baseSelection);
     },
 
     click(start: GestureStart<PianoRollHit>, info: ClickInfo): Command | null {
@@ -153,6 +166,9 @@ function velocityGhosts(
 }
 
 export function createDupDragHandler(ref: ContextRef): DragHandler<PianoRollHit, DupPreview> {
+  /** As in `createMoveDragHandler`: `Esc` reverts the selection too. */
+  let baseSelection: readonly string[] = [];
+
   return {
     id: HANDLER_IDS.dup,
     // Above `DragMove`: both claim a body, `Alt` decides which.
@@ -171,12 +187,17 @@ export function createDupDragHandler(ref: ContextRef): DragHandler<PianoRollHit,
     begin(start: GestureStart<PianoRollHit>): DupPreview {
       const ctx = ref();
       const hit = anchorOf(start);
-      applySelectionClick(ctx.selection, hit.noteId, start.modifiers);
+      // Read BEFORE the click selects it: SS10 scopes the velocity sub-mode
+      // to note bodies that were already selected.
+      const velocityAllowed = ctx.selection.has(hit.noteId);
+      baseSelection = ctx.selection.ids();
+      applySelectionClick(ctx.selection, hit.noteId, start.modifiers, { keepGroup: true });
       const targets = dragTargets(ctx, hit.noteId);
       return {
         kind: "dup",
         mode: "duplicate",
         locked: false,
+        velocityAllowed,
         noteIds: idsOf(targets),
         deltaTicks: 0,
         deltaPitch: 0,
@@ -192,7 +213,7 @@ export function createDupDragHandler(ref: ContextRef): DragHandler<PianoRollHit,
       const targets = notesOf(ref, previous.noteIds);
       const mode: DupPreview["mode"] = previous.locked
         ? previous.mode
-        : Math.abs(update.deltaPx.y) > Math.abs(update.deltaPx.x)
+        : previous.velocityAllowed && Math.abs(update.deltaPx.y) > Math.abs(update.deltaPx.x)
           ? "velocity"
           : "duplicate";
 
@@ -204,6 +225,7 @@ export function createDupDragHandler(ref: ContextRef): DragHandler<PianoRollHit,
           kind: "dup",
           mode,
           locked: true,
+          velocityAllowed: previous.velocityAllowed,
           noteIds: previous.noteIds,
           deltaTicks: 0,
           deltaPitch: 0,
@@ -229,6 +251,7 @@ export function createDupDragHandler(ref: ContextRef): DragHandler<PianoRollHit,
         kind: "dup",
         mode,
         locked: true,
+        velocityAllowed: previous.velocityAllowed,
         noteIds: previous.noteIds,
         deltaTicks: delta.ticks,
         deltaPitch: delta.pitch,
@@ -263,7 +286,9 @@ export function createDupDragHandler(ref: ContextRef): DragHandler<PianoRollHit,
     },
 
     cancel(preview: DupPreview): void {
-      stopAudition(ref(), preview.auditionPitch);
+      const ctx = ref();
+      stopAudition(ctx, preview.auditionPitch);
+      ctx.selection.set(baseSelection);
     },
 
     click(start: GestureStart<PianoRollHit>, info: ClickInfo): Command | null {

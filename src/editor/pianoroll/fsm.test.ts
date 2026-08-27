@@ -57,6 +57,27 @@ describe("Pending", () => {
     expect(h.selectionIds()).toEqual([]);
   });
 
+  // SS10 `Pending`: "click: select (`Shift` adds, `Ctrl` toggles)". A modified
+  // click that misses a note must not destroy the additive selection.
+  it("keeps the selection when Shift/Ctrl-clicking empty grid", () => {
+    const h = createHarness();
+    h.down(12, h.yMid(60));
+    h.up(12, h.yMid(60));
+    expect(h.selectionIds()).toEqual(["n1"]);
+
+    h.down(400, h.yMid(66), { shift: true });
+    h.up(400, h.yMid(66), { shift: true });
+    expect(h.selectionIds()).toEqual(["n1"]);
+
+    h.down(400, h.yMid(66), { primary: true });
+    h.up(400, h.yMid(66), { primary: true });
+    expect(h.selectionIds()).toEqual(["n1"]);
+
+    h.down(400, h.yMid(66));
+    h.up(400, h.yMid(66));
+    expect(h.selectionIds()).toEqual([]);
+  });
+
   it("stays a click below the 3 px threshold", () => {
     const h = createHarness();
     h.down(12, h.yMid(60));
@@ -197,6 +218,22 @@ describe("DragMove", () => {
     expect(h.audition.offs()).toEqual([61]);
   });
 
+  // SS10's `Esc` column says "revert", and the gesture's first act is a
+  // selection change — so an aborted drag must leave no visible trace at all.
+  it("Esc restores the selection the gesture replaced", () => {
+    const h = createHarness();
+    h.down(12, h.yMid(60));
+    h.up(12, h.yMid(60));
+    expect(h.selectionIds()).toEqual(["n1"]);
+
+    h.down(h.x(960) + 12, h.yMid(64)); // press on the UNSELECTED n2
+    h.move(h.x(960) + 12 + PX_PER_GRID, h.yMid(64));
+    expect(h.selectionIds()).toEqual(["n2"]);
+    h.esc();
+    expect(h.selectionIds()).toEqual(["n1"]);
+    expect(h.dispatched).toHaveLength(0);
+  });
+
   it("pointercancel is Esc", () => {
     const h = createHarness();
     h.down(12, h.yMid(60));
@@ -236,6 +273,29 @@ describe("DragResizeL / DragResizeR", () => {
     expect(h.note("n1")?.dur).toBe(MIN_NOTE_TICKS);
   });
 
+  // SS10 `Pending` -> release under the threshold is a CLICK, even on an edge
+  // zone: it selects the note, exactly like a click on its body.
+  it("a click on the edge zone selects the note and edits nothing", () => {
+    const h = createHarness();
+    h.down(22, h.yMid(60));
+    h.up(22, h.yMid(60));
+    expect(h.selectionIds()).toEqual(["n1"]);
+    expect(h.dispatched).toHaveLength(0);
+    expect(h.note("n1")).toMatchObject({ start: 0, dur: 480 });
+  });
+
+  it("Esc restores the selection the gesture replaced", () => {
+    const h = createHarness();
+    h.down(12, h.yMid(60));
+    h.up(12, h.yMid(60));
+    const x = h.x(960);
+    h.down(x + 22, h.yMid(64));
+    h.move(x + 22 + PX_PER_GRID, h.yMid(64));
+    expect(h.selectionIds()).toEqual(["n2"]);
+    h.esc();
+    expect(h.selectionIds()).toEqual(["n1"]);
+  });
+
   it("Esc reverts", () => {
     const h = createHarness();
     h.down(22, h.yMid(60));
@@ -270,8 +330,13 @@ describe("DragDup (Alt+body)", () => {
     expect(copies).toEqual([0, GRID]);
   });
 
-  it("Alt+vertical drag adjusts velocity instead (SS10 hit-zone list)", () => {
+  // SS10's hit-zone line scopes this verb to SELECTED note bodies, which is
+  // also what keeps `DragDup` reachable: on an unselected note, an Alt-drag
+  // to another pitch duplicates (see the test below) instead of silently
+  // becoming a velocity edit.
+  it("Alt+vertical drag on a SELECTED note adjusts velocity (SS10 hit-zone list)", () => {
     const h = createHarness();
+    h.ctx.selection.set(["n1"]);
     h.down(12, h.yMid(60), { alt: true });
     h.move(12, h.yMid(60) - 20, { alt: true });
     const preview = h.engine.preview as DupPreview;
@@ -284,8 +349,21 @@ describe("DragDup (Alt+body)", () => {
     expect(h.notes()).toHaveLength(2); // nothing was duplicated
   });
 
+  it("Alt+vertical drag on an UNSELECTED note duplicates it at the new pitch", () => {
+    const h = createHarness();
+    expect(h.selectionIds()).toEqual([]);
+    h.down(12, h.yMid(60), { alt: true });
+    h.move(12, h.yMid(62), { alt: true });
+    expect((h.engine.preview as DupPreview).mode).toBe("duplicate");
+    h.up(12, h.yMid(62), { alt: true });
+    expect(h.labels()).toEqual(["Duplicate Notes"]);
+    expect(h.note("n1")?.vel).toBe(100);
+    expect(h.notes().filter((n) => n.pitch === 62)).toHaveLength(1);
+  });
+
   it("locks the mode for the rest of the gesture", () => {
     const h = createHarness();
+    h.ctx.selection.set(["n1"]);
     h.down(12, h.yMid(60), { alt: true });
     h.move(12, h.yMid(60) - 40, { alt: true }); // vertical first
     h.move(12 + 80, h.yMid(60) - 40, { alt: true }); // then horizontal
@@ -335,6 +413,28 @@ describe("Marquee", () => {
     h.down(400, h.yMid(66), { shift: true });
     h.move(h.x(960) - 2, h.yMid(63), { shift: true });
     h.up(h.x(960) - 2, h.yMid(63), { shift: true });
+    expect(new Set(h.selectionIds())).toEqual(new Set(["n1", "n2"]));
+  });
+
+  // SS10's `Pending` row: "`Ctrl` toggles" — the third branch, alongside the
+  // Shift and plain cases above.
+  it("Ctrl/Cmd toggles: a covered member of the base selection drops out", () => {
+    const h = createHarness();
+    h.ctx.selection.set(["n1", "n2"]);
+    // A rectangle over n1 only (n1 starts at tick 0, n2 at 960).
+    h.down(2, h.yMid(58), { primary: true });
+    h.move(20, h.yMid(62), { primary: true });
+    h.up(20, h.yMid(62), { primary: true });
+    expect(h.selectionIds()).toEqual(["n2"]);
+    expect(h.dispatched).toHaveLength(0);
+  });
+
+  it("Ctrl/Cmd toggles: an uncovered note joins the base selection", () => {
+    const h = createHarness();
+    h.ctx.selection.set(["n2"]);
+    h.down(2, h.yMid(58), { primary: true });
+    h.move(20, h.yMid(62), { primary: true });
+    h.up(20, h.yMid(62), { primary: true });
     expect(new Set(h.selectionIds())).toEqual(new Set(["n1", "n2"]));
   });
 
@@ -481,5 +581,67 @@ describe("one gesture, one command, one undo entry (SS13)", () => {
     h.esc();
     expect(h.store.history()).toHaveLength(0);
     expect(h.store.canUndo()).toBe(false);
+  });
+});
+
+// SS2's headline budget on the gesture path: "Editors hold 60 fps with ~2,000
+// visible notes during drag". The measurable structural property behind it is
+// SS9's culling rule — every per-pointermove path must be O(visible), not
+// O(notes in the clip) — so these tests count the notes each frame actually
+// visits rather than timing a jsdom frame.
+describe("SS2's 2,000-note budget: the per-frame paths stay O(visible)", () => {
+  /** 2,000 notes, one per 1/32 across ~66 bars. */
+  const MANY = Array.from({ length: 2000 }, (_, i) => ({
+    id: `n${String(i)}`,
+    start: i * 120,
+    dur: 120,
+    pitch: 60 + (i % 12),
+    vel: 100,
+  }));
+
+  /** Wraps the context's range index so a test can count what a frame saw. */
+  function counting(h: ReturnType<typeof createHarness>): () => number {
+    let visited = 0;
+    const original = h.ctx.notesInRange.bind(h.ctx);
+    h.ctx.notesInRange = (from, to, out) => {
+      const result = original(from, to, out);
+      visited += result.length;
+      return result;
+    };
+    return () => visited;
+  }
+
+  it("hover hit-testing visits only the notes under the pointer", () => {
+    const h = createHarness({ notes: MANY });
+    const visited = counting(h);
+    for (let x = 100; x < 300; x += 1) h.move(x, h.yMid(60));
+    // The path goes THROUGH the index (a regression to a full scan would
+    // bypass it and count 0), and 200 pointermoves over 2,000 notes cost far
+    // less than the 400,000 an O(n) scan would.
+    expect(visited()).toBeGreaterThan(0);
+    expect(visited()).toBeLessThan(2000);
+  });
+
+  it("a marquee frame visits only the notes in its range", () => {
+    const h = createHarness({ notes: MANY });
+    h.down(4, h.yMid(71));
+    const visited = counting(h);
+    // Sweep a narrow band across a quarter of the clip, one frame per pixel.
+    for (let x = 8; x < 208; x += 1) h.move(x, h.yMid(71));
+    h.up(208, h.yMid(71));
+    // Each frame covers at most the notes inside the rectangle so far; an
+    // O(n) walk would be 200 x 2,000 = 400,000.
+    expect(visited()).toBeGreaterThan(0);
+    expect(visited()).toBeLessThan(40_000);
+  });
+
+  it("a velocity sweep visits only the stalks it crosses", () => {
+    const h = createHarness({ notes: MANY });
+    h.down(4, h.velY(100));
+    const visited = counting(h);
+    for (let x = 8; x < 208; x += 1) h.move(x, h.velY(100));
+    h.up(208, h.velY(100));
+    expect(visited()).toBeGreaterThan(0);
+    expect(visited()).toBeLessThan(40_000);
   });
 });

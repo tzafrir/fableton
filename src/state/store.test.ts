@@ -253,8 +253,22 @@ describe("createDocumentStore", () => {
     const next = createEmptyProject({ ids: createSequentialIdFactory("b"), name: "Loaded" });
     store.replaceDocument(next, { keepHistory: true, source: "replace" });
     expect(store.canUndo()).toBe(true);
+
+    // The replacement is an entry of its own, so the first undo restores the
+    // WHOLE previous document — the kept entries are patch paths into that
+    // document, and applying one to the loaded project would produce a hybrid
+    // of the two.
+    store.undo();
+    expect(store.getState().name).toBe("One");
+    expect(store.getState().id).not.toBe(next.id);
+
     store.undo();
     expect(store.getState().name).toBe("Fixture");
+
+    // ...and redo walks forward into the loaded document again.
+    store.redo();
+    store.redo();
+    expect(store.getState().name).toBe("Loaded");
   });
 
   it("clearHistory keeps the document and drops the stack", () => {

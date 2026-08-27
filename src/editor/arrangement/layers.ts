@@ -107,25 +107,75 @@ function clipColor(scene: ArrangementScene, clip: ClipView, theme: ArrangementTh
   return theme.clipFill;
 }
 
-function drawNotes(frame: LayerFrame, theme: ArrangementTheme, clip: ClipView, x: number, y: number, w: number, h: number): void {
-  const notes = clip.notes;
-  if (notes.length === 0 || h < MIN_NOTE_LANE_PX) return;
+/**
+ * Per-notes-array facts the miniature needs but must not re-derive per frame:
+ * the pitch range the vertical scale maps (it has to stay stable while the
+ * user scrolls, so it cannot be computed from the VISIBLE notes) and the
+ * longest note, which bounds how far left of the window a note can start and
+ * still be on screen. The store shares note arrays structurally, so array
+ * identity is the cheapest possible dirty flag (same trick as the piano
+ * roll's content layer).
+ */
+interface NoteFacts {
+  readonly lowest: number;
+  readonly highest: number;
+  readonly maxDur: Ticks;
+}
+const noteFacts = new WeakMap<object, NoteFacts>();
+
+function factsOf(notes: ClipView["notes"]): NoteFacts {
+  const cached = noteFacts.get(notes);
+  if (cached !== undefined) return cached;
   let lowest = 127;
   let highest = 0;
+  let maxDur = 0;
   for (const note of notes) {
     if (note.pitch < lowest) lowest = note.pitch;
     if (note.pitch > highest) highest = note.pitch;
+    if (note.dur > maxDur) maxDur = note.dur;
   }
+  const facts: NoteFacts = { lowest, highest, maxDur };
+  noteFacts.set(notes, facts);
+  return facts;
+}
+
+/** First index whose `start` is >= `tick`; notes are sorted by start
+ *  (./document.ts invariant 4), so this is SS9's binary search. */
+function firstNoteAtOrAfter(notes: ClipView["notes"], tick: Ticks): number {
+  let lo = 0;
+  let hi = notes.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if ((notes[mid]?.start ?? 0) >= tick) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
+
+function drawNotes(frame: LayerFrame, theme: ArrangementTheme, clip: ClipView, x: number, y: number, w: number, h: number): void {
+  const notes = clip.notes;
+  if (notes.length === 0 || h < MIN_NOTE_LANE_PX) return;
+  const { lowest, highest, maxDur } = factsOf(notes);
   const span = Math.max(1, highest - lowest + 1);
   const top = y + 3;
   const usable = h - 6;
   const rowH = Math.max(1, usable / span);
   const { ctx, viewport } = frame;
   ctx.fillStyle = theme.clipNote;
-  const count = Math.min(notes.length, MAX_NOTES_PER_CLIP);
-  for (let i = 0; i < count; i += 1) {
+
+  // SS9: "the visible window is found by binary search — O(visible) per
+  // frame". The window is intersected with the clip, in CLIP-RELATIVE ticks;
+  // a prefix scan of the first N notes would both cost more and draw the
+  // wrong notes once the user scrolls past note N.
+  const window = viewport.visibleTicks();
+  const from = Math.max(0, window.start - clip.start - maxDur);
+  const to = Math.min(clip.length, window.end - clip.start);
+  if (to <= 0) return;
+  let drawn = 0;
+  for (let i = firstNoteAtOrAfter(notes, from); i < notes.length; i += 1) {
     const note = notes[i];
     if (note === undefined) continue;
+    if (note.start > to) break;
     const nx = x + note.start * viewport.pxPerTick;
     const nw = Math.max(1, note.dur * viewport.pxPerTick);
     if (nx > x + w || nx + nw < x) continue;
@@ -136,6 +186,10 @@ function drawNotes(frame: LayerFrame, theme: ArrangementTheme, clip: ClipView, x
       Math.max(1, alignPixel(Math.min(nw, x + w - nx))),
       Math.max(1, Math.min(rowH, 3)),
     );
+    drawn += 1;
+    // Backstop for a pathological clip: even culled, a fully zoomed-out
+    // window can hold more notes than the miniature can express.
+    if (drawn >= MAX_NOTES_PER_CLIP) break;
   }
 }
 
@@ -167,15 +221,25 @@ export function createArrangementClipsLayer(deps: LayerDeps): EditorLayer {
           const loop = clip.loop;
           if (loop !== undefined && loop !== null && loop.end > loop.start) {
             const period = loop.end - loop.start;
-            ctx.strokeStyle = theme.clipRepeatLine;
-            ctx.lineWidth = 1;
-            for (let t = loop.end; t < clip.length; t += period) {
-              const rx = alignHalfPixel(viewport.xOf(clip.start + t));
-              if (rx < 0 || rx > widthPx) continue;
-              ctx.beginPath();
-              ctx.moveTo(rx, y);
-              ctx.lineTo(rx, y + h);
-              ctx.stroke();
+            // Same two rules as every other line loop in this file: skip the
+            // whole rung when the repeats are closer than a readable spacing
+            // (a 1-tick loop is reachable with one drag of the loop handle),
+            // and ITERATE only over the visible window rather than the clip's
+            // whole length — SS9's "O(visible) per frame".
+            if (period * viewport.pxPerTick >= MIN_LINE_SPACING_PX) {
+              const firstVisible = window.start - clip.start;
+              const repeats = Math.max(0, Math.ceil((firstVisible - loop.end) / period));
+              const lastVisible = Math.min(clip.length, window.end - clip.start);
+              ctx.strokeStyle = theme.clipRepeatLine;
+              ctx.lineWidth = 1;
+              for (let t = loop.end + repeats * period; t < lastVisible; t += period) {
+                const rx = alignHalfPixel(viewport.xOf(clip.start + t));
+                if (rx < 0 || rx > widthPx) continue;
+                ctx.beginPath();
+                ctx.moveTo(rx, y);
+                ctx.lineTo(rx, y + h);
+                ctx.stroke();
+              }
             }
           }
 

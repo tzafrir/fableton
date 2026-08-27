@@ -17,6 +17,7 @@ import type {
   ChannelId,
   ClipId,
   DocumentStore,
+  GridSettings,
   ProjectCommands,
   Ticks,
 } from "../../types";
@@ -24,6 +25,9 @@ import type {
 export interface ArrangementPanelProps {
   store: DocumentStore;
   commands: ProjectCommands;
+  /** SS10's grid override menu / triplet toggle, owned by the toolbar and
+   *  pushed into the live view (never a remount). */
+  grid?: Partial<GridSettings> | undefined;
   onSeek?: ((tick: Ticks) => void) | undefined;
   onOpenClip?: ((clipId: ClipId) => void) | undefined;
   onSelectChannel?: ((channelId: ChannelId) => void) | undefined;
@@ -38,12 +42,15 @@ export interface ArrangementPanelProps {
 export function ArrangementPanel({
   store,
   commands,
+  grid,
   onSeek,
   onOpenClip,
   onSelectChannel,
   viewRef,
 }: ArrangementPanelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const viewLocalRef = useRef<ArrangementView | null>(null);
+  const initialGrid = useRef(grid);
 
   const onSeekRef = useRef(onSeek);
   onSeekRef.current = onSeek;
@@ -59,12 +66,15 @@ export function ArrangementPanel({
       container,
       store,
       commands,
+      grid: initialGrid.current,
       onSeek: (tick) => onSeekRef.current?.(tick),
       onOpenClip: (clipId) => onOpenClipRef.current?.(clipId),
       onSelectChannel: (channelId) => onSelectChannelRef.current?.(channelId),
     });
+    viewLocalRef.current = view;
     if (viewRef !== undefined) viewRef.current = view;
     return () => {
+      viewLocalRef.current = null;
       if (viewRef !== undefined) viewRef.current = null;
       view.dispose();
     };
@@ -73,6 +83,10 @@ export function ArrangementPanel({
     // component boundary). Callbacks are read from the refs above instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store, commands]);
+
+  useEffect(() => {
+    if (grid !== undefined) viewLocalRef.current?.setGrid(grid);
+  }, [grid]);
 
   return (
     <div

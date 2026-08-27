@@ -125,6 +125,11 @@ export interface EditorView {
   /** Playback position in ticks, pushed at rAF by the shell. SS9: this moves
    *  a DOM node and must never invalidate a canvas layer. */
   setPlayheadTicks(tick: Ticks): void;
+  /** SS10 "Snapping": "a fixed-grid override menu and a triplet toggle".
+   *  Grid settings are EPHEMERAL UI state (SS13) owned by the shell's
+   *  toolbar, so they have to reach an already-mounted editor — the
+   *  create-time `grid` option alone leaves the menu unreachable. */
+  setGrid(settings: Partial<GridSettings>): void;
   focus(): void;
   dispose(): void;
 }

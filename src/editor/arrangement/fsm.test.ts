@@ -152,6 +152,21 @@ describe("move (one command, relative snap)", () => {
     expect(h.dispatched).toHaveLength(0);
     expect(h.store.canUndo()).toBe(false);
   });
+
+  // The duplicate flavour of the same gesture: a copy stacked exactly on its
+  // original is invisible, shadows the original in hit-testing and doubles
+  // that bar at playback — so it is not an edit either.
+  it("commits nothing when a DUPLICATE drag ends where it started", () => {
+    const h = createHarness();
+    const before = Object.keys(h.store.getState().clips).length;
+    h.down(...CLIP_1_BODY, { primary: true });
+    h.move(110, 20, { primary: true });
+    h.move(100, 20, { primary: true });
+    h.up(100, 20, { primary: true });
+    expect(h.dispatched).toHaveLength(0);
+    expect(h.store.canUndo()).toBe(false);
+    expect(Object.keys(h.store.getState().clips)).toHaveLength(before);
+  });
 });
 
 describe("duplicate (Cmd/Ctrl + drag)", () => {
@@ -296,6 +311,37 @@ describe("marquee (selection is not undoable)", () => {
     h.selection.set([CLIP_1]);
     h.drag([600, 20], [200, 60], { shift: true });
     expect([...h.selection.ids()].sort()).toEqual([CLIP_1, CLIP_2, CLIP_3]);
+  });
+
+  // SS10's `Pending` row: "`Ctrl` toggles". Covered members drop out, new
+  // ones come in — the third branch of the same rule as Shift/plain.
+  it("TOGGLES with Ctrl/Cmd: covered members leave, uncovered ones join", () => {
+    const h = createHarness();
+    h.selection.set([CLIP_1, CLIP_2]);
+    h.drag([600, 20], [200, 60], { primary: true });
+    // The rectangle covers CLIP_2 (already selected -> removed) and CLIP_3
+    // (not selected -> added); CLIP_1 is outside it and untouched.
+    expect([...h.selection.ids()].sort()).toEqual([CLIP_1, CLIP_3]);
+    expect(h.dispatched).toHaveLength(0);
+  });
+
+  // A Shift/Ctrl click that merely MISSED a clip is still an additive click:
+  // wiping the selection would throw away what the user was adding to.
+  it("keeps an additive selection when a modified click misses every clip", () => {
+    const h = createHarness();
+    h.selection.set([CLIP_1]);
+    h.down(600, 100, { shift: true });
+    h.up(600, 100, { shift: true });
+    expect(h.selection.ids()).toEqual([CLIP_1]);
+
+    h.down(600, 100, { primary: true });
+    h.up(600, 100, { primary: true });
+    expect(h.selection.ids()).toEqual([CLIP_1]);
+
+    // ...while a PLAIN click on empty space still clears (SS10 `Pending`).
+    h.down(600, 100);
+    h.up(600, 100);
+    expect(h.selection.ids()).toEqual([]);
   });
 
   it("restores the selection it started from when cancelled", () => {

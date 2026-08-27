@@ -11,6 +11,7 @@ import type {
   AuditionSink,
   ClipId,
   DocumentStore,
+  GridSettings,
   PianoRollView,
   ProjectCommands,
   Ticks,
@@ -22,6 +23,10 @@ export interface PianoRollPanelProps {
   commands: ProjectCommands;
   clipId: ClipId | null;
   tool?: ToolMode | undefined;
+  /** SS10's grid override menu / triplet toggle, owned by the toolbar. Like
+   *  `clipId`/`tool` it must reach an already-mounted view, so it goes
+   *  through `setGrid` rather than being create-time-only. */
+  grid?: Partial<GridSettings> | undefined;
   onSeek?: ((tick: Ticks) => void) | undefined;
   /** A STABLE sink (the app shell owns one proxy object for the lifetime of
    *  the engine and redirects it as the open clip's track changes) — passed
@@ -35,6 +40,7 @@ export function PianoRollPanel({
   commands,
   clipId,
   tool,
+  grid,
   onSeek,
   audition,
   viewRef,
@@ -47,6 +53,7 @@ export function PianoRollPanel({
   // Read once, at creation — see the prop doc comment above.
   const initialClipId = useRef(clipId);
   const initialTool = useRef(tool);
+  const initialGrid = useRef(grid);
   const initialAudition = useRef(audition);
 
   useEffect(() => {
@@ -58,6 +65,7 @@ export function PianoRollPanel({
       commands,
       clipId: initialClipId.current,
       tool: initialTool.current,
+      grid: initialGrid.current,
       audition: initialAudition.current,
       onSeek: (tick) => onSeekRef.current?.(tick),
     });
@@ -78,6 +86,10 @@ export function PianoRollPanel({
   useEffect(() => {
     if (tool !== undefined) localViewRef.current?.setTool(tool);
   }, [tool]);
+
+  useEffect(() => {
+    if (grid !== undefined) localViewRef.current?.setGrid(grid);
+  }, [grid]);
 
   return (
     <div

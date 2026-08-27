@@ -81,6 +81,16 @@ export async function scanColorRects(
   const box = await container.boundingBox();
   if (box === null) throw new Error(`container ${containerTestId} not found/visible`);
 
+  // The editors batch canvas redraws into requestAnimationFrame (SS9's
+  // one-repaint-per-frame rule), so the pixels lag a just-committed command by
+  // up to a frame. Two rAFs = "the frame after the one currently scheduled",
+  // which is the first moment the content layer is guaranteed current. Without
+  // this, a scan right after a gesture reads STALE pixels and reports a
+  // committed edit as never having happened.
+  await page.evaluate(
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+  );
+
   const raw = await page.evaluate(
     ({ containerTestId, layerKind, target, tolerance, minArea, excludeBottomCssPx }) => {
       const container = document.querySelector(`[data-testid="${containerTestId}"]`);

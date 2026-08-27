@@ -75,4 +75,61 @@ describe("bootstrapProject", () => {
 
     autosave.dispose();
   });
+
+  // --- SS2's "open -> edit -> save -> reopen", document-REPLACEMENT flavour --
+  //
+  // App.tsx's New and Import both go through `store.replaceDocument`, which
+  // clears the store's dirty flag ("a freshly loaded document matches what is
+  // on disk"). That is true of the FILE it came from and false of this app's
+  // OPFS slot, so these two tests are the round trip nothing else covers:
+  // the document a user imports (or starts fresh) must be the one that comes
+  // back after a reload, in its OWN slot.
+
+  it("persists an IMPORTED document and reopens it, leaving the old slot intact", async () => {
+    const storage = createMemoryProjectStorage();
+    const first = await bootstrapProject(storage);
+    const starterId = first.store.getState().id;
+    first.store.dispatch(createProjectCommands().renameProject("Starter"));
+    await first.autosave.flush();
+
+    const imported = { ...createEmptyProject(), name: "Imported Song" };
+    first.store.replaceDocument(imported);
+    await first.autosave.flush();
+    first.autosave.dispose();
+
+    expect(await storage.read(imported.id)).not.toBeNull();
+
+    const reopened = await bootstrapProject(storage);
+    expect(reopened.loadResult.source).toBe("storage");
+    expect(reopened.store.getState().name).toBe("Imported Song");
+    expect(reopened.store.getState().id).toBe(imported.id);
+    // "One slot per project id" (types/persist.ts): the project that was open
+    // before the import still has its own, unclobbered slot.
+    expect(JSON.parse((await storage.read(starterId)) ?? "{}")).toMatchObject({
+      project: { name: "Starter" },
+    });
+    reopened.autosave.dispose();
+  });
+
+  it("persists a NEW project and reopens it after further edits", async () => {
+    const storage = createMemoryProjectStorage();
+    const first = await bootstrapProject(storage);
+    first.store.replaceDocument(createEmptyProject({ name: "Fresh" }));
+    first.store.dispatch(createProjectCommands().renameProject("Fresh Edited"));
+    await first.autosave.flush();
+    const freshId = first.store.getState().id;
+    first.autosave.dispose();
+
+    const reopened = await bootstrapProject(storage);
+    expect(reopened.store.getState().id).toBe(freshId);
+    expect(reopened.store.getState().name).toBe("Fresh Edited");
+    // ...and the reopened session autosaves back into the SAME slot.
+    reopened.store.dispatch(createProjectCommands().renameProject("Fresh Again"));
+    await reopened.autosave.flush();
+    expect(await storage.list()).toContain(freshId);
+    expect(JSON.parse((await storage.read(freshId)) ?? "{}")).toMatchObject({
+      project: { name: "Fresh Again" },
+    });
+    reopened.autosave.dispose();
+  });
 });

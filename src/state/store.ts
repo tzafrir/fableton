@@ -43,6 +43,11 @@ export interface DocumentStoreOptions {
 
 export interface ReplaceDocumentOptions {
   label?: string | undefined;
+  /** Keep the undo stack across the swap. The replacement is then pushed as
+   *  an entry of its OWN (a whole-document inverse patch), so the first undo
+   *  restores the previous document and the older entries apply to the
+   *  document they were recorded against. Without that entry the stack would
+   *  be patch paths into a document that is no longer there. */
   keepHistory?: boolean | undefined;
   /** Why the document changed; `"load"` (a file/autosave) by default. */
   source?: Extract<ChangeSource, "load" | "replace"> | undefined;
@@ -273,7 +278,16 @@ export function createDocumentStore(
     replaceDocument(project: Project, replaceOptions: ReplaceDocumentOptions = {}): void {
       const previous = state;
       state = normalize(project);
-      if (replaceOptions.keepHistory !== true) {
+      const label = replaceOptions.label ?? "Load Project";
+      const patches: Patch[] = [{ op: "replace", path: [], value: state }];
+      const inverse: Patch[] = [{ op: "replace", path: [], value: previous }];
+      if (replaceOptions.keepHistory === true) {
+        // The kept entries are patch PATHS into the document that just left.
+        // Recording the swap itself as an entry is what keeps them applicable:
+        // the first undo puts the old document back, and only then do the
+        // older inverses run — against the document they were recorded on.
+        pushEntry(label, patches, inverse, null);
+      } else {
         entries = [];
         index = -1;
       }
@@ -281,9 +295,7 @@ export function createDocumentStore(
       // A freshly loaded document matches what is on disk.
       dirty = false;
       const source: ChangeSource = replaceOptions.source ?? "load";
-      const patches: Patch[] = [{ op: "replace", path: [], value: state }];
-      const inverse: Patch[] = [{ op: "replace", path: [], value: previous }];
-      emit({ source, label: replaceOptions.label ?? "Load Project", patches, inverse, doc: state });
+      emit({ source, label, patches, inverse, doc: state });
     },
 
     isDirty(): boolean {
