@@ -169,6 +169,30 @@ describe("gesture engine — DOM binding", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
+  it("prevents the pointerdown default, or the browser cancels every drag", () => {
+    // Regression guard. Chrome answers an un-prevented `pointerdown` on the
+    // editor by starting its OWN gesture (text selection / native drag): it
+    // takes the pointer and fires `pointercancel` right after this handler
+    // returns, so no `pointermove` or `pointerup` ever arrives and no drag
+    // can reach `commit`. jsdom cannot reproduce that behavior, so this test
+    // pins the one thing that prevents it. `setPointerCapture` and
+    // `touch-action: none` do NOT substitute for it.
+    const event = pointerEvent("pointerdown", { clientX: 150, clientY: 60 });
+    ctx.element.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("still focuses the editor on pointerdown, despite preventDefault", () => {
+    // `preventDefault` suppresses the browser's own focus-on-mousedown, so
+    // the binding has to take focus explicitly or the key bindings go dead.
+    let focused = 0;
+    ctx.element.focus = () => {
+      focused += 1;
+    };
+    ctx.element.dispatchEvent(pointerEvent("pointerdown", { clientX: 150, clientY: 60 }));
+    expect(focused).toBe(1);
+  });
+
   it("dispose detaches every listener", () => {
     ctx.engine.dispose();
     ctx.element.dispatchEvent(pointerEvent("pointerdown", { clientX: 150, clientY: 60 }));

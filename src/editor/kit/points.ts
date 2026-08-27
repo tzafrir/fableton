@@ -97,6 +97,7 @@ export function pointerInputOf(
   element: HTMLElement,
   viewport: Viewport,
   event: PointerEvent,
+  clickCount?: number,
 ): PointerInput {
   return {
     pointerId: event.pointerId,
@@ -104,9 +105,77 @@ export function pointerInputOf(
     button: event.button,
     buttons: event.buttons,
     modifiers: modifiersOf(event),
-    clickCount: event.detail === 0 ? 1 : event.detail,
+    clickCount,
     native: event,
   };
+}
+
+// --- click counting ---------------------------------------------------------
+
+// `PointerEvent.detail` CANNOT be used for this. The Pointer Events spec fixes
+// `detail` at 0 on `pointerdown`/`pointerup` — click counting belongs to the
+// `MouseEvent` `click`/`dblclick` family, which the engine deliberately does
+// not listen to (SS9: one FSM over pointer events). Reading `detail` here
+// makes `clickCount` permanently 1, and every double-click verb — SS10's
+// "double-click a clip to open it in the piano roll" chief among them —
+// silently unreachable. So the kit counts clicks itself, from the same
+// timing/proximity rule the platform uses.
+
+/** Two downs further apart than this in time are separate clicks. */
+export const MULTI_CLICK_MS = 500;
+/** ...and so are two downs further apart than this in CSS pixels. */
+export const MULTI_CLICK_SLOP_PX = 5;
+
+export interface ClickCounter {
+  /** Call once per `pointerdown`: returns 1 for a single click, 2 for a
+   *  double, 3 for a triple, and so on. */
+  register(event: PointerEvent): number;
+  /** Forget the streak (e.g. on detach), so the next down counts as 1. */
+  reset(): void;
+}
+
+/**
+ * One counter per bound element. A streak continues only while the downs stay
+ * close in time AND position AND use the same button and pointer type — the
+ * position test is what keeps a fast drag-click-elsewhere from reading as a
+ * double-click.
+ */
+export function createClickCounter(now: () => number = defaultNow): ClickCounter {
+  let count = 0;
+  let lastTime = Number.NEGATIVE_INFINITY;
+  let lastX = 0;
+  let lastY = 0;
+  let lastButton = -1;
+  let lastPointerType: string | undefined;
+
+  return {
+    register(event: PointerEvent): number {
+      const time = now();
+      const continues =
+        time - lastTime <= MULTI_CLICK_MS &&
+        Math.abs(event.clientX - lastX) <= MULTI_CLICK_SLOP_PX &&
+        Math.abs(event.clientY - lastY) <= MULTI_CLICK_SLOP_PX &&
+        event.button === lastButton &&
+        event.pointerType === lastPointerType;
+
+      count = continues ? count + 1 : 1;
+      lastTime = time;
+      lastX = event.clientX;
+      lastY = event.clientY;
+      lastButton = event.button;
+      lastPointerType = event.pointerType;
+      return count;
+    },
+
+    reset(): void {
+      count = 0;
+      lastTime = Number.NEGATIVE_INFINITY;
+    },
+  };
+}
+
+function defaultNow(): number {
+  return typeof performance === "undefined" ? Date.now() : performance.now();
 }
 
 export function wheelInputOf(

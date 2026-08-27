@@ -46,7 +46,13 @@ import type {
 import { DRAG_THRESHOLD_PX } from "../../types/gesture";
 import type { LayerFrame } from "../../types/render";
 import type { Grid, Viewport } from "../../types/viewport";
-import { editorPointOf, keyInputOf, pointerInputOf, wheelInputOf } from "./points";
+import {
+  createClickCounter,
+  editorPointOf,
+  keyInputOf,
+  pointerInputOf,
+  wheelInputOf,
+} from "./points";
 
 /** Cursor when nothing is hovered and no drag is live. */
 export const DEFAULT_CURSOR = "default";
@@ -453,9 +459,27 @@ export function createKitGestureEngine<THit extends HitTarget>(
   let detach = (): void => {};
 
   if (element) {
+    // Click counting is the binding's job, not the event's: see
+    // `createClickCounter` for why `PointerEvent.detail` is unusable here.
+    // Only `pointerdown` advances the streak; the other phases leave
+    // `clickCount` undefined and the FSM carries the gesture's start value.
+    const clicks = createClickCounter();
+
     const onPointerDown = (e: PointerEvent): void => {
+      // MUST come before anything else. Without it Chrome treats the
+      // pointerdown as the start of one of its own default gestures (text
+      // selection / native drag), takes the pointer away from the page and
+      // fires `pointercancel` on this element immediately after the
+      // pointerdown handler returns — no `pointermove`, no `pointerup`, ever.
+      // Every drag in every editor then aborts through `cancel()` a frame
+      // after it starts, so nothing ever commits: SS9's "commits exactly one
+      // command on release" can never be reached. `setPointerCapture` does
+      // NOT prevent this, and neither does `touch-action: none` (that governs
+      // touch scrolling, not the mouse). Focus is taken explicitly below
+      // because `preventDefault` also suppresses the default focus behavior.
+      e.preventDefault();
       element.focus?.();
-      engine.pointerDown(pointerInputOf(element, viewport, e));
+      engine.pointerDown(pointerInputOf(element, viewport, e, clicks.register(e)));
     };
     const onPointerMove = (e: PointerEvent): void => {
       engine.pointerMove(pointerInputOf(element, viewport, e));

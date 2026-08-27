@@ -4,7 +4,7 @@
 // in React, never canvas.
 
 import { useCallback, useRef, type ChangeEvent } from "react";
-import type { AutosaveState, TransportState } from "../../types";
+import type { AutosaveState, ToolMode, TransportState } from "../../types";
 
 export interface ToolbarProps {
   projectName: string;
@@ -24,6 +24,11 @@ export interface ToolbarProps {
   canRedo: boolean;
   redoLabel: string | undefined;
   onRedo: () => void;
+
+  /** SS10's two piano-roll tools. Without a control here, `pencil` — and
+   *  therefore drag-to-create notes — is unreachable in the shipped app. */
+  tool: ToolMode;
+  onToolChange: (tool: ToolMode) => void;
 
   autosaveState: AutosaveState;
   autosaveError: string | null;
@@ -67,6 +72,8 @@ export function Toolbar({
   canRedo,
   redoLabel,
   onRedo,
+  tool,
+  onToolChange,
   autosaveState,
   autosaveError,
   onSaveNow,
@@ -140,6 +147,36 @@ export function Toolbar({
       >
         Redo
       </button>
+
+      <span
+        className="fbl-toolbar-tools"
+        role="radiogroup"
+        aria-label="Piano roll tool"
+        style={{ display: "inline-flex", gap: 4 }}
+      >
+        <button
+          type="button"
+          role="radio"
+          aria-checked={tool === "select"}
+          onClick={() => onToolChange("select")}
+          title="Select tool — marquee and drag"
+          data-testid="tool-select-button"
+          style={{ fontWeight: tool === "select" ? 700 : 400 }}
+        >
+          Select
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={tool === "pencil"}
+          onClick={() => onToolChange("pencil")}
+          title="Pencil tool — drag on empty grid to create notes"
+          data-testid="tool-pencil-button"
+          style={{ fontWeight: tool === "pencil" ? 700 : 400 }}
+        >
+          Pencil
+        </button>
+      </span>
 
       <button type="button" onClick={onNewProject}>
         New

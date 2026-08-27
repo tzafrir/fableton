@@ -46,17 +46,21 @@ export { createEditorHost } from "./host";
 export type { KitEditorHost } from "./host";
 
 export {
+  createClickCounter,
   editorPointOf,
   elementPointOf,
   isApplePlatform,
   keyInputOf,
   modifiers,
   modifiersOf,
+  MULTI_CLICK_MS,
+  MULTI_CLICK_SLOP_PX,
   NO_MODIFIERS,
   pointerInputOf,
   setApplePlatform,
   wheelInputOf,
 } from "./points";
+export type { ClickCounter } from "./points";
 
 // Re-exported so editors import the frozen constants from one place.
 export { DRAG_THRESHOLD_PX } from "../../types/gesture";

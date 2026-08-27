@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { ARR_CLIP_FILL, NOTE_FILL, collectPageErrors, scanColorRects, type ColorRect } from "./editing-helpers";
+import { ARR_CLIP_FILL, NOTE_FILL, collectPageErrors, scanColorRects, scanNotes, type ColorRect } from "./editing-helpers";
 
 // SS13 autosave / SS2 "open -> edit -> save -> reopen" stability, against the
 // REAL OPFS backend (src/app/persistence.ts `createAppProjectStorage`; the
@@ -24,9 +24,9 @@ test("an edit is restored unchanged after Save + full page reload (OPFS)", async
   // confused with the starter phrase's own notes.
   const panelBox = (await page.getByTestId("piano-roll-panel").boundingBox())!;
   const clickPoint = { x: panelBox.x + panelBox.width * 0.85, y: panelBox.y + panelBox.height - 100 };
-  const beforeCreate = await scanColorRects(page, "piano-roll-panel", "content", NOTE_FILL);
+  const beforeCreate = await scanNotes(page, NOTE_FILL);
   await page.mouse.dblclick(clickPoint.x, clickPoint.y);
-  const afterCreate = await scanColorRects(page, "piano-roll-panel", "content", NOTE_FILL);
+  const afterCreate = await scanNotes(page, NOTE_FILL);
   expect(afterCreate.length, "the new note should have been added").toBe(beforeCreate.length + 1);
   const projectName = await page.getByTestId("project-name").textContent();
 
@@ -47,7 +47,7 @@ test("an edit is restored unchanged after Save + full page reload (OPFS)", async
   );
   await expect(page.getByTestId("piano-roll-panel")).toBeVisible();
 
-  const afterReload = await scanColorRects(page, "piano-roll-panel", "content", NOTE_FILL);
+  const afterReload = await scanNotes(page, NOTE_FILL);
   expect(afterReload.length, "the note count after reload must equal the count right before it").toBe(
     afterCreate.length,
   );

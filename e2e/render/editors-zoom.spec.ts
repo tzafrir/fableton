@@ -87,7 +87,7 @@ test.describe("arrangement view", () => {
 });
 
 test.describe("piano roll", () => {
-  test("renders its grid structure at two zoom levels (note content unreachable, see finding)", async ({
+  test("renders its grid structure at two zoom levels", async ({
     page,
   }) => {
     const errors = collectPageErrors(page);

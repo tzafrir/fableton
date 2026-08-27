@@ -38,7 +38,7 @@ export function collectPageErrors(page: Page): PageErrors {
 }
 
 export interface ColorRect {
-  /** CSS px, relative to the panel container's top-left. */
+  /** CSS px, relative to the scanned CANVAS LAYER's top-left. */
   x: number;
   y: number;
   w: number;
@@ -57,22 +57,32 @@ export interface ColorRect {
  * fill drawn over a fully transparent layer keeps the fill's exact RGB (only
  * alpha varies with SS10's velocity-as-opacity), so an exact-ish RGB match
  * is reliable regardless of note velocity.
+ *
+ * `excludeBottomCssPx` trims that many CSS px off the BOTTOM of the layer
+ * before scanning. The piano roll needs it: `theme.velocityStalk` is the same
+ * `#5aa9e6` as `theme.noteFill` and the velocity lane shares the content
+ * layer, so an unbounded note scan counts each note TWICE — once as its body
+ * and once as its velocity stalk — but only while the note is deselected
+ * (a selected note's stalk switches to `velocityStalkSelected`). That makes
+ * the miscount intermittent, and it is a probe artifact, not an app defect.
+ * See `scanNotes`, which applies the right bound for you.
  */
 export async function scanColorRects(
   page: Page,
   containerTestId: string,
   layerKind: "grid" | "content" | "overlay",
   target: readonly [number, number, number],
-  opts: { tolerance?: number; minAreaDevicePx?: number } = {},
+  opts: { tolerance?: number; minAreaDevicePx?: number; excludeBottomCssPx?: number } = {},
 ): Promise<ColorRect[]> {
   const tolerance = opts.tolerance ?? 30;
   const minArea = opts.minAreaDevicePx ?? 12;
+  const excludeBottomCssPx = opts.excludeBottomCssPx ?? 0;
   const container = page.getByTestId(containerTestId);
   const box = await container.boundingBox();
   if (box === null) throw new Error(`container ${containerTestId} not found/visible`);
 
   const raw = await page.evaluate(
-    ({ containerTestId, layerKind, target, tolerance, minArea }) => {
+    ({ containerTestId, layerKind, target, tolerance, minArea, excludeBottomCssPx }) => {
       const container = document.querySelector(`[data-testid="${containerTestId}"]`);
       const canvas = container?.querySelector(`canvas.fbl-layer-${layerKind}`) as HTMLCanvasElement | null;
       if (canvas === null || canvas === undefined) return [];
@@ -82,6 +92,17 @@ export async function scanColorRects(
       if (ctx === null) return [];
       const { width, height } = canvas;
       if (width === 0 || height === 0) return [];
+      // The layer canvas is NOT flush with the panel container: the
+      // arrangement insets its content layers by HEADER_WIDTH_PX(132) /
+      // RULER_HEIGHT_PX(26) for the DOM track-header column and the ruler
+      // (the piano roll happens to inset by 0). Page coordinates must
+      // therefore be measured from the CANVAS, not the container — mapping
+      // from the container aims every arrangement click 132px too far left,
+      // which lands on the header instead of the clip.
+      const originX = rectCss.left;
+      const originY = rectCss.top;
+      // Rows at or below this are not scanned. See `excludeBottomCssPx`.
+      const scanHeight = Math.max(0, height - Math.round(excludeBottomCssPx * dpr));
       const data = ctx.getImageData(0, 0, width, height).data;
       const visited = new Uint8Array(width * height);
       const tol2 = tolerance * tolerance * 3;
@@ -92,10 +113,10 @@ export async function scanColorRects(
         const db = (data[i + 2] as number) - target[2];
         return dr * dr + dg * dg + db * db <= tol2;
       };
-      const out: { x: number; y: number; w: number; h: number }[] = [];
+      const out: { x: number; y: number; w: number; h: number; originX: number; originY: number }[] = [];
       const stackX = new Int32Array(width * height);
       const stackY = new Int32Array(width * height);
-      for (let y = 0; y < height; y++) {
+      for (let y = 0; y < scanHeight; y++) {
         for (let x = 0; x < width; x++) {
           const idx = y * width + x;
           if (visited[idx] === 1) continue;
@@ -126,7 +147,7 @@ export async function scanColorRects(
               [cx, cy - 1],
             ];
             for (const [nx, ny] of nb) {
-              if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+              if (nx < 0 || ny < 0 || nx >= width || ny >= scanHeight) continue;
               const nidx = ny * width + nx;
               if (visited[nidx] === 1) continue;
               visited[nidx] = 1;
@@ -138,24 +159,49 @@ export async function scanColorRects(
             }
           }
           if (count >= minArea) {
-            out.push({ x: minX / dpr, y: minY / dpr, w: (maxX - minX + 1) / dpr, h: (maxY - minY + 1) / dpr });
+            out.push({
+              x: minX / dpr,
+              y: minY / dpr,
+              w: (maxX - minX + 1) / dpr,
+              h: (maxY - minY + 1) / dpr,
+              originX,
+              originY,
+            });
           }
         }
       }
       return out;
     },
-    { containerTestId, layerKind, target, tolerance, minArea },
+    { containerTestId, layerKind, target, tolerance, minArea, excludeBottomCssPx },
   );
 
   return raw
-    .map((r) => ({
+    .map(({ originX, originY, ...r }) => ({
       ...r,
-      pageX: box.x + r.x,
-      pageY: box.y + r.y,
-      pageCenterX: box.x + r.x + r.w / 2,
-      pageCenterY: box.y + r.y + r.h / 2,
+      pageX: originX + r.x,
+      pageY: originY + r.y,
+      pageCenterX: originX + r.x + r.w / 2,
+      pageCenterY: originY + r.y + r.h / 2,
     }))
     .sort((a, b) => a.x - b.x || a.y - b.y);
+}
+
+/** src/editor/pianoroll/layout.ts `VELOCITY_LANE_HEIGHT_PX`. */
+export const VELOCITY_LANE_HEIGHT_PX = 72;
+
+/**
+ * Piano-roll NOTE rects only: `scanColorRects` on the content layer, bounded
+ * to the note area so velocity stalks are not counted as notes (see above).
+ */
+export async function scanNotes(
+  page: Page,
+  target: readonly [number, number, number] = NOTE_FILL,
+  opts: { tolerance?: number; minAreaDevicePx?: number } = {},
+): Promise<ColorRect[]> {
+  return scanColorRects(page, "piano-roll-panel", "content", target, {
+    ...opts,
+    excludeBottomCssPx: VELOCITY_LANE_HEIGHT_PX,
+  });
 }
 
 /** SS10 theme colors this suite matches against (kept local so no src/ import is needed). */

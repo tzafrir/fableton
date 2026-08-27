@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createViewport } from "./viewport";
 import {
+  MULTI_CLICK_MS,
+  MULTI_CLICK_SLOP_PX,
   NO_MODIFIERS,
+  createClickCounter,
   editorPointOf,
   keyInputOf,
   modifiers,
@@ -59,5 +62,95 @@ describe("keyInputOf", () => {
     expect(input.key).toBe("0");
     expect(input.code).toBe("Digit0");
     expect(input.modifiers.primary).toBe(true);
+  });
+});
+
+describe("createClickCounter", () => {
+  // The regression this exists for: `PointerEvent.detail` is fixed at 0 by
+  // the Pointer Events spec, so click count CANNOT be read off the event. It
+  // has to be derived from pointerdown timing and position, and these tests
+  // drive that derivation directly rather than through a hand-built
+  // `PointerInput` — which is exactly the blind spot that let the original
+  // `event.detail` bug pass 1083 unit tests.
+  function down(
+    over: Partial<{ clientX: number; clientY: number; button: number; pointerType: string }> = {},
+  ): PointerEvent {
+    return {
+      clientX: 100,
+      clientY: 100,
+      button: 0,
+      pointerType: "mouse",
+      detail: 0,
+      ...over,
+    } as PointerEvent;
+  }
+
+  /** A counter with a hand-cranked clock, so no test depends on wall time. */
+  function counterAt(): { tick: (ms: number) => void; counter: ReturnType<typeof createClickCounter> } {
+    let t = 1000;
+    const counter = createClickCounter(() => t);
+    return { tick: (ms) => { t += ms; }, counter };
+  }
+
+  it("counts a fast, stationary repeat as 2 then 3", () => {
+    const { tick, counter } = counterAt();
+    expect(counter.register(down())).toBe(1);
+    tick(80);
+    expect(counter.register(down())).toBe(2);
+    tick(80);
+    expect(counter.register(down())).toBe(3);
+  });
+
+  it("never reads `detail` — a `detail: 0` event still reaches 2", () => {
+    const { tick, counter } = counterAt();
+    counter.register(down());
+    tick(50);
+    // Exactly what a real browser sends on `pointerdown`.
+    expect(counter.register({ ...down(), detail: 0 } as PointerEvent)).toBe(2);
+  });
+
+  it("restarts the streak once the downs are too far apart in time", () => {
+    const { tick, counter } = counterAt();
+    counter.register(down());
+    tick(MULTI_CLICK_MS + 1);
+    expect(counter.register(down())).toBe(1);
+  });
+
+  it("restarts the streak once the downs are too far apart in space", () => {
+    const { tick, counter } = counterAt();
+    counter.register(down());
+    tick(20);
+    expect(counter.register(down({ clientX: 100 + MULTI_CLICK_SLOP_PX + 1 }))).toBe(1);
+  });
+
+  it("keeps the streak inside the time and distance tolerances", () => {
+    const { tick, counter } = counterAt();
+    counter.register(down());
+    tick(MULTI_CLICK_MS);
+    expect(
+      counter.register(down({ clientX: 100 + MULTI_CLICK_SLOP_PX, clientY: 100 + MULTI_CLICK_SLOP_PX })),
+    ).toBe(2);
+  });
+
+  it("does not pair a right-click with a preceding left-click", () => {
+    const { tick, counter } = counterAt();
+    counter.register(down({ button: 0 }));
+    tick(20);
+    expect(counter.register(down({ button: 2 }))).toBe(1);
+  });
+
+  it("does not pair a pen tap with a preceding mouse click", () => {
+    const { tick, counter } = counterAt();
+    counter.register(down({ pointerType: "mouse" }));
+    tick(20);
+    expect(counter.register(down({ pointerType: "pen" }))).toBe(1);
+  });
+
+  it("reset() drops the streak", () => {
+    const { tick, counter } = counterAt();
+    counter.register(down());
+    counter.reset();
+    tick(20);
+    expect(counter.register(down())).toBe(1);
   });
 });

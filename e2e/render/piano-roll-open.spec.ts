@@ -1,49 +1,42 @@
 import { expect, test } from "@playwright/test";
 import { bootAudio } from "./helpers";
 
-// FINDING (blocker) — see the workflow's reported findings for the full
-// write-up. This spec exists to make the defect reproducible and to keep it
-// from regressing silently once fixed (at which point the two assertions
-// below should both start passing and this file's framing comment should be
-// updated).
+// REGRESSION GUARD (was an M1 blocker, fixed 2026-08-27).
 //
 // SS10/SS18-M1: double-clicking a clip in the arrangement must open it in
 // the piano roll (src/editor/arrangement/dragMove.ts: `if (info.clickCount
 // >= 2) { ... context.openClip(...) }`), and double-clicking empty piano-roll
 // grid must create a note (src/editor/pianoroll/dragMarquee.ts, same
-// pattern). Both derive `clickCount` from `PointerEvent.detail`
-// (src/editor/kit/points.ts, `pointerInputOf`):
+// pattern).
 //
-//   clickCount: event.detail === 0 ? 1 : event.detail,
+// Both used to derive `clickCount` from `PointerEvent.detail`:
 //
-// This is correct for `MouseEvent` `click`/`dblclick`, where `detail` really
+//   clickCount: event.detail === 0 ? 1 : event.detail,   // WRONG
+//
+// That is correct for `MouseEvent` `click`/`dblclick`, where `detail` really
 // does carry the click count. It is NOT correct for `PointerEvent`
-// `pointerdown`/`pointerup`: real browsers report `detail === 0` on every
-// pointer event regardless of click count (pointer events are not part of
-// the click-counting UIEvent family the way mouse events are). The gesture
-// engine listens for `pointerdown`/`pointerup` exclusively (see
-// `gestureEngine.ts`'s `element.addEventListener("pointerdown", ...)`), so
-// `clickCount` is always computed as 1 in a real browser — `info.clickCount
-// >= 2` can never be true, and double-click is unreachable in the shipped
-// app. The kit's own unit tests never catch this because they hand-construct
-// `PointerInput` objects with `clickCount: 2` directly, bypassing
-// `pointerInputOf`/real `PointerEvent`s entirely (see e.g.
-// `arrangement.test.ts`'s "opens the piano roll on a double-clicked clip").
+// `pointerdown`/`pointerup`: the Pointer Events spec fixes `detail` at 0 on
+// every pointer event regardless of click count. The gesture engine listens
+// for `pointerdown`/`pointerup` exclusively (`gestureEngine.ts`), so
+// `clickCount` was always 1 in a real browser, `info.clickCount >= 2` could
+// never be true, and double-click was unreachable in the shipped app. It
+// passed tsc, all unit tests and the build, because the kit's unit tests
+// hand-construct `PointerInput` objects with `clickCount: 2` directly and so
+// are structurally blind to it.
 //
-// The probe below double-clicks a clip several different ways (Playwright's
-// `dblclick()`, a manual down/up/down/up sequence, and an explicit
-// `clickCount: 2` mouse click) and confirms via TWO independent signals that
-// none of them open the clip:
-//   1. the piano roll's content canvas draws zero note pixels afterward
-//      (it would draw the starter clip's note-fill color, `#5aa9e6`, if any
-//      note were visible);
-//   2. selecting all notes and nudging them (Cmd/Ctrl+A, ArrowRight) leaves
-//      Undo disabled — there is nothing to select because no clip is open,
-//      so the nudge command is never dispatched.
-// A control assertion confirms the native `dblclick` DOM event DOES fire for
-// the same input (`pointerdown.detail` is 0 on every call, `dblclick` fires
-// once) — ruling out "the test's clicks aren't actually a double-click" as
-// the explanation.
+// The fix is `createClickCounter` in src/editor/kit/points.ts: the DOM
+// binding counts clicks itself from pointerdown timing/position, and nothing
+// reads `detail` any more.
+//
+// The two tests below are the outside-in proof, via TWO independent signals:
+//   1. the piano roll's content canvas draws the starter clip's note-fill
+//      pixels (`#5aa9e6`) once the clip is open;
+//   2. selecting all notes and nudging them (Cmd/Ctrl+A, ArrowRight)
+//      dispatches a Move Notes command and enables Undo.
+// The control test pins the ROOT CAUSE in place: it asserts that
+// `pointerdown.detail` really is 0 on every call in a real browser (so nobody
+// reintroduces the old expression) while the native `dblclick` DOM event
+// does fire for the same input.
 
 async function openStarterClipByDoubleClick(page: import("@playwright/test").Page): Promise<void> {
   const arrangement = page.getByTestId("arrangement-panel");
@@ -79,7 +72,7 @@ async function contentLayerHasNoteFillPixels(page: import("@playwright/test").Pa
   });
 }
 
-test("control: a real double-click fires a native dblclick event (rules out a test-technique gap)", async ({
+test("control: pointerdown.detail is 0 in a real browser, even for a native double-click", async ({
   page,
 }) => {
   // Must be an init script, not a post-navigation `page.evaluate`: the app
@@ -116,7 +109,7 @@ test("control: a real double-click fires a native dblclick event (rules out a te
   ).toBe(true);
 });
 
-test("BLOCKER: double-clicking a clip does not open it in the piano roll", async ({ page }) => {
+test("double-clicking a clip opens it in the piano roll", async ({ page }) => {
   await page.goto("/");
   await bootAudio(page);
 

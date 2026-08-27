@@ -25,6 +25,7 @@ import type {
   ProjectStorage,
   ArrangementView,
   Ticks,
+  ToolMode,
   TransportState,
 } from "../types";
 import { createProjectEngine, type AppProjectEngine } from "./engine";
@@ -68,6 +69,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
 
   // --- which clip the piano roll shows ---
   const [openClipId, setOpenClipId] = useState<ClipId | null>(null);
+  const [tool, setTool] = useState<ToolMode>("select");
 
   const arrangementViewRef = useRef<ArrangementView | null>(null);
   const pianoRollViewRef = useRef<PianoRollView | null>(null);
@@ -320,6 +322,8 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
         canRedo={store.canRedo()}
         redoLabel={store.redoLabel()}
         onRedo={handleRedo}
+        tool={tool}
+        onToolChange={setTool}
         autosaveState={autosaveState}
         autosaveError={autosaveError}
         onSaveNow={handleSaveNow}
@@ -343,6 +347,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
             store={store}
             commands={projectCommands}
             clipId={openClipId}
+            tool={tool}
             onSeek={handleSeek}
             audition={auditionProxyRef.current}
             viewRef={pianoRollViewRef}

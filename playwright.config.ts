@@ -17,6 +17,11 @@ const BASE_URL = `http://localhost:${PORT}`;
 //   `--mode e2e` (`npm run build:e2e`): same production build, but the mode
 //   flag is what enables the `window.__fabletonDemo` test bridge in
 //   src/main.tsx, which must not exist in the shipped bundle.
+//   `build:e2e` deliberately does NOT typecheck (unlike `build`, the release
+//   script): tsconfig's `include` covers `e2e` too, so a type error in any
+//   spec being iterated on would otherwise take down the whole harness rather
+//   than failing that one spec. Typechecking is `npm run typecheck`, and the
+//   release build still gates on it.
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
@@ -50,11 +55,9 @@ export default defineConfig({
     // `strictPort` a leftover server fails loudly rather than passing wrongly.
     reuseExistingServer: false,
     timeout: 180_000,
-    // `npm run build` typechecks the whole repo first (package.json), so a tsc
-    // error anywhere — including in an e2e spec being iterated on — kills the
-    // server. Without these, Playwright reports only "Process from
-    // config.webServer was not able to start. Exit code: 2" and the actual
-    // error is invisible unless you know to set DEBUG=pw:webserver.
+    // Without these, a failed build leaves Playwright reporting only "Process
+    // from config.webServer was not able to start. Exit code: 2" and the
+    // actual error is invisible unless you know to set DEBUG=pw:webserver.
     stdout: "pipe",
     stderr: "pipe",
   },
