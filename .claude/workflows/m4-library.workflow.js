@@ -18,7 +18,7 @@
  * seeds its findings into adversarial review round 1; the gate re-runs it.
  *
  * Run standalone:
- *   Workflow({ scriptPath: '/workspaces/fableton/.claude/workflows/m4-library.workflow.js',
+ *   Workflow({ scriptPath: '/workspace/fableton/.claude/workflows/m4-library.workflow.js',
  *              args: { reviewRounds: 3 } })
  * Resume:  Workflow({ scriptPath: <same>, resumeFromRunId: '<runId>' })
  * Normally invoked by daw-build.workflow.js via workflow(); this script must
@@ -55,7 +55,7 @@ const M = { code: 'sonnet', smart: 'opus', gate: 'opus' };
 
 const MILESTONE = 'M4';
 const TITLE = 'Library & finish';
-const ROOT = '/workspaces/fableton';
+const ROOT = '/workspace/fableton';
 const PLAN = ROOT + '/docs/PLAN.md';
 const CRITIC_SECTIONS = 'SS7 (versioning/swap), SS12 (Export), SS13 (persistence), SS14, SS15 (testing), SS18-M4';
 

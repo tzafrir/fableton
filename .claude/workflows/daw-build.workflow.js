@@ -30,7 +30,7 @@
  * RMS / OfflineAudioContext renders), never assumed.
  *
  * Run:
- *   Workflow({ scriptPath: '/workspaces/fableton/.claude/workflows/daw-build.workflow.js',
+ *   Workflow({ scriptPath: '/workspace/fableton/.claude/workflows/daw-build.workflow.js',
  *              args: { milestones: ['M0','M1','M2','M3','M4'], reviewRounds: 3 } })
  * Resume:
  *   Workflow({ scriptPath: <same>, resumeFromRunId: '<runId>' })
@@ -73,7 +73,7 @@ const KNOBS = {
 };
 const STOP_ON_FAIL = A.stopOnFail ?? true;
 
-const WF = '/workspaces/fableton/.claude/workflows';
+const WF = '/workspace/fableton/.claude/workflows';
 const CANON = [
   { id: 'M0', phase: 'M0 — The spine',       script: WF + '/m0-spine.workflow.js',         deps: [] },
   { id: 'M1', phase: 'M1 — Editors',          script: WF + '/m1-editors.workflow.js',       deps: ['M0'] },
@@ -88,10 +88,10 @@ const pre = await agent(
   [
     'Preflight for the Fableton DAW build workflow. Do NOT write or modify any file.',
     'Check and report:',
-    '  1. /workspaces/fableton/docs/PLAN.md exists and is readable.',
-    '  2. `git -C /workspaces/fableton status --porcelain` (is the tree clean?) and `git -C /workspaces/fableton log --oneline -3`.',
+    '  1. /workspace/fableton/docs/PLAN.md exists and is readable.',
+    '  2. `git -C /workspace/fableton status --porcelain` (is the tree clean?) and `git -C /workspace/fableton log --oneline -3`.',
     '  3. `node --version` and `npm --version` work.',
-    '  4. Whether /workspaces/fableton already has package.json, vite.config.*, or src/ (evidence of prior milestone runs) — list what exists.',
+    '  4. Whether /workspace/fableton already has package.json, vite.config.*, or src/ (evidence of prior milestone runs) — list what exists.',
     'Return ok=true only if PLAN.md exists and node+npm are available.',
   ].join('\n'),
   {
@@ -157,7 +157,7 @@ for (const m of CANON) {
 // ------------------------------------------------------------------- rollup
 phase('Rollup');
 const rollup = {
-  plan: '/workspaces/fableton/docs/PLAN.md (rev 1)',
+  plan: '/workspace/fableton/docs/PLAN.md (rev 1)',
   requested: CANON.filter((m) => selected.has(m.id)).map((m) => m.id),
   verdicts,
   allPassed: verdicts.length > 0 && verdicts.every((v) => v.pass) && !halted,

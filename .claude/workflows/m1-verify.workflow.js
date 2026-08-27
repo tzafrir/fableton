@@ -1,25 +1,22 @@
 /*
- * m0-spine.workflow.js — Milestone M0 "The spine" (docs/PLAN.md §18-M0).
- * Scaffold (Vite + TS strict + Vitest, worklets as separate entry points),
- * AudioContext boot/unlock, ParamRegistry (§4), device harness + poly synth +
- * filter (§7/§14), transport + look-ahead scheduler with 25ms worker clock (§12),
- * a hard-coded clip audible through a hard-coded chain.
+ * m1-verify.workflow.js — Milestone M1 "Editors", VERIFICATION PHASES ONLY.
  *
- * MODEL POLICY: sonnet = mechanical implementation (scaffold, boilerplate,
- * template devices, demo wiring, polish); opus = load-bearing seams (§4 registry,
- * §12 scheduler, §7/§14 device harness), contracts, integration, and ALL
- * adversarial review + fix iterations; a FRESH opus verifier = final acceptance gate ONLY, after
- * the opus loop converges. See const M below — used on every agent() call.
+ * Derived from m1-editors.workflow.js by removing Contracts, both
+ * implementation waves and Integration: those are already on disk and must not
+ * be churned. Everything from Browser verification onward is byte-identical to
+ * the full script, so the bar is unchanged.
  *
- * Browser verification: a Playwright phase (sonnet) runs after integration and
- * seeds its findings into adversarial review round 1; the gate re-runs it.
+ * Context this run starts from (2026-08-27): M1 was implemented and integrated,
+ * then four interaction blockers were fixed by hand and committed (269cc44) —
+ * `PointerEvent.detail`-derived clickCount, a missing pointerdown
+ * preventDefault that let the browser cancel EVERY drag, a missing pencil-mode
+ * control, and an e2e build coupled to a repo-wide typecheck. Three bugs in the
+ * e2e probes themselves were fixed too. Tree state at launch: tsc clean,
+ * 1093 unit tests green, vite build green, playwright 36 passed / 1 skipped.
  *
- * Run standalone:
- *   Workflow({ scriptPath: '/workspace/fableton/.claude/workflows/m0-spine.workflow.js',
- *              args: { reviewRounds: 3 } })
- * Resume:  Workflow({ scriptPath: <same>, resumeFromRunId: '<runId>' })
- * Normally invoked by daw-build.workflow.js via workflow(); this script must
- * NEVER call workflow() itself (single nesting level).
+ * Run:
+ *   Workflow({ scriptPath: '/workspace/fableton/.claude/workflows/m1-verify.workflow.js',
+ *              args: { reviewRounds: 6, cleanRoundsRequired: 2, gateRetries: 2 } })
  *
  * Args: reviewRounds (3), cleanRoundsRequired (1), gateRetries (1),
  *       budgetReserve (0), commitOnPass (true), maxFindingsPerFix (30).
@@ -28,14 +25,9 @@
  */
 
 export const meta = {
-  name: 'daw-m0-spine',
-  description: 'M0 The spine: scaffold, ParamRegistry, device harness + first devices, transport/scheduler, audible hard-coded clip. Ends in an independent opus acceptance gate.',
+  name: 'daw-m1-verify',
+  description: 'M1 Editors, verification only: browser probes, adversarial review, completeness critic, independent opus acceptance gate. Implementation is already on disk and is not rebuilt.',
   phases: [
-    { title: 'Scaffold', model: 'sonnet' },
-    { title: 'Contracts', model: 'opus' },
-    { title: 'Implement: foundation' },
-    { title: 'Implement: engine & demo' },
-    { title: 'Integration', model: 'opus' },
     { title: 'Browser verification', model: 'sonnet' },
     { title: 'Adversarial review' },
     { title: 'Completeness critic', model: 'opus' },
@@ -50,11 +42,11 @@ export const meta = {
 // implements, and it runs only after the opus review/fix loop has converged.
 const M = { code: 'sonnet', smart: 'opus', gate: 'opus' };
 
-const MILESTONE = 'M0';
-const TITLE = 'The spine';
+const MILESTONE = 'M1';
+const TITLE = 'Editors';
 const ROOT = '/workspace/fableton';
 const PLAN = ROOT + '/docs/PLAN.md';
-const CRITIC_SECTIONS = 'SS3, SS4, SS7, SS8, SS12, SS14, SS15 (stack + testing), SS18-M0';
+const CRITIC_SECTIONS = 'SS3, SS9, SS10, SS13, SS15 (testing), SS18-M1';
 
 const A = args || {};
 const REVIEW_ROUNDS = A.reviewRounds ?? 3;
@@ -65,10 +57,9 @@ const COMMIT_ON_PASS = A.commitOnPass ?? true;
 const MAX_FIX = A.maxFindingsPerFix ?? 30;
 
 const PH = {
-  scaffold: 'Scaffold',
   contracts: 'Contracts',
-  wave1: 'Implement: foundation',
-  wave2: 'Implement: engine & demo',
+  wave1: 'Implement: kit & state',
+  wave2: 'Implement: editors & shell',
   integration: 'Integration',
   browser: 'Browser verification',
   review: 'Adversarial review',
@@ -78,7 +69,7 @@ const PH = {
 };
 
 function budgetAllows() {
-  if (!budget.total) return true; // unset budget: rely on round caps only
+  if (!budget.total) return true;
   return budget.remaining() > RESERVE;
 }
 
@@ -149,43 +140,37 @@ const CONTRACT_SCHEMA = {
   },
 };
 
-// ---- work packages (model assignment is the POLICY, stated per package) ----
-// own: exclusive write paths (directory prefixes). Disjoint by construction;
-// the contracts agent may grant extras, validated for overlap below.
+// ---- work packages ---------------------------------------------------------
 const WAVE1 = [
-  { id: 'param-registry', model: M.smart, effort: 'high', own: ['src/params/'],
-    sections: 'SS4 (all of it), SS5 (the handle-facing parts), SS3 (the two write paths)',
-    brief: 'THE load-bearing seam. ParamRegistry mapping hierarchical ParamId paths to ParamHandle; ParamDescriptor with tapers (linear/log/pow), real-unit value semantics with clamping on load; ParamHandle with base()/live()/setLive(source)/commit(), bindAudioParam (fast path A) and bindMessage (fast path B), onChange coalesced to rAF; free/automated/overridden state kept in the registry (never in the document). Enforce the SS4 design rule: nothing ever exposes a raw AudioParam past a handle.' },
-  { id: 'time-model', model: M.code, own: ['src/time/'],
-    sections: 'SS8',
-    brief: 'Integer Ticks at 960 PPQ (validate integrality in dev), TempoMap as (tick,bpm) segments with piecewise tick<->seconds integration; v1 ships a single fixed-tempo segment but every API takes the map. Include exhaustive unit tests for conversion and grid math.' },
-  { id: 'audio-boot', model: M.code, own: ['src/engine/context/'],
-    sections: 'SS12 (guardrails), SS2 (platform)',
-    brief: 'AudioContext creation with latencyHint "interactive"; unlock/resume on first user gesture (Safari guardrail); AudioWorklet module loading helper that works with Vite worklet entry points in dev and build; expose a boot function returning a ready BaseAudioContext.' },
+  { id: 'canvas-kit', model: M.smart, effort: 'high', own: ['src/editor/kit/'],
+    sections: 'SS9 (all of it), SS2 (60fps/2000-note budget)',
+    brief: 'THE load-bearing editor seam. Viewport (pxPerTick/scrollTicks/pxPerRow/scrollRows, xOf/tAt/yOf/rowAt, zoomAt keeping time under cursor fixed); uniform wheel bindings (wheel=vertical, Shift+wheel=horizontal, Ctrl/Cmd+wheel and pinch=zoom-to-cursor); four-layer rendering stack (grid/content/overlay/DOM playhead) with dirty flags on rAF, devicePixelRatio-aware, half-pixel-aligned lines; binary-search culling over start-tick-sorted content; the shared gesture FSM engine (pointer capture, promotion threshold, ghost previews in overlay, exactly one command on release, Esc aborts with zero document traffic) with editor-registered hit-testers and drag handlers. Unit-test the FSM engine and Viewport math headlessly with synthetic pointer sequences (SS15).' },
+  { id: 'command-undo', model: M.smart, effort: 'high', own: ['src/state/'],
+    sections: 'SS13, SS3 (document path), SS6/SS10 (document shapes needed now)',
+    brief: 'THE state seam. Project document store: plain serializable data; Command interface with immer-draft run(); dispatch producing {patches, inverse}; history push with undo/redo; patch-stream subscription so editors/reconciler get targeted diffs; selection/viewport/meters kept OUTSIDE the document (ephemeral, Zustand per SS15). Define the v1 project document: channels (track role only for now), MidiClips with Notes (SS10 data model), plus what M0 needs to play from the document instead of a hard-coded clip. Round-trip unit tests: patches invert exactly.' },
+  { id: 'persistence', model: M.code, own: ['src/persist/'],
+    sections: 'SS13 (persistence), SS2',
+    brief: 'Versioned JSON project files: schemaVersion + ordered-migrations scaffold (v1 has one migration slot, the discipline matters); OPFS autosave debounced ~2s; explicit export/import of .json; open->edit->save->reopen byte-stable-except-edits test with an in-memory OPFS stub for headless testing.' },
 ];
 const WAVE2 = [
-  { id: 'device-harness', model: M.smart, effort: 'high', own: ['src/devices/harness/'],
-    sections: 'SS7, SS14',
-    brief: 'DeviceDefinition/DeviceInstance plumbing: create() lifecycle against BaseAudioContext, port wiring (audioIn/audioOut incl. optional sc), connectParam binding local param ids to ParamHandles (AudioParam or message path), deviceInstance() convenience from the SS14 example (audioParams / gainParams / dispose with ramp-out), p.* descriptor factories (p.db, p.hz, p.ms, p.pct, p.st, p.enum) with consistent tapers and toText/fromText, device registry with register/lookup and version field.' },
-  { id: 'scheduler-transport', model: M.smart, effort: 'high', own: ['src/engine/transport/', 'src/workers/'],
-    sections: 'SS12, SS8, SS3',
-    brief: 'Two-clock design: dedicated Worker posting a tick every 25ms; engine schedules to horizon = ctx.currentTime + 0.20 on each tick; event iterator walks clips in tick order unrolling clip loops and the transport loop brace; noteOn/noteOff with exact context timestamps; transport states stopped/playing(/recording flag); stop sends allNotesOff(now+epsilon); zero allocation in per-tick paths (preallocated event objects). Written against BaseAudioContext so the same engine drives OfflineAudioContext export later.' },
-  { id: 'device-defs', model: M.code, own: ['src/devices/core/', 'src/worklets/'],
-    sections: 'SS7, SS14, SS18-M0',
-    brief: 'Two concrete DeviceDefinitions built on the harness + p.* factories: (1) a polyphonic synth instrument — AudioWorkletProcessor or node-per-voice graph, voice allocator behind noteOn/noteOff/allNotesOff, a handful of params (osc shape, cutoff-ish tone, ADSR, gain); (2) a filter audio effect (BiquadFilterNode: type enum, cutoff log-taper Hz, resonance). Worklet files go in src/worklets/ as separate Vite entry points.' },
-  { id: 'demo-app', model: M.code, own: ['src/app/', 'src/demo/'],
-    sections: 'SS18-M0, SS3',
-    brief: 'Minimal React chrome (chrome only, per SS15): a boot/unlock button, play/stop transport buttons; a hard-coded MidiClip (a short musical phrase) played through a hard-coded chain synth -> filter -> destination, audible in the browser. Also a headless integration test: render the same clip through the same chain on an OfflineAudioContext and assert the buffer is non-silent (SS15 testing strategy).' },
+  { id: 'piano-roll', model: M.smart, effort: 'high', own: ['src/editor/pianoroll/'],
+    sections: 'SS10 (every table, verbatim), SS9, SS8',
+    brief: 'The heart of the app, as a kit skin. Hit zones incl. min(6px, 40% of width) edges and the velocity lane stalks; the FULL gesture FSM table (Idle/Pending/DragMove/DragResizeL-R/DragDup/Marquee/DragVel/Paint) with per-row on-move/on-release/Esc semantics; the FULL keyboard map (transpose, octave, grid moves, fine nudge, lengthen/shorten, duplicate, select-all, delete, mute, quantize, Esc) driving the same commands as the mouse; snapping: adaptive grid with fixed override + triplet toggle, RELATIVE moves preserving off-grid offsets, absolute snap only on create, Alt bypasses snap, resize snaps the moving edge only; audition notes on pitch change during drag. Exhaustive FSM unit tests from synthetic pointer sequences (SS15).' },
+  { id: 'arrangement', model: M.smart, own: ['src/editor/arrangement/'],
+    sections: 'SS18-M1, SS9, SS10 (clip model)',
+    brief: 'Arrangement lanes as a kit skin: one row per track; clip create/move/trim/split/loop as FSM verbs, each drag = ghost preview + exactly one command; clip loop brace editing; time ruler formatting bar.beat.tick via the TempoMap (SS8); double-click clip opens the piano roll on it. FSM unit tests with synthetic pointer sequences.' },
+  { id: 'app-shell-m1', model: M.code, own: ['src/app/'],
+    sections: 'SS18-M1, SS15 (React chrome only), SS3',
+    brief: 'React chrome wiring the milestone together: arrangement view hosting canvas editors as opaque components with an imperative bridge; piano roll panel; transport bar (play/stop from M0); global undo/redo (Cmd/Ctrl+Z / Shift+Z) through the command bus; save/load/export-import UI hitting the persistence package. No editor logic in React.' },
 ];
 const ALL_PKGS = WAVE1.concat(WAVE2);
 
 // ---- prompt builders -------------------------------------------------------
-// NOTE: 'SS' is used for the section sign in prompts; agents are told it means the section symbol in PLAN.md.
 const SECTION_NOTE = 'Notation: "SSn" below means section n (the sign used as section marker) of ' + PLAN + '.';
 
 function implPrompt(pkg, ownedPaths, contracts, siblingIds, retryNote) {
   return [
-    'Implement work package "' + pkg.id + '" for milestone ' + MILESTONE + ' ("' + TITLE + '") of the Fableton browser DAW. Repo: ' + ROOT + ' (greenfield).',
+    'Implement work package "' + pkg.id + '" for milestone ' + MILESTONE + ' ("' + TITLE + '") of the Fableton browser DAW. Repo: ' + ROOT + ' (M0 spine already in the tree — build on it, do not rewrite it).',
     SECTION_NOTE,
     '',
     'SPEC: Read ' + PLAN + ' — at minimum ' + pkg.sections + ' — before writing code. In your summary, cite each PLAN section you implemented (fill planSectionsCited).',
@@ -194,7 +179,7 @@ function implPrompt(pkg, ownedPaths, contracts, siblingIds, retryNote) {
     '',
     'SHARED CONTRACTS: conform to the frozen interface files: ' + ((contracts.interfaceFiles || []).join(', ') || '(none listed)') + '. Do NOT modify them. If a contract is wrong or missing, implement against it anyway and flag the problem in your summary. Contract author notes: ' + (contracts.notes || '(none)'),
     '',
-    'FILE OWNERSHIP (STRICT — other agents are writing in parallel): create/edit files ONLY under: ' + ownedPaths.join(', ') + '. Read anything you like. Do not touch shared config or create barrel files outside your paths; the integration agent wires packages together afterwards.',
+    'FILE OWNERSHIP (STRICT — other agents are writing in parallel): create/edit files ONLY under: ' + ownedPaths.join(', ') + '. Read anything you like. Do not touch shared config or files owned by other packages; the integration agent wires packages together afterwards.',
     'Do not import from sibling packages being written concurrently in this wave (' + siblingIds.filter((s) => s !== pkg.id).join(', ') + '); import only from the contract files and from code already on disk when you start.',
     '',
     'QUALITY: TypeScript strict must stay clean for your files. Write headless Vitest unit tests for the load-bearing logic (no browser), per PLAN SS15.',
@@ -210,7 +195,7 @@ function reviewPrompt(lens, round) {
     'Your job is to REFUTE the claim that this milestone is correctly and completely implemented, strictly through this lens:',
     lens.charter,
     SECTION_NOTE,
-    'Ground truth: ' + PLAN + ' (' + lens.sections + '). Inspect the code and tests under ' + ROOT + '; run `npx tsc --noEmit`, `npx vitest run`, or small targeted scripts if that helps you substantiate a defect. Do NOT fix anything and do NOT write files (throwaway probe scripts in the scratchpad are fine).',
+    'Ground truth: ' + PLAN + ' (' + lens.sections + '). Inspect the code and tests under ' + ROOT + '; run `npx tsc --noEmit`, `npx vitest run`, or small targeted scripts if that helps you substantiate a defect. Do NOT fix anything and do NOT write project files (throwaway probe scripts in the scratchpad are fine).',
     'Report ONLY defects you can substantiate (file + concrete explanation; name the violated PLAN section in planSection). Severity: blocker = milestone acceptance fails; major = spec violation or real bug; minor = polish. Return verdict "clean" only if you actively hunted through this lens and found nothing at blocker/major level.',
   ].join('\n');
 }
@@ -239,22 +224,25 @@ function criticPrompt(recheck) {
     'COMPLETENESS CRITIC for milestone ' + MILESTONE + ' ("' + TITLE + '")' + (recheck ? ' — RE-CHECK after gap fixes: report only what is STILL missing.' : '.'),
     SECTION_NOTE,
     'Read ' + PLAN + ' (' + CRITIC_SECTIONS + '), then sweep the code and tests in ' + ROOT + '.',
-    'Answer one question exhaustively: what in this milestone\'s spec scope is unimplemented, stubbed, TODO-ed, silently simplified, or untested? Include acceptance-relevant behavior that exists but has no test.',
+    'Answer one question exhaustively: what in this milestone\'s spec scope is unimplemented, stubbed, TODO-ed, silently simplified, or untested? Every row of the SS10 FSM table and keyboard map counts individually. Include acceptance-relevant behavior that exists but has no test.',
     'Do NOT fix anything. Severity: blocker = the milestone cannot pass its acceptance gate; major = in-scope spec item missing or untested; minor = polish.',
   ].join('\n');
 }
 
 const BROWSER_CHECKS = {
   render: [
-    'App loads at the preview URL with ZERO console errors, zero uncaught exceptions, zero failed asset requests.',
-    'The boot/unlock control is present and labeled; screenshot the initial state.',
-    'The PRODUCTION build actually serves the AudioWorklet module: the worklet chunk request returns 200, not 404 (SS15 calls worklet bundling the only nonstandard bit -- prove it in the built output, not just dev).',
+    'Arrangement view and piano roll both render; screenshot each at two zoom levels.',
+    'Canvases are sized for devicePixelRatio: assert canvas.width === cssWidth * dpr (SS9) and that grid lines are not blurry.',
+    'The playhead is a DOM element moved via transform (SS9): assert the element exists and its transform changes during playback while the content canvas is NOT redrawn every frame.',
   ],
   interaction: [
-    'Click unlock -> AudioContext.state becomes \'running\' (read it via page.evaluate).',
-    'Click play -> audio is REALLY produced: tap the graph in-page with an AnalyserNode (or render the same clip through an OfflineAudioContext inside the page) and assert non-zero RMS with energy at the expected note times.',
-    'Click stop -> transport stops and RMS decays to silence within ~200ms (SS12 allNotesOff; no stuck notes).',
-    'No console errors or unhandled rejections across the whole boot->play->stop flow.',
+    'Create a clip and notes; drag a note body -> moves by the snapped delta; drag a left/right edge -> resizes with the ANCHORED edge fixed (SS10); Alt+drag -> duplicates.',
+    'Marquee-drag on empty grid selects exactly the intersecting notes.',
+    'Esc mid-drag reverts the gesture and adds NO undo entry (SS9/SS10).',
+    'One gesture == exactly one undo entry: perform a drag, then Ctrl/Cmd+Z restores the prior state exactly, redo reapplies (SS13).',
+    'Keyboard map (SS10): arrows transpose/move, Shift+arrows octave/fine, Cmd/Ctrl+D duplicate, Delete, Cmd/Ctrl+U quantize.',
+    'Ctrl/Cmd+wheel zoom keeps the tick under the cursor fixed (SS9 zoomAt) -- measure it, do not eyeball it.',
+    'Save, reload the page, and confirm the project restores from OPFS unchanged (SS13 autosave; SS2 open->edit->save->reopen stability).',
   ],
 };
 // Playwright + chromium are ALREADY INSTALLED on this machine (global npm package
@@ -266,6 +254,7 @@ function browserPrompt(probe) {
     'Playwright and the chromium browser binaries are ALREADY INSTALLED on this machine — do NOT run `npx playwright install` and do NOT re-download browsers.',
     'VERIFIED ENVIRONMENT (already smoke-tested on this machine — rely on it, do not re-litigate it): OfflineAudioContext renders real samples headlessly (a 440Hz sine gives RMS ~0.5); a live AudioContext reaches state \'running\' with --autoplay-policy=no-user-gesture-required; AudioWorkletNode exists; serving with COOP: same-origin + COEP: require-corp makes crossOriginIsolated true and SharedArrayBuffer available; browser contexts created with deviceScaleFactor: 2 report devicePixelRatio 2, which is how you test DPR-correct canvas sizing.',
     'Install @playwright/test into the project (`npm i -D @playwright/test`) if package.json lacks it — the browser binaries are already in the cache, so this is fast and needs no download.',
+    'STATE OF THE SUITE ON DISK (facts, not conclusions — verify them): e2e/ already holds a spec suite from an earlier run of this milestone, and as of commit 269cc44 `npx playwright test` reports 36 passed / 1 skipped / 0 failed. The 1 skip is a deliberate `test.fixme` in e2e/interaction/param-control.spec.ts waiting on M2. RUN THE EXISTING SUITE FIRST and report what you actually observe. You may extend or repair specs in your owned paths, but do not delete or rewrite existing coverage without saying why in a finding — four app defects and three probe defects were just fixed against these specs, and the probe helpers (e2e/interaction/editing-helpers.ts) encode two non-obvious facts: canvas layers are inset from their panel container (the arrangement by 132/26), and theme.velocityStalk is the same color as theme.noteFill on the same layer. Your job is the CHECKS BELOW, whatever the existing suite does or does not cover.',
     'HARNESS: playwright.config.ts and the e2e/ tree were created during M0 scaffold. If playwright.config.ts is missing or broken, ' + (probe.id === 'render' ? 'YOU (and only the render probe) may create/repair it, and must also report the gap as a finding.' : 'do NOT create it — report a blocker finding and work with what exists.'),
     'FILE OWNERSHIP (STRICT — the other probe runs concurrently): write ONLY under ' + probe.own + (probe.id === 'render' ? ' (plus playwright.config.ts if it is absent)' : '') + ', and save screenshots under .playwright/screenshots/' + MILESTONE + '/' + probe.id + '/. Never edit anything under src/ — you are a VERIFIER, not a fixer; defects go in findings[].',
     'SERVE THE APP: run against a PRODUCTION build preview (`npx vite build` then `npx vite preview`), because that is what proves worklet/worker bundling really works. Use the dev server additionally only if a check needs it. Launch chromium with --autoplay-policy=no-user-gesture-required so audio can start headlessly; still exercise the real unlock gesture where the app requires one.',
@@ -281,12 +270,12 @@ function browserPrompt(probe) {
 
 const GATE_CHECKLIST = [
   'Toolchain health from ' + ROOT + ': `npx tsc --noEmit` clean, `npx vitest run` green, `npx vite build` succeeds.',
-  'Vite + TypeScript strict + Vitest scaffold with AudioWorklet files bundled as separate entry points (SS15): verify a worklet module actually resolves in the build output, not just in dev.',
-  'AudioContext boot with latencyHint "interactive" and unlock/resume on first user gesture (SS12 guardrails).',
-  'ParamRegistry per SS4: hierarchical string ParamIds, descriptors with tapers, REAL-UNIT values (not normalized) with clamp-on-load, ParamHandle base/live/setLive/commit, bindAudioParam AND bindMessage; grep to confirm no raw AudioParam or setter is exposed past a handle (SS4 design rule).',
-  'One polyphonic synth instrument and one filter effect registered as DeviceDefinitions built on the harness and p.* factories (SS7, SS14), with voice allocation behind noteOn/noteOff/allNotesOff.',
-  'Transport + look-ahead scheduler per SS12: 25ms clock in a dedicated Worker, ~200ms horizon, events timestamped with context time, allNotesOff on stop, tick<->seconds only via the TempoMap (SS8: integer ticks at 960 PPQ).',
-  'End-to-end audible spine: a hard-coded MIDI clip plays through the hard-coded synth->filter chain. Verify via the headless OfflineAudioContext integration test (render + assert non-silent buffer with energy at expected note times) AND by inspecting the demo app wiring.',
+  'Canvas editor kit per SS9: Viewport transform with zoomAt keeping the time under the cursor fixed; four layers with the overlay as the ONLY layer redrawing during a gesture; DOM playhead via transform; binary-search culling; devicePixelRatio rendering.',
+  'Arrangement lanes: clip create/move/trim/split/loop all work as ghost-previewed drags committing exactly one command each (SS18-M1).',
+  'Piano roll per SS10 IN FULL: hit zones incl. min(6px,40%) edges and velocity stalks; every FSM table row incl. Esc semantics; every keyboard-map row driving the same commands as the mouse; snapping (relative moves preserving off-grid offsets, absolute snap on create only, Alt bypass, resize snaps moving edge only, triplet toggle).',
+  'Undo everywhere per SS13: one gesture = one undo entry (verify for a drag, a keyboard nudge, and a clip edit); Esc mid-drag reverts with zero document traffic; inverse patches restore exact prior state; marquee selection is NOT undoable; selection/viewport never enter history.',
+  'Persistence per SS13: schemaVersion in saved JSON; OPFS autosave debounced ~2s; export/import .json; open->edit->save->reopen byte-stable except the edits (run the round-trip test).',
+  'The kit FSM and piano-roll FSM have headless unit tests fed by synthetic pointer-event sequences (SS15).',
   'Browser evidence (Playwright and chromium are preinstalled — do not reinstall): re-run `npx playwright test` yourself from ' + ROOT + ' against a PRODUCTION build preview and confirm it is green. Then OPEN the screenshots under .playwright/screenshots/' + MILESTONE + '/ and confirm they show the real UI rendered — a green test over a blank or unmounted page is a FAIL, not a pass.',
   'Zero console errors, unhandled rejections, or failed asset requests during the e2e flows; audio behavior verified numerically in-page (AnalyserNode RMS or an OfflineAudioContext render), never assumed.',
 ];
@@ -296,7 +285,7 @@ function gatePrompt(openItems, attempt) {
     'FINAL ACCEPTANCE GATE for milestone ' + MILESTONE + ' ("' + TITLE + '") of the Fableton DAW — attempt ' + attempt + '. You are a VERIFIER, not a fixer: do not modify any project file.',
     'You are INDEPENDENT of everyone who built this milestone and carry no prior context on it: verify from the artifacts alone, and treat every prior agent\'s self-reported result (tests green, criterion met, file written) as an UNVERIFIED CLAIM until you re-run or re-read it yourself.',
     SECTION_NOTE,
-    'Ground truth: ' + PLAN + ' (milestone scope SS18-M0; detail sections ' + CRITIC_SECTIONS + ').',
+    'Ground truth: ' + PLAN + ' (milestone scope SS18-M1; detail sections ' + CRITIC_SECTIONS + ').',
     'Verify every criterion below by running the commands and inspecting code/tests/behavior:',
     ...GATE_CHECKLIST.map((c, i) => '  ' + (i + 1) + '. ' + c),
     openItems ? 'Open items reported by the completeness critic (check whether resolved): ' + openItems : '',
@@ -326,115 +315,22 @@ function grantOwnership(pkgs, extra) {
 
 // ---- review lenses ---------------------------------------------------------
 const LENSES = [
-  { id: 'spec-conformance', sections: 'SS4, SS7, SS8, SS12, SS14, SS15, SS18-M0',
-    charter: 'Line the implementation up against every M0-scope requirement in the cited sections. Hunt silent divergences: normalized values stored instead of real units; ParamIds that are not hierarchical document-id paths; a scheduler written against AudioContext instead of BaseAudioContext; non-integer ticks or a PPQ other than 960; worklets not bundled as separate entry points.' },
-  { id: 'seam-integrity', sections: 'SS3, SS4 (design rule), SS7',
-    charter: 'Hunt leaks across the sanctioned seams: any raw AudioParam or setter reachable past a ParamHandle; engine code reaching back into the document; device internals known outside their definition; UI writing through anything but commands or handle.setLive.' },
-  { id: 'audio-thread-safety', sections: 'SS12 (guardrails), SS7, SS2 (performance)',
-    charter: 'Hunt audio-thread hazards: allocation in per-tick paths; scheduling from JS-timer time instead of ctx.currentTime; missing allNotesOff on stop; worklet message races; clicks from un-ramped gain changes; main-thread work that can starve the 25ms worker clock.' },
-  { id: 'correctness-edges', sections: 'SS8, SS12, SS7',
-    charter: 'Hunt logic bugs at the edges: voice stealing and noteOn/noteOff pairing; look-ahead window boundaries duplicating or dropping events; clip-loop unrolling off-by-one in ticks; tempo conversion rounding; context unlock/resume re-entrancy; double-start or stop-while-starting transport races.' },
+  { id: 'spec-conformance', sections: 'SS9, SS10, SS13, SS18-M1',
+    charter: 'Check EVERY table row of SS10 (hit zones incl. min(6px,40%) edges; the complete FSM table; the complete keyboard map; snapping rules incl. relative moves, Alt bypass, resize-snaps-moving-edge-only, absolute snap on create only) and every SS9 requirement (Viewport transform, four layers, zoom-to-cursor, wheel bindings) is actually implemented, not approximated.' },
+  { id: 'gesture-fsm', sections: 'SS9, SS10',
+    charter: 'Attack the FSMs with synthetic pointer sequences: Pending promotion at the 3px threshold; Esc mid-drag reverts with ZERO document traffic; exactly one command per completed drag; Alt+body duplicates; marquee selection commits without an undo entry; double-click empty creates a grid-length note; pointer capture holds across leave/enter.' },
+  { id: 'performance-60fps', sections: 'SS2, SS9',
+    charter: 'Verify the 60fps/2000-note discipline structurally: overlay is the only layer redrawing during a gesture; dirty flags gate grid/content redraws; content culling uses binary search over start-tick-sorted notes; playhead is a DOM transform, never a canvas repaint; no per-frame allocation storms in render loops.' },
+  { id: 'undo-integrity', sections: 'SS13, SS3',
+    charter: 'Verify one gesture = one undo entry for every mouse AND keyboard verb; inverse patches actually invert (round-trip); redo works after undo chains; selection/viewport/meters never enter the document or history; commands are the only structural write path.' },
+  { id: 'persistence-roundtrip', sections: 'SS13, SS2',
+    charter: 'Verify schemaVersion presence, ~2s debounced OPFS autosave, .json export/import, and open->edit->save->reopen byte-stability except for edits. Flag any missing round-trip test as major (do not write it yourself).' },
   { id: 'test-strategy', sections: 'SS15 (testing)',
-    charter: 'Judge the tests against SS15: a headless OfflineAudioContext integration test must render a scheduled clip and assert on the buffer; registry, tapers, tempo map, and scheduler must be unit-tested without a browser. Flag load-bearing logic with no test as major. Do not write the tests yourself — report the gap.' },
+    charter: 'FSMs must be unit-tested by feeding synthetic pointer-event sequences per SS15; command/undo round-trips tested; Viewport math tested. Flag untested load-bearing logic as major. Do not write tests yourself — report the gap.' },
 ];
 
 // ============================ EXECUTION ====================================
 const seedFindings = [];
-
-// ---- Phase: Scaffold (sonnet, runs alone — no ownership contention) --------
-phase(PH.scaffold);
-const scaffold = await agent(
-  [
-    'Scaffold the Fableton web DAW project at ' + ROOT + ' (currently only README.md and docs/). Milestone ' + MILESTONE + '.',
-    SECTION_NOTE,
-    'Read ' + PLAN + ' SS15 (stack table) and SS18-M0 first; cite them in your summary.',
-    'Deliver: package.json (npm), Vite + React + TypeScript STRICT (all strict flags), Vitest configured for headless node/jsdom tests, worklet/worker bundling solved ONCE as separate entry points (SS15 calls this the only nonstandard bit — prove it with a tiny placeholder AudioWorkletProcessor entry that builds), index.html, src/main.tsx placeholder that mounts an empty React root, .gitignore, and a smoke test.',
-    'Folder skeleton (empty dirs seeded with .gitkeep or placeholder modules): src/params, src/time, src/engine/context, src/engine/transport, src/workers, src/worklets, src/devices/harness, src/devices/core, src/app, src/demo, src/types.',
-    'ALSO set up the shared Playwright e2e harness that every later milestone builds on (Playwright + chromium are ALREADY INSTALLED — never run `npx playwright install`): add @playwright/test to devDependencies, write playwright.config.ts (chromium project, deviceScaleFactor 2 so DPR-correct canvas rendering is testable, launch arg --autoplay-policy=no-user-gesture-required so audio starts headlessly, screenshots/traces on failure, webServer pointing at a PRODUCTION build preview), create e2e/render/ and e2e/interaction/ with one trivial passing spec each, add npm scripts test:e2e and preview, and gitignore .playwright/ and test-results/.',
-    'CRITICAL for SS6 metering later: configure BOTH the Vite dev server and vite preview to send `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, so crossOriginIsolated is true and SharedArrayBuffer is available (verified working in this environment). Assert it in the e2e smoke spec.',
-    'SELF-VERIFY: `npm install`, `npx tsc --noEmit`, `npx vitest run`, `npx vite build` AND `npx playwright test` all succeed from ' + ROOT + '. Report honestly.',
-  ].join('\n'),
-  { model: M.code, label: 'scaffold', phase: PH.scaffold, schema: IMPL_SCHEMA },
-);
-if (!scaffold || !scaffold.tscClean) {
-  log('Scaffold reported problems (' + (scaffold ? scaffold.summary : 'no result') + '); seeding a blocker finding for the review loop.');
-  seedFindings.push({ severity: 'blocker', file: 'package.json', description: 'scaffold incomplete or tsc unclean: ' + (scaffold ? scaffold.summary : 'scaffold agent returned nothing'), planSection: 'SS15', lens: 'spec-conformance' });
-}
-
-// ---- Phase: Contracts (opus, interface-first) ------------------------------
-phase(PH.contracts);
-let contracts = await agent(
-  [
-    'You are the INTERFACE AUTHOR for milestone ' + MILESTONE + ' ("' + TITLE + '") of the Fableton DAW. Parallel implementers will code against your files as a FROZEN contract.',
-    SECTION_NOTE,
-    'Read ' + PLAN + ' in full (it is the complete spec), with special care on ' + CRITIC_SECTIONS + '.',
-    'Write shared TypeScript interface/type files under ' + ROOT + '/src/types/ (you own that directory): ParamId/ParamDescriptor/ParamHandle/Taper (SS4 verbatim), DeviceDefinition/DeviceInstance/PortSpec/DeviceIO (SS7), Ticks/TempoMap (SS8), transport + scheduler-facing types (SS12), and the minimal Note/MidiClip needed for the hard-coded M0 clip (SS10 data model). Interfaces only — no implementations. Everything must compile under strict tsc.',
-    'These packages will implement against your contract, each owning the listed paths exclusively: ' + ALL_PKGS.map((p) => p.id + ' -> ' + p.own.join(' + ')).join('; ') + '.',
-    'In the schema: interfaceFiles = the files you wrote; extraOwnership = optional map pkgId -> additional path prefixes a package needs beyond its defaults (must not overlap another package); notes = decisions implementers must know (naming, import layout, invariants), kept short.',
-    'SELF-VERIFY: `npx tsc --noEmit` from ' + ROOT + ' passes with your files in place.',
-  ].join('\n'),
-  { model: M.smart, effort: 'high', label: 'contracts', phase: PH.contracts, schema: CONTRACT_SCHEMA },
-);
-if (!contracts) {
-  log('Contracts agent returned nothing; implementers will fall back to PLAN.md type definitions verbatim.');
-  contracts = { interfaceFiles: [], extraOwnership: {}, notes: 'Contracts agent failed. Implement the TypeScript interfaces exactly as written in PLAN.md SS4/SS7/SS8/SS10 and keep them in your own package.' };
-} else {
-  log('Contracts frozen: ' + (contracts.interfaceFiles.join(', ') || '(none listed)'));
-}
-const OWN = grantOwnership(ALL_PKGS, contracts.extraOwnership);
-
-// ---- implementation waves --------------------------------------------------
-async function runWave(waveName, phaseTitle, pkgs) {
-  const siblings = pkgs.map((p) => p.id);
-  const results = await pipeline(pkgs, (pkg) => agent(
-    implPrompt(pkg, OWN[pkg.id], contracts, siblings),
-    { model: pkg.model, effort: pkg.effort, label: 'impl:' + pkg.id, phase: phaseTitle, schema: IMPL_SCHEMA },
-  ));
-  const out = [];
-  const failed = [];
-  results.forEach((r, i) => { if (r) out.push(r); else failed.push(pkgs[i]); });
-  if (failed.length) {
-    log(MILESTONE + ' ' + waveName + ': packages returned no result: ' + failed.map((p) => p.id).join(', ') + ' — retrying each once.');
-    const retries = await pipeline(failed, (pkg) => agent(
-      implPrompt(pkg, OWN[pkg.id], contracts, siblings, 'RETRY: a previous attempt may have left partial work in your owned paths — inspect what exists and finish it.'),
-      { model: pkg.model, effort: pkg.effort, label: 'impl-retry:' + pkg.id, phase: phaseTitle, schema: IMPL_SCHEMA },
-    ));
-    retries.forEach((r, i) => {
-      if (r) { out.push(r); return; }
-      log(MILESTONE + ' ' + waveName + ': ' + failed[i].id + ' failed twice; seeding blocker finding for the review loop.');
-      seedFindings.push({ severity: 'blocker', file: OWN[failed[i].id].join(', '), description: 'work package ' + failed[i].id + ' produced no result after retry; owned paths may hold partial or missing work', planSection: failed[i].sections, lens: 'spec-conformance' });
-    });
-  }
-  for (const r of out) {
-    if (!r.tscClean || !r.testsPassed) {
-      seedFindings.push({ severity: 'major', file: (r.filesWritten || []).join(', '), description: 'package ' + r.pkg + ' self-reported tscClean=' + r.tscClean + ' testsPassed=' + r.testsPassed + ': ' + r.summary, planSection: '', lens: 'spec-conformance' });
-    }
-  }
-  log(MILESTONE + ' ' + waveName + ' done: ' + out.map((r) => r.pkg).join(', '));
-  return out;
-}
-
-phase(PH.wave1);
-const w1 = await runWave('wave 1', PH.wave1, WAVE1);
-phase(PH.wave2);
-const w2 = await runWave('wave 2', PH.wave2, WAVE2);
-
-// ---- Phase: Integration (opus, single writer) ------------------------------
-phase(PH.integration);
-const integration = await agent(
-  [
-    'INTEGRATION agent for milestone ' + MILESTONE + ' ("' + TITLE + '"). All work packages are on disk. You are the only writer; you may edit any file in ' + ROOT + '.',
-    SECTION_NOTE,
-    'Package reports: ' + JSON.stringify(w1.concat(w2).map((r) => ({ pkg: r.pkg, files: r.filesWritten, summary: r.summary }))),
-    'Wire the packages into a working whole: entry points, cross-package imports, registry wiring (register the synth + filter definitions), the demo app path (boot -> unlock -> play the hard-coded clip through synth->filter, audibly), and the headless OfflineAudioContext integration test. Minimal glue only — no redesigns, no new features. Cite PLAN sections for spec-relevant wiring decisions.',
-    'MUST end green from ' + ROOT + ': `npx tsc --noEmit`, `npx vitest run`, `npx vite build`. Report honestly; list every file you changed.',
-  ].join('\n'),
-  { model: M.smart, effort: 'high', label: 'integration', phase: PH.integration, schema: INTEGRATION_SCHEMA },
-);
-if (!integration || !integration.tscClean || !integration.testsPassed || !integration.buildOk) {
-  log('Integration reported problems; seeding blocker finding for the review loop.');
-  seedFindings.push({ severity: 'blocker', file: '(integration)', description: 'integration incomplete: ' + (integration ? integration.summary : 'integration agent returned nothing'), planSection: 'SS18-M0', lens: 'spec-conformance' });
-}
 
 // ---- Phase: Browser verification (sonnet + Playwright; seeds the review loop)
 phase(PH.browser);
@@ -571,7 +467,7 @@ while (true) {
   openGaps = [];
 }
 
-// ---- Phase: Checkpoint (sonnet commit so later milestones/M4 metric have a baseline)
+// ---- Phase: Checkpoint -----------------------------------------------------
 phase(PH.checkpoint);
 if (gate.pass && COMMIT_ON_PASS) {
   await agent(

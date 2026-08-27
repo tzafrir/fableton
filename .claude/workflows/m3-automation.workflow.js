@@ -15,7 +15,7 @@
  * seeds its findings into adversarial review round 1; the gate re-runs it.
  *
  * Run standalone:
- *   Workflow({ scriptPath: '/workspaces/fableton/.claude/workflows/m3-automation.workflow.js',
+ *   Workflow({ scriptPath: '/workspace/fableton/.claude/workflows/m3-automation.workflow.js',
  *              args: { reviewRounds: 3 } })
  * Resume:  Workflow({ scriptPath: <same>, resumeFromRunId: '<runId>' })
  * Normally invoked by daw-build.workflow.js via workflow(); this script must
@@ -51,7 +51,7 @@ const M = { code: 'sonnet', smart: 'opus', gate: 'opus' };
 
 const MILESTONE = 'M3';
 const TITLE = 'Automation';
-const ROOT = '/workspaces/fableton';
+const ROOT = '/workspace/fableton';
 const PLAN = ROOT + '/docs/PLAN.md';
 const CRITIC_SECTIONS = 'SS3, SS4 (automated/overridden), SS9, SS11, SS12, SS15 (testing), SS18-M3';
 
