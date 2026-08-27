@@ -24,7 +24,17 @@ import type { NoteEventSource, Transport } from "./transport";
  * note-offs (see `NoteEventSource.onDiscontinuity`).
  */
 export interface DocumentNoteEventSource extends NoteEventSource {
-  setDocument(doc: ProjectSnapshot): void;
+  /**
+   * Re-points the source at `doc`. Returns TRUE when the note material
+   * actually changed — the caller uses that to decide whether the transport
+   * must re-anchor (`Transport.notesChanged`).
+   *
+   * The distinction is load-bearing in both directions: re-anchoring on every
+   * document change would cut held notes whenever a knob moved (a param edit
+   * dispatches a command like any other), and never re-anchoring leaves the
+   * notes sounding at the moment of a clip edit with no note-off at all.
+   */
+  setDocument(doc: ProjectSnapshot): boolean;
 }
 
 /**

@@ -162,6 +162,25 @@ export interface Transport {
   /** Moves the playhead; allowed while stopped or playing. */
   seek(tick: Ticks): void;
   setTempoMap(map: TempoMap): void;
+  /**
+   * The `NoteEventSource` now yields different material than it did — the
+   * document's clips were edited mid-playback.
+   *
+   * This CANNOT be inferred by the source or handled inside it. A fresh scan
+   * suppresses the note-offs of notes whose note-on it never emitted (it has
+   * to: an unpaired note-off cuts a live voice on any instrument that voices
+   * overlapping same-pitch notes separately), so without this call every note
+   * sounding at the moment of the edit — and every note-on already scheduled
+   * into the look-ahead window — loses its note-off and hangs until the
+   * transport next stops.
+   *
+   * Implementations re-anchor: release what is sounding and pending, then
+   * schedule fresh from the current position. Notes held across the edit are
+   * therefore cut, which is the honest trade — the alternative is a stuck
+   * note. Callers must only call it when the note DATA changed; a param edit
+   * must leave playback alone.
+   */
+  notesChanged(): void;
   setLoop(loop: LoopRegion | null): void;
   addWindowFiller(filler: WindowFiller): Unsub;
   onStateChange(cb: (state: TransportState) => void): Unsub;

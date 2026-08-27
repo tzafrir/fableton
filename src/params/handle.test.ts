@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { p } from "./descriptors";
 import { createParamRegistry, type AppParamRegistry } from "./registry";
-import { DEFAULT_SMOOTHING_MS } from "./handle";
+import { DEFAULT_SMOOTHING_MS, LIVE_WRITE_LEAD_SECONDS } from "./handle";
 import { deviceParamId } from "./paramIds";
 
 interface ParamCall {
@@ -116,11 +116,34 @@ describe("fast path A — bindAudioParam (SS4)", () => {
     calls.length = 0;
     handle.setLive(2000, "user");
     expect(calls.map((c) => c.kind)).toEqual(["cancel", "set", "ramp"]);
+    // A hand-driven write is scheduled a LEAD ahead of `now`, so the whole
+    // ramp is still in the future when the renderer reaches it (see
+    // LIVE_WRITE_LEAD_SECONDS): a ramp that starts in the already-rendered
+    // past is not interpolated, it steps.
     expect(calls[2]).toEqual({
       kind: "ramp",
       value: 2000,
-      time: 2 + DEFAULT_SMOOTHING_MS / 1000,
+      time: 2 + LIVE_WRITE_LEAD_SECONDS + DEFAULT_SMOOTHING_MS / 1000,
     });
+  });
+
+  it("schedules a hand-driven write ENTIRELY in the future", () => {
+    // `currentTime` is where the audio being PLAYED is; the renderer is
+    // already filling past it. A ramp that starts at `now` is therefore part
+    // in the past by the time it is seen, and the skipped part is not
+    // interpolated — the param steps to wherever the ramp had reached. That
+    // step is the zipper heard when sweeping a cutoff.
+    const handle = registry.register(cutoffDesc());
+    const { param, calls } = fakeAudioParam(0);
+    clock = 4;
+    handle.bindAudioParam(param);
+    calls.length = 0;
+
+    handle.setLive(8000, "user");
+    for (const call of calls) {
+      expect(call.time, `${call.kind} scheduled at or before now`).toBeGreaterThan(clock);
+    }
+    expect(LIVE_WRITE_LEAD_SECONDS).toBeGreaterThan(0);
   });
 
   it("anchors the de-zipper ramp with cancelAndHoldAtTime when the param has it", () => {
@@ -144,12 +167,12 @@ describe("fast path A — bindAudioParam (SS4)", () => {
     calls.length = 0;
     handle.setLive(2000, "user");
 
-    expect(held).toEqual([2]);
+    expect(held).toEqual([2 + LIVE_WRITE_LEAD_SECONDS]);
     expect(calls.map((c) => c.kind)).toEqual(["ramp"]); // no stale re-anchor
     expect(calls[0]).toEqual({
       kind: "ramp",
       value: 2000,
-      time: 2 + DEFAULT_SMOOTHING_MS / 1000,
+      time: 2 + LIVE_WRITE_LEAD_SECONDS + DEFAULT_SMOOTHING_MS / 1000,
     });
   });
 
@@ -162,7 +185,7 @@ describe("fast path A — bindAudioParam (SS4)", () => {
     slow.bindAudioParam(a.param);
     a.calls.length = 0;
     slow.setLive(200, "user");
-    expect(a.calls.at(-1)).toEqual({ kind: "ramp", value: 200, time: 0.05 });
+    expect(a.calls.at(-1)).toEqual({ kind: "ramp", value: 200, time: LIVE_WRITE_LEAD_SECONDS + 0.05 });
 
     const toggle = registry.register({
       ...p.toggle("bypass", "Bypass"),
@@ -218,7 +241,9 @@ describe("fast path B — bindMessage (SS4)", () => {
 
     clock = 5;
     handle.setLive(3000, "user");
-    expect(messages.at(-1)).toEqual([3000, 5]);
+    // Live writes carry the scheduling lead on the message path too, so a
+    // device that ramps to `when` gets the same head-room as an AudioParam.
+    expect(messages.at(-1)).toEqual([3000, 5 + LIVE_WRITE_LEAD_SECONDS]);
     expect(calls).toHaveLength(0); // the AudioParam binding is gone
   });
 
@@ -490,8 +515,11 @@ describe("message path cancellation (SS11 override during playback)", () => {
     b.cancels.length = 0;
     handle.setLive(2000, "user"); // grabs the control mid-playback
     expect(handle.state).toBe("overridden");
-    expect(b.cancels).toEqual([9]); // cancelled at `now`, BEFORE the write
-    expect(b.writes.at(-1)).toEqual([2000, 9]);
+    // Cancelled at the same instant the hand's own write is scheduled for
+    // (`now` + the live-write lead), i.e. ahead of the queued window it is
+    // replacing.
+    expect(b.cancels).toEqual([9 + LIVE_WRITE_LEAD_SECONDS]);
+    expect(b.writes.at(-1)).toEqual([2000, 9 + LIVE_WRITE_LEAD_SECONDS]);
 
     // Only the interrupted window needs revoking; plain user writes don't.
     b.cancels.length = 0;
@@ -507,9 +535,9 @@ describe("message path cancellation (SS11 override during playback)", () => {
     clock = 11;
     handle.setLive(2000, "user");
     expect(writes).toEqual([
-      [1000, 0],
-      [500, 10],
-      [2000, 11],
+      [1000, 0], // the bind's seed: immediate, no lead
+      [500, 10], // scheduled automation: its own future timestamp
+      [2000, 11 + LIVE_WRITE_LEAD_SECONDS], // the hand, led
     ]);
   });
 });

@@ -23,6 +23,25 @@ import { clampToDescriptor } from "./taper";
 export const DEFAULT_SMOOTHING_MS = 15;
 
 /**
+ * How far AHEAD of `now` a live (hand-driven) write is scheduled.
+ *
+ * `BaseAudioContext.currentTime` is the position of the audio being PLAYED,
+ * and the renderer is already filling the buffer past it — by a render
+ * quantum plus the output latency, which is several milliseconds even at the
+ * "interactive" latency hint. A ramp scheduled to run from `now` to
+ * `now + 15 ms` therefore has a large part of itself already in the past when
+ * the renderer sees it, and the skipped part is not interpolated: the param
+ * STEPS to wherever the ramp had got to. On a narrow param that is
+ * inaudible; on a cutoff sweeping decades of Hz it is the classic zipper —
+ * the artefact this lead exists to remove.
+ *
+ * A few milliseconds of added latency on a knob is imperceptible; a stepped
+ * filter sweep is not. Scheduled writes (automation windows) already carry
+ * their own future timestamps and never come through this path.
+ */
+export const LIVE_WRITE_LEAD_SECONDS = 0.008;
+
+/**
  * How far past a window's start the Firefox `cancelScheduledValues` fallback
  * cancels, so the previous window's ramp — which lands exactly ON that start —
  * survives. One microsecond is far below a single sample frame at any rate we
@@ -368,7 +387,10 @@ export class ParamHandleImpl implements RegistryParamHandle {
 
   #push(value: number, immediate: boolean): void {
     if (!immediate && Object.is(value, this.#lastPushed)) return;
-    const when = this.#audioTime();
+    // An `immediate` write is a seed (a bind, or a load) that must land as
+    // written; a smoothed one is the hand on a control, and gets the lead
+    // that keeps its whole ramp in the future (see LIVE_WRITE_LEAD_SECONDS).
+    const when = this.#audioTime() + (immediate ? 0 : LIVE_WRITE_LEAD_SECONDS);
     this.#lastPushed = value;
     const param = this.#audioParam;
     if (param !== null) {

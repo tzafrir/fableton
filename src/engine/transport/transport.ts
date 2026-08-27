@@ -664,6 +664,20 @@ export function createEngineTransport(
       onTick();
     },
 
+    notesChanged(): void {
+      // Same re-anchor as `seek`, at the position we are already at: panic
+      // releases everything sounding AND every note-on already scheduled into
+      // the look-ahead (those would otherwise fire after the swap and find
+      // their note-off suppressed as an orphan), and `restartCursor` marks the
+      // discontinuity and schedules the new material from here.
+      if (state === "stopped") return;
+      const at = transport.positionTicks();
+      panic(ctx.currentTime, false);
+      seenTracks.length = 0;
+      restartCursor(at);
+      onTick();
+    },
+
     setTempoMap(map): void {
       if (state === "stopped") {
         tempoMap = map;

@@ -197,7 +197,7 @@ function withNote(project: Project, start = 0): Project {
 }
 
 describe("createProjectEngine — applying while the transport plays (SS2/SS12)", () => {
-  it("leaves the transport alone when an edit does not change the tempo", async () => {
+  it("leaves playback alone when only a PARAM changed", async () => {
     const { ctx, base } = setup();
     const project = withNote(makeProject());
     const engine = createProjectEngine(ctx, base.destination as unknown as AudioNode, project, {
@@ -207,11 +207,38 @@ describe("createProjectEngine — applying while the transport plays (SS2/SS12)"
     engine.transport.play();
     const node = synthNode();
     // The first look-ahead window handed the note to the instrument; it is
-    // now sounding, and it is what a panic would cut.
+    // now sounding, and it is what a re-anchor would cut.
     expect(node.posted.some((m) => m.type === "noteOn")).toBe(true);
     node.posted.length = 0;
 
-    // An ordinary mid-playback edit: one more note, far outside the window.
+    // A knob move is an ordinary document command, and by far the most
+    // common edit made while playing. `setTempoMap` used to panic on every
+    // apply — that silenced the whole project on every knob move — and the
+    // note-source swap must not cut held notes either.
+    const tweaked: Project = {
+      ...project,
+      paramValues: { ...project.paramValues, "chan:chan-2/vol": -3 },
+    };
+    await engine.applyDocument(tweaked as unknown as ProjectSnapshot);
+
+    expect(node.posted.filter((m) => m.type === "allNotesOff")).toHaveLength(0);
+    expect(node.posted.filter((m) => m.type === "noteOff")).toHaveLength(0);
+
+    engine.dispose();
+  });
+
+  it("re-anchors on a NOTE edit, so nothing is left sounding without a note-off", async () => {
+    const { ctx, base } = setup();
+    const project = withNote(makeProject());
+    const engine = createProjectEngine(ctx, base.destination as unknown as AudioNode, project, {
+      clock: createManualClock(),
+    });
+    await engine.applyDocument(project as unknown as ProjectSnapshot);
+    engine.transport.play();
+    const node = synthNode();
+    expect(node.posted.some((m) => m.type === "noteOn")).toBe(true);
+    node.posted.length = 0;
+
     const { clipId } = parts(project);
     const edited: Project = {
       ...project,
@@ -225,12 +252,14 @@ describe("createProjectEngine — applying while the transport plays (SS2/SS12)"
     };
     await engine.applyDocument(edited as unknown as ProjectSnapshot);
 
-    // `setTempoMap` panics whenever the transport is not stopped: every
-    // pending note-on gets a note-off at its own onset and every played track
-    // an `allNotesOff`. Pushing an unchanged map therefore silenced the whole
-    // project on EVERY edit made during playback.
-    expect(node.posted.filter((m) => m.type === "allNotesOff")).toHaveLength(0);
-    expect(node.posted.filter((m) => m.type === "noteOff")).toHaveLength(0);
+    // The edit swaps in a FRESH clip scan, and a fresh scan will not emit the
+    // note-off of a note whose note-on it never emitted. Without the
+    // re-anchor the note playing at this instant would therefore never be
+    // released — a note stuck on until the transport next stopped.
+    expect(
+      node.posted.some((m) => m.type === "allNotesOff" || m.type === "noteOff"),
+      "the sounding note must be released, not left hanging",
+    ).toBe(true);
 
     engine.dispose();
   });

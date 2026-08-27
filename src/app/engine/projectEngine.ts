@@ -253,8 +253,11 @@ export function createProjectEngine(
 
     // `events.setDocument` must run even when nothing rewired: the whole
     // point of the delegating source is making a note edit audible without a
-    // transport rebuild.
-    events.setDocument(doc);
+    // transport rebuild. It reports whether the note material actually
+    // changed — only then does the transport re-anchor, because the new scan
+    // will not emit note-offs for notes the OLD one started (see
+    // `Transport.notesChanged`), and a param edit must not cut held notes.
+    if (events.setDocument(doc)) transport.notesChanged();
   }
 
   transport.addWindowFiller(automation);

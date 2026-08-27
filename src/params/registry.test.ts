@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ParamRegistry } from "../types";
 import { p } from "./descriptors";
 import { deviceParamId, isDeviceParamId, panParamId, volumeParamId } from "./paramIds";
+import { LIVE_WRITE_LEAD_SECONDS } from "./handle";
 import { createParamRegistry, registerWithValue, type AppParamRegistry } from "./registry";
 
 const CUTOFF = deviceParamId("t1", "d1", "cutoff");
@@ -194,6 +195,7 @@ describe("audio clock", () => {
     handle.setLive(900, "user");
     currentTime = 13;
     handle.setLive(910, "user");
-    expect(times).toEqual([0, 12.5, 13]);
+    // The two later writes are hand-driven and carry the live-write lead.
+    expect(times).toEqual([0, 12.5 + LIVE_WRITE_LEAD_SECONDS, 13 + LIVE_WRITE_LEAD_SECONDS]);
   });
 });
