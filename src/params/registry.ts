@@ -84,6 +84,22 @@ export interface AppParamRegistry extends ParamRegistry {
   /** Removes every param matching a predicate (device/channel disposal). */
   unregisterWhere(predicate: (id: ParamId, handle: ParamHandle) => boolean): void;
 
+  // --- SS11 automation (lane-facing registry verbs; see `register` note) ----
+
+  /**
+   * Marks exactly `ids` as lane-driven: each becomes `automated` (unless
+   * currently `overridden` — the override survives, SS4), every other
+   * param returns to `free` with its base value restored. Called by the
+   * engine whenever the document's enabled-lane set changes.
+   */
+  setAutomatedIds(ids: ReadonlySet<ParamId>): void;
+  /** One look-ahead window of scheduled values for `id` (SS11 playback). */
+  scheduleAutomation(id: ParamId, samples: readonly { value: number; when: Seconds }[]): void;
+  /** Which fast path `id` is bound to — the sampler's density switch. */
+  bindingKind(id: ParamId): "audioParam" | "message" | "none";
+  /** The moving-knob display value for `id` (no binding write). */
+  displayAutomation(id: ParamId, value: number): void;
+
   /** Runs pending rAF-coalesced `onChange` callbacks now (tests, teardown). */
   flushChanges(): void;
   /** Unregisters everything and cancels any pending frame. */
@@ -191,6 +207,22 @@ export function createParamRegistry(options: ParamRegistryOptions = {}): AppPara
       removeHandle(handle);
       notifyOverridesMaybeChanged();
       notifyRegistryChange();
+    },
+
+    setAutomatedIds(ids: ReadonlySet<ParamId>): void {
+      for (const [id, handle] of handles) handle.setAutomated(ids.has(id));
+    },
+
+    scheduleAutomation(id: ParamId, samples: readonly { value: number; when: Seconds }[]): void {
+      handles.get(id)?.scheduleAutomation(samples);
+    },
+
+    bindingKind(id: ParamId): "audioParam" | "message" | "none" {
+      return handles.get(id)?.bindingKind ?? "none";
+    },
+
+    displayAutomation(id: ParamId, value: number): void {
+      handles.get(id)?.displayAutomation(value);
     },
 
     unregisterWhere(predicate): void {

@@ -27,7 +27,7 @@ import type {
   NoteId,
   ParamId,
 } from "./ids";
-import type { Project, ProjectId, SidechainEdge } from "./document";
+import type { AutoPoint, Project, ProjectId, SidechainEdge } from "./document";
 import type { Ticks, TimeSignature } from "./time";
 import type { LoopRegion } from "./transport";
 
@@ -290,6 +290,12 @@ export interface DeviceInit {
   deviceId?: DeviceInstanceId | undefined;
 }
 
+/** Init for `addLane` — explicit ids/points make tests deterministic. */
+export interface LaneInit {
+  id?: LaneId | undefined;
+  points?: readonly AutoPoint[] | undefined;
+}
+
 export interface TrackInit {
   id?: ChannelId | undefined;
   name?: string | undefined;
@@ -418,6 +424,24 @@ export interface ProjectCommands {
     init: DeviceInit,
     carryValues?: Readonly<Record<string, number>> | undefined,
   ): Command;
+
+  // automation lanes (SS11/SS18-M3)
+  /** One lane per (channel, param); adding an existing pair re-enables it. */
+  addLane(channelId: ChannelId, paramId: ParamId, init?: LaneInit | undefined): Command;
+  deleteLanes(laneIds: readonly LaneId[]): Command;
+  /** Disabling keeps the data inert (SS11); the param returns to `free`. */
+  setLaneEnabled(laneId: LaneId, enabled: boolean): Command;
+  /** SS7: a lane that outlived its param re-binds to any other param. */
+  rebindLane(laneId: LaneId, paramId: ParamId): Command;
+  addLanePoint(laneId: LaneId, point: { t: Ticks; v: number; curve?: number | undefined }): Command;
+  /** One drag = one command: points keyed by their tick at gesture start. */
+  moveLanePoints(
+    laneId: LaneId,
+    edits: readonly { fromT: Ticks; toT: Ticks; v: number }[],
+  ): Command;
+  deleteLanePoints(laneId: LaneId, ticks: readonly Ticks[]): Command;
+  /** Bends the segment STARTING at the point on `segmentStartT` (SS11). */
+  setLaneSegmentCurve(laneId: LaneId, segmentStartT: Ticks, curve: number): Command;
 
   // params (the SS3 fast path's one document write, on gesture end)
   setParamValue(paramId: ParamId, value: number): Command;

@@ -90,6 +90,7 @@ export type {
   ProjectSnapshot,
   DeviceInit,
   GroupInit,
+  LaneInit,
   TrackInit,
 } from "./commands";
 

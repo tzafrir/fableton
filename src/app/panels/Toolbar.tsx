@@ -25,6 +25,11 @@ export interface ToolbarProps {
   redoLabel: string | undefined;
   onRedo: () => void;
 
+  /** SS4/SS11: true while any param is `overridden`; the pill lights and
+   *  clicking it restores every one of them to `automated`. */
+  hasOverrides: boolean;
+  onReenableAutomation: () => void;
+
   /** SS10's two piano-roll tools. Without a control here, `pencil` — and
    *  therefore drag-to-create notes — is unreachable in the shipped app. */
   tool: ToolMode;
@@ -103,6 +108,8 @@ export function Toolbar({
   onRedo,
   tool,
   onToolChange,
+  hasOverrides,
+  onReenableAutomation,
   gridSettings,
   onGridChange,
   autosaveState,
@@ -167,6 +174,20 @@ export function Toolbar({
       </button>
       <button type="button" onClick={onStop} disabled={!audioReady || transportState === "stopped"}>
         Stop
+      </button>
+
+      <button
+        type="button"
+        data-testid="reenable-automation"
+        title="Re-enable automation (SS4): restore every overridden param to its lane"
+        onClick={onReenableAutomation}
+        disabled={!hasOverrides}
+        style={{
+          background: hasOverrides ? "#c58f00" : undefined,
+          color: hasOverrides ? "#000" : undefined,
+        }}
+      >
+        Re-enable
       </button>
 
       <button

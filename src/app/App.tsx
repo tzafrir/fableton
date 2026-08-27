@@ -32,7 +32,7 @@ import type {
 } from "../types";
 import { createProjectEngine, type AppProjectEngine } from "./engine";
 import { createUndoRedoHandler } from "./keyboard";
-import { ArrangementPanel, DeviceChainPanel, MixerPanel, PianoRollPanel, Toolbar } from "./panels";
+import { ArrangementPanel, AutomationPanel, DeviceChainPanel, MixerPanel, PianoRollPanel, Toolbar } from "./panels";
 import { bootstrapProject, type BootstrapResult } from "./persistence";
 
 export interface AppProps {
@@ -73,8 +73,10 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   const [openClipId, setOpenClipId] = useState<ClipId | null>(null);
   const [tool, setTool] = useState<ToolMode>("select");
   // SS18-M2: the bottom pane tabs between the piano roll and the mixer.
-  const [bottomTab, setBottomTab] = useState<"pianoroll" | "mixer">("pianoroll");
+  const [bottomTab, setBottomTab] = useState<"pianoroll" | "mixer" | "automation">("pianoroll");
   const [selectedChannelId, setSelectedChannelId] = useState<ChannelId | null>(null);
+  // SS4 transport pill: lights while any param is overridden (SS11).
+  const [hasOverrides, setHasOverrides] = useState(false);
   // SS10 "Snapping": the fixed-grid override + triplet toggle. Ephemeral UI
   // state (SS13) owned here and pushed into BOTH editors, so the arrangement
   // and the piano roll always snap the same way.
@@ -161,7 +163,24 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [docState]);
 
+  // A sensible default selection (first track) so the mixer's chain panel
+  // and the automation panel have a subject before the user clicks a strip.
+  useEffect(() => {
+    if (docState === null) return;
+    setSelectedChannelId((current) => {
+      const doc = docState.store.getState();
+      if (current !== null && doc.channels[current] !== undefined) return current;
+      return doc.channelOrder.find((id) => doc.channels[id]?.role === "track") ?? null;
+    });
+  }, [docState, historyTick]);
+
   // --- 5. wire the engine to the document once both exist ---------------
+  useEffect(() => {
+    if (engine === null) return;
+    setHasOverrides(engine.params.hasOverrides());
+    return engine.params.onOverridesChange(setHasOverrides);
+  }, [engine]);
+
   useEffect(() => {
     if (docState === null || engine === null) return;
     const unsubParams = connectParamRegistry(docState.store, engine.params);
@@ -183,6 +202,9 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
       const tick = engine.transport.positionTicks();
       arrangementViewRef.current?.setPlayheadTicks(tick);
       pianoRollViewRef.current?.setPlayheadTicks(tick);
+      // SS11 moving-knob display rides the same rAF: lanes -> live values,
+      // regardless of which bottom tab is open.
+      engine.automation.updateDisplay(tick);
     };
     pushOnce();
     if (transportState !== "playing") return;
@@ -350,6 +372,8 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
         onRedo={handleRedo}
         tool={tool}
         onToolChange={setTool}
+        hasOverrides={hasOverrides}
+        onReenableAutomation={() => engine?.params.reenableAutomation()}
         gridSettings={gridSettings}
         onGridChange={handleGridChange}
         autosaveState={autosaveState}
@@ -410,6 +434,24 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
             >
               Mixer
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={bottomTab === "automation"}
+              data-testid="tab-automation"
+              onClick={() => setBottomTab("automation")}
+              style={{
+                fontSize: 11,
+                padding: "2px 10px",
+                background: bottomTab === "automation" ? "#2a2f3a" : "transparent",
+                color: "#ccc",
+                border: "1px solid #333",
+                borderRadius: "4px 4px 0 0",
+                cursor: "pointer",
+              }}
+            >
+              Automation
+            </button>
           </div>
           {/* The piano roll view is a canvas component built imperatively per
               (store, commands) — hiding it with CSS instead of unmounting
@@ -426,6 +468,17 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
               viewRef={pianoRollViewRef}
             />
           </div>
+          {bottomTab === "automation" && (
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <AutomationPanel
+                store={store}
+                commands={projectCommands}
+                engine={engine}
+                channelId={selectedChannelId}
+                grid={gridSettings}
+              />
+            </div>
+          )}
           {bottomTab === "mixer" && (
             <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
               <div style={{ flex: 1, minWidth: 0, borderRight: "1px solid #292929" }}>

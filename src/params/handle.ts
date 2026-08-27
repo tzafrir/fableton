@@ -160,6 +160,58 @@ export class ParamHandleImpl implements RegistryParamHandle {
     if (this.#state === "overridden") this.#setState("automated");
   }
 
+  /**
+   * SS11 playback write: a look-ahead window of timestamped values from the
+   * automation sampler, scheduled onto whichever fast path this handle is
+   * bound to. AudioParam path: `cancelAndHoldAtTime` at the window start,
+   * then one `linearRampToValueAtTime` per sample (bent segments arrive
+   * pre-subdivided by the sampler, so linear chunks trace the curve).
+   * Message path: one timestamped message per sample — the worklet
+   * interpolates (SS11). Dropped while `overridden` (SS4: "automation for
+   * that param is suspended") and when nothing is bound.
+   */
+  scheduleAutomation(samples: readonly { value: number; when: Seconds }[]): void {
+    if (this.#disposed || this.#state === "overridden" || samples.length === 0) return;
+    const param = this.#audioParam;
+    if (param !== null) {
+      const first = samples[0] as { value: number; when: Seconds };
+      const at = Math.max(0, first.when);
+      if (typeof param.cancelAndHoldAtTime === "function") {
+        param.cancelAndHoldAtTime(at);
+      } else {
+        // Firefox: no cancelAndHold — anchor at the current value instead.
+        param.cancelScheduledValues(at);
+        param.setValueAtTime(this.#live, at);
+      }
+      for (const s of samples) {
+        param.linearRampToValueAtTime(clampToDescriptor(this.desc, s.value), Math.max(at, s.when));
+      }
+      // The binding's scheduled tail no longer matches #lastPushed.
+      this.#lastPushed = Number.NaN;
+      return;
+    }
+    if (this.#message !== null) {
+      for (const s of samples) {
+        this.#message(clampToDescriptor(this.desc, s.value), Math.max(0, s.when));
+      }
+      this.#lastPushed = Number.NaN;
+    }
+  }
+
+  /**
+   * SS11 display write: what the moving knob shows NOW. Updates `live` and
+   * repaint subscribers WITHOUT touching the binding — the audible values
+   * were already scheduled by `scheduleAutomation`. Dropped while
+   * `overridden`, same as any automation write.
+   */
+  displayAutomation(value: number): void {
+    if (this.#disposed || this.#state === "overridden") return;
+    const next = clampToDescriptor(this.desc, value);
+    if (Object.is(next, this.#live)) return;
+    this.#live = next;
+    this.#host.markDirty(this);
+  }
+
   bindAudioParam(param: AudioParam, options: BindAudioParamOptions = {}): void {
     // Fast path A. The node's `AudioParam` enters here and never leaves.
     this.#audioParam = param;
@@ -208,6 +260,14 @@ export class ParamHandleImpl implements RegistryParamHandle {
 
   get disposed(): boolean {
     return this.#disposed;
+  }
+
+  /** Which SS3 fast path this handle currently drives (SS11's "two paths,
+   *  chosen by the binding" — the sampler picks its sampling density off it). */
+  get bindingKind(): "audioParam" | "message" | "none" {
+    if (this.#audioParam !== null) return "audioParam";
+    if (this.#message !== null) return "message";
+    return "none";
   }
 
   #smoothingMs(): number {

@@ -15,6 +15,7 @@ import {
   type AppDeviceHost,
   type AppDeviceRegistry,
 } from "../../devices/harness";
+import { createAutomationSampler, type AutomationSampler } from "../../engine/automation/sampler";
 import { createGraphReconciler, type GraphReconciler } from "../../engine/graph/reconciler";
 import { createMeterBus, type MeterBus } from "../../engine/meter/meters";
 import { createEngineTransport, type Clock, type EngineTransport } from "../../engine/transport";
@@ -62,6 +63,10 @@ export interface AppProjectEngine extends ProjectEngine {
   onParamCommit(cb: (commit: ParamCommit) => void): Unsub;
   /** SS6 metering: per-strip peak/RMS frames, read by the mixer UI at rAF. */
   readonly meters: MeterBus;
+  /** SS11 automation: the app's playhead loop calls `updateDisplay` so
+   *  moving knobs track the lanes; scheduling itself rides the transport's
+   *  window filler and needs nothing from the UI. */
+  readonly automation: AutomationSampler;
 }
 
 /** The transport's per-track note target — rebuilt per apply, looked up per
@@ -105,6 +110,15 @@ export function createProjectEngine(
   });
   const meters: MeterBus = createMeterBus(ctx);
 
+  // SS11: the sampler attaches to the transport's window-filler seam below
+  // and follows the document's enabled lanes on every apply.
+  let currentTempoMap = createTempoMap(initialDoc.tempo);
+  const automation: AutomationSampler = createAutomationSampler({
+    registry: params,
+    tempoMap: () => currentTempoMap,
+    isMessageBound: (id) => params.bindingKind(id) === "message",
+  });
+
   const targetsByChannel = new Map<ChannelId, TrackTarget>();
   const meteredChannels = new Set<ChannelId>();
   const events = createDocumentNoteEventSource(initialDoc);
@@ -128,7 +142,8 @@ export function createProjectEngine(
 
   async function applyNow(doc: ProjectSnapshot): Promise<void> {
     if (disposed) return;
-    transport.setTempoMap(createTempoMap(doc.tempo));
+    currentTempoMap = createTempoMap(doc.tempo);
+    transport.setTempoMap(currentTempoMap);
     transport.setLoop(doc.loop);
 
     // SS6: document -> desired graph -> diff -> patched live graph.
@@ -163,6 +178,12 @@ export function createProjectEngine(
     meteredChannels.clear();
     for (const channelId of wantMeters) meteredChannels.add(channelId);
 
+    // SS11: lanes -> sampler -> the registry's automated set. Lanes whose
+    // param is not registered (device unmounted, param renamed) simply match
+    // no handle — they are the SS7 "kept, greyed" lanes.
+    automation.setLanes(Object.values(doc.lanes));
+    params.setAutomatedIds(automation.automatedIds());
+
     // `events.setDocument` must run even when nothing rewired: the whole
     // point of the delegating source is making a note edit audible without a
     // transport rebuild.
@@ -173,10 +194,13 @@ export function createProjectEngine(
     params.load(doc.paramValues);
   }
 
+  transport.addWindowFiller(automation);
+
   return {
     transport,
     params,
     meters,
+    automation,
     onParamCommit(cb: (commit: ParamCommit) => void): Unsub {
       return params.onCommit(cb);
     },

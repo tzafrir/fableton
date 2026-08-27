@@ -10,6 +10,7 @@ import type { IdFactory, ProjectCommands } from "../../types";
 import { defaultIdFactory } from "../ids";
 import { createChannelCommands } from "./channels";
 import { createClipCommands } from "./clips";
+import { createLaneCommands } from "./lanes";
 import { createNoteCommands } from "./notes";
 import { createRoutingCommands } from "./routing";
 import { createSongCommands } from "./song";
@@ -20,6 +21,7 @@ export function createProjectCommands(ids: IdFactory = defaultIdFactory): Projec
     ...createClipCommands(ids),
     ...createChannelCommands(ids),
     ...createRoutingCommands(ids),
+    ...createLaneCommands(ids),
     ...createSongCommands(),
   };
 }
@@ -32,6 +34,7 @@ export { noteFromInit } from "./notes";
 export type { ChannelCommands } from "./channels";
 export { DEFAULT_SEND_DB } from "./routing";
 export type { RoutingCommands } from "./routing";
+export type { LaneCommands } from "./lanes";
 export type { ClipCommands } from "./clips";
 export type { NoteCommands } from "./notes";
 export type { SongCommands } from "./song";

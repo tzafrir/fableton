@@ -244,6 +244,8 @@ describe("Toolbar autosave status", () => {
     onRedo: () => undefined,
     tool: "select",
     onToolChange: () => undefined,
+    hasOverrides: false,
+    onReenableAutomation: () => undefined,
     gridSettings: { mode: "adaptive", denominator: 16, triplet: false },
     onGridChange: () => undefined,
     autosaveState: "idle",
