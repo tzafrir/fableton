@@ -1,0 +1,57 @@
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { App } from "./app/App";
+import { renderDemoOffline, type DemoEngine } from "./demo";
+
+const container = document.getElementById("root");
+if (!container) {
+  throw new Error("#root element not found");
+}
+
+// e2e-only bridge (SS15: "the engine runs headless against
+// OfflineAudioContext in integration tests ... assert on the buffer").
+// jsdom has no Web Audio at all, so the real non-silence proof needs a real
+// browser — this is what e2e/audio/offline-render.spec.ts calls into via
+// Playwright's `page.evaluate`. See src/demo/offlineRender.ts.
+//
+// `engine` appears once the user has booted audio, so e2e/interaction/
+// transport.spec.ts can watch the live transport's song position advance —
+// which is what proves the SS12 worker clock keeps ticking past the first
+// 200 ms look-ahead window in a real browser (and, in
+// e2e/interaction/clock-worker.spec.ts, that the clock really is a dedicated
+// Worker and not the main-thread fallback).
+declare global {
+  interface Window {
+    __fabletonDemo?: {
+      renderDemoOffline: typeof renderDemoOffline;
+      engine?: DemoEngine;
+    };
+  }
+}
+// ...and it is a TEST bridge, so it must not ship. Handing any script on the
+// page the live `ParamRegistry` and `EngineTransport` would be an out-of-band
+// route around the command/handle seam (SS3: "the parameter registry is the
+// one deliberate bridge"). `import.meta.env` is statically replaced at build
+// time, so the production bundle drops this branch — and with it every
+// reference to `renderDemoOffline` — entirely.
+//
+// The e2e suite runs against a real production build, not `vite dev`, so it
+// builds with `--mode e2e` (see `build:e2e` in package.json, used by
+// playwright.config.ts's `webServer`); MODE is the only thing that differs
+// from the shipped build.
+const E2E_BRIDGE_ENABLED = import.meta.env.DEV || import.meta.env.MODE === "e2e";
+
+const bridge: NonNullable<Window["__fabletonDemo"]> = { renderDemoOffline };
+if (E2E_BRIDGE_ENABLED) {
+  window.__fabletonDemo = bridge;
+}
+
+createRoot(container).render(
+  <StrictMode>
+    <App
+      onEngineReady={(engine) => {
+        if (E2E_BRIDGE_ENABLED) bridge.engine = engine;
+      }}
+    />
+  </StrictMode>
+);
