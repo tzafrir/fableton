@@ -12,7 +12,11 @@
 // inside its own file: SS7 — "nothing else in the app knows what a device does
 // internally", and SS4 makes `ParamDescriptor.labels` on the registered handle
 // the sanctioned channel for enum choices.
+export { Distortion, Overdrive } from "./overdrive";
+export { DrumMachine, PADS } from "./drumMachine";
 export { Filter } from "./filter";
+export { FmSynth } from "./fmSynth";
+export { Kick } from "./kick";
 export { PolySynth } from "./polySynth";
 export { Compressor } from "./compressor";
 export { Eq3 } from "./eq3";
@@ -22,6 +26,10 @@ export { Saturator } from "./saturator";
 export { StereoDelay } from "./stereoDelay";
 
 import { Compressor } from "./compressor";
+import { DrumMachine } from "./drumMachine";
+import { FmSynth } from "./fmSynth";
+import { Kick } from "./kick";
+import { Distortion, Overdrive } from "./overdrive";
 import { Eq3 } from "./eq3";
 import { Filter } from "./filter";
 import { Pluck } from "./pluck";
@@ -32,14 +40,20 @@ import { StereoDelay } from "./stereoDelay";
 
 /** Every `DeviceDefinition` this package ships, in registration order —
  *  M0's two plus the SS18-M4 library (compressor with SC, EQ, delay,
- *  reverb, saturator, second instrument). */
+ *  reverb, saturator, second instrument), plus the FM/kick/drum
+ *  instruments and the two clipping effects. */
 export const CORE_DEVICES = [
   PolySynth,
   Pluck,
+  FmSynth,
+  Kick,
+  DrumMachine,
   Filter,
   Eq3,
   Compressor,
   StereoDelay,
   Reverb,
   Saturator,
+  Overdrive,
+  Distortion,
 ] as const;

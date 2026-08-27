@@ -391,7 +391,13 @@ function DevicePanel({
 
       {/* Param rows (SS5): registry handles exist only once audio is up. */}
       {panel.rows.map((row, i) => (
-        <div key={i} style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div key={i} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {/* SS5 panel rows may name themselves — the drum machine's do, one
+              row per pad, and without this the eight pads' 24 knobs were an
+              undifferentiated grid. */}
+          {row.label !== undefined && (
+            <span style={{ fontSize: 10, color: "#8a8f99", minWidth: 74 }}>{row.label}</span>
+          )}
           {row.controls.map((spec) => {
             const handle = engine?.params.get(deviceParamId(channelId, deviceId, spec.paramId));
             if (handle === undefined) {

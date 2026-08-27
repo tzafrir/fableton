@@ -29,13 +29,32 @@ import { midiToHz, pluckShapeFromIndex } from "./pluck";
 import { StereoDelay } from "./stereoDelay";
 
 describe("the SS18-M4 library", () => {
-  it("ships eight valid definitions: 2 instruments + 6 effects", () => {
-    expect(CORE_DEVICES.length).toBe(8);
+  it("ships a valid library: 5 instruments + 8 effects", () => {
     for (const def of CORE_DEVICES) expect(() => validateDefinition(def)).not.toThrow();
     const instruments = CORE_DEVICES.filter((d) => d.kind === "instrument");
     const effects = CORE_DEVICES.filter((d) => d.kind === "audioEffect");
-    expect(instruments.map((d) => d.id).sort()).toEqual(["core.pluck", "core.poly-synth"]);
-    expect(effects.length).toBe(6);
+    expect(instruments.map((d) => d.id).sort()).toEqual([
+      "core.drum-machine",
+      "core.fm",
+      "core.kick",
+      "core.pluck",
+      "core.poly-synth",
+    ]);
+    expect(effects.map((d) => d.id).sort()).toEqual([
+      "core.compressor",
+      "core.distortion",
+      "core.eq3",
+      "core.filter",
+      "core.overdrive",
+      "core.reverb",
+      "core.saturator",
+      "core.stereo-delay",
+    ]);
+  });
+
+  it("no two definitions claim the same id", () => {
+    const ids = CORE_DEVICES.map((d) => d.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("exactly the compressor declares the SS6 sidechain port", () => {

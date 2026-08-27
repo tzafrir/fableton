@@ -107,10 +107,26 @@ function sameTempoSegments(a: readonly TempoSegment[], b: readonly TempoSegment[
 /** `undefined` unless every one of the three note methods is present — a
  *  device wired to a track's `source` should always be an instrument, but a
  *  mis-registered definition must not crash playback, only stay silent. */
+/**
+ * The note target for a mounted instrument, or `undefined` if it is not one.
+ *
+ * Only `noteOn` is required. A PERCUSSION instrument has no note-off to
+ * honour — a kick rings for its decay whether or not the key is still down —
+ * and demanding all three made such a device silently unplayable: it
+ * registered its params, drew its panel, took notes in the piano roll, and
+ * produced nothing, with no error anywhere. Filling the two optional halves
+ * with no-ops keeps the transport's contract (it calls all three, including
+ * at a loop boundary) without making silence the default for a whole class
+ * of instrument.
+ */
 function noteTargetOf(mounted: MountedDevice): NoteTarget | undefined {
   const { noteOn, noteOff, allNotesOff } = mounted.instance;
-  if (noteOn === undefined || noteOff === undefined || allNotesOff === undefined) return undefined;
-  return { noteOn, noteOff, allNotesOff };
+  if (noteOn === undefined) return undefined;
+  return {
+    noteOn,
+    noteOff: noteOff ?? ((): void => undefined),
+    allNotesOff: allNotesOff ?? ((): void => undefined),
+  };
 }
 
 /**

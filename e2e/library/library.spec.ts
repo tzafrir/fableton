@@ -19,9 +19,7 @@ async function firstTrackId(page: Page): Promise<string> {
   return ((await strip.getAttribute("data-testid")) ?? "").replace("strip-", "");
 }
 
-test("the whole SS18-M4 library is reachable: 6 effects + 2 instruments in the menus", async ({
-  page,
-}) => {
+test("the whole device library is reachable from the menus", async ({ page }) => {
   await bootAndOpenMixer(page);
   const trackId = await firstTrackId(page);
   await page.getByTestId(`strip-${trackId}`).click();
@@ -34,10 +32,18 @@ test("the whole SS18-M4 library is reachable: 6 effects + 2 instruments in the m
     "Stereo Delay",
     "Reverb",
     "Saturator",
+    "Overdrive",
+    "Distortion",
   ]);
 
   const instrumentOptions = page.getByTestId("instrument-select").locator("option:not([disabled])");
-  await expect(instrumentOptions).toHaveText(["Poly Synth", "Pluck"]);
+  await expect(instrumentOptions).toHaveText([
+    "Poly Synth",
+    "Pluck",
+    "FM Synth",
+    "Kick",
+    "Drum Machine",
+  ]);
 });
 
 test("SS7 swap: Poly Synth -> Pluck keeps the clips and still makes sound", async ({ page }) => {
@@ -190,3 +196,82 @@ test("Export WAV renders the document offline into a real, non-silent RIFF file"
   expect(frames).toBe(Math.ceil(durationSeconds * sampleRate));
   expect(count).toBe(frames * channels);
 });
+
+// The instruments and effects added for song-writing. Each is driven through
+// the real UI and has to actually MAKE SOUND — a device that registers its
+// params but produces silence would pass every structural check.
+for (const instrument of ["FM Synth", "Kick", "Drum Machine"]) {
+  test(`${instrument} plays the arrangement's clip`, async ({ page }) => {
+    await bootAndOpenMixer(page);
+    const trackId = await firstTrackId(page);
+    await page.getByTestId(`strip-${trackId}`).click();
+    await page.getByTestId("instrument-select").selectOption({ label: instrument });
+
+    // The starter clip is a melodic phrase around C3-C4. The drum machine
+    // only answers to its pad notes, so the phrase is replaced with a note
+    // ON a pad (C1) when that is what is loaded.
+    if (instrument === "Drum Machine") {
+      await page.evaluate(() => {
+        const store = window.__fabletonDemo?.store;
+        const doc = store?.getState();
+        const clip = doc === undefined ? undefined : Object.values(doc.clips)[0];
+        if (store === undefined || clip === undefined) return;
+        store.dispatch({
+          label: "test: drum note",
+          run: (draft) => {
+            const target = draft.clips[clip.id];
+            if (target === undefined) return;
+            for (const note of target.notes) note.pitch = 36; // C1 = the kick pad
+          },
+        });
+      });
+    }
+
+    const masterId = (
+      (await page.locator('[data-testid^="strip-"][data-role="master"]').getAttribute("data-testid")) ?? ""
+    ).replace("strip-", "");
+    const meterFill = page.locator(`[data-testid="meter-${masterId}"] > div`).first();
+    const level = async (): Promise<number> => {
+      const h = await meterFill.evaluate((el) => (el as HTMLElement).style.height);
+      return Number.parseFloat(h === "" ? "0" : h);
+    };
+
+    await page.getByRole("button", { name: "Play" }).click();
+    await expect.poll(level, { timeout: 8_000, message: `${instrument} is silent` }).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "Stop" }).click();
+  });
+}
+
+for (const effect of ["Overdrive", "Distortion"]) {
+  test(`${effect} passes audio and its controls are live`, async ({ page }) => {
+    await bootAndOpenMixer(page);
+    const trackId = await firstTrackId(page);
+    await page.getByTestId(`strip-${trackId}`).click();
+    await page.getByTestId("add-effect-select").selectOption({ label: effect });
+
+    const device = page.locator(".fbl-device-chain > .fbl-device").first();
+    const deviceId = ((await device.getAttribute("data-testid")) ?? "").replace("device-", "");
+    // Control testids carry the FULL param path (`ctl-chan:.../dev:.../drive`),
+    // so they are matched by their leaf. Drive and Tone are the two every
+    // clipper needs; Edge is what makes a distortion one (`core.overdrive`
+    // deliberately has no such control).
+    await expect(page.locator('[data-testid$="/drive"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid$="/tone"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid$="/edge"]')).toHaveCount(effect === "Distortion" ? 1 : 0);
+
+    const masterId = (
+      (await page.locator('[data-testid^="strip-"][data-role="master"]').getAttribute("data-testid")) ?? ""
+    ).replace("strip-", "");
+    const meterFill = page.locator(`[data-testid="meter-${masterId}"] > div`).first();
+    const level = async (): Promise<number> => {
+      const h = await meterFill.evaluate((el) => (el as HTMLElement).style.height);
+      return Number.parseFloat(h === "" ? "0" : h);
+    };
+
+    await page.getByRole("button", { name: "Play" }).click();
+    // A clipper at unity is a pass-through, not a mute: audio still arrives.
+    await expect.poll(level, { timeout: 8_000, message: `${effect} killed the signal` }).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "Stop" }).click();
+    expect(deviceId).not.toBe("");
+  });
+}

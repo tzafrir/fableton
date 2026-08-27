@@ -89,6 +89,39 @@ export class FakeOscillatorNode extends FakeAudioNode {
   }
 }
 
+/** `WaveShaperNode`-alike: the curve is the whole point, so it is kept. */
+export class FakeWaveShaperNode extends FakeAudioNode {
+  curve: Float32Array | null = null;
+  oversample = "none";
+  /** How many times a curve has been assigned — a drive sweep must not
+   *  rebuild the curve (see overdrive.ts), and this is how a test sees it. */
+  curveWrites = 0;
+  constructor() {
+    super("waveshaper");
+  }
+}
+
+/** `AudioBufferSourceNode`-alike, for the noise-based drum voices. */
+export class FakeBufferSourceNode extends FakeAudioNode {
+  buffer: unknown = null;
+  loop = false;
+  onended: (() => void) | null = null;
+  startedAt: number | null = null;
+  stoppedAt: number | null = null;
+  constructor() {
+    super("buffer-source");
+  }
+  start(when = 0): void {
+    this.startedAt = when;
+  }
+  stop(when = 0): void {
+    this.stoppedAt = when;
+  }
+  end(): void {
+    this.onended?.();
+  }
+}
+
 export class FakeBiquadNode extends FakeAudioNode {
   readonly frequency = new FakeAudioParam(350);
   readonly Q = new FakeAudioParam(1);
@@ -136,12 +169,18 @@ export interface FakeAudioContext {
   /** Every node the context handed out, in creation order. */
   readonly created: FakeAudioNode[];
   audioWorklet: { addModule(url: string): Promise<void> };
+  readonly sampleRate: number;
   createGain(): FakeGainNode;
   createBiquadFilter(): FakeBiquadNode;
   createOscillator(): FakeOscillatorNode;
+  createWaveShaper(): FakeWaveShaperNode;
+  createBufferSource(): FakeBufferSourceNode;
+  createBuffer(channels: number, length: number, sampleRate: number): AudioBuffer;
 }
 
-export function createFakeAudioContext(options: { currentTime?: number } = {}): FakeAudioContext {
+export function createFakeAudioContext(
+  options: { currentTime?: number; sampleRate?: number } = {},
+): FakeAudioContext {
   const addedModules: string[] = [];
   const created: FakeAudioNode[] = [];
   const track = <T extends FakeAudioNode>(node: T): T => {
@@ -158,9 +197,35 @@ export function createFakeAudioContext(options: { currentTime?: number } = {}): 
         return Promise.resolve();
       },
     },
+    sampleRate: options.sampleRate ?? 48000,
     createGain: () => track(new FakeGainNode()),
     createBiquadFilter: () => track(new FakeBiquadNode()),
     createOscillator: () => track(new FakeOscillatorNode()),
+    createWaveShaper: () => {
+      const node = track(new FakeWaveShaperNode());
+      // `curve = ...` has to be observable, so the property is an accessor
+      // over the recording field rather than a plain slot.
+      let curve: Float32Array | null = null;
+      Object.defineProperty(node, "curve", {
+        get: () => curve,
+        set: (next: Float32Array | null) => {
+          curve = next;
+          node.curveWrites += 1;
+        },
+      });
+      return node;
+    },
+    createBufferSource: () => track(new FakeBufferSourceNode()),
+    createBuffer: (channels: number, length: number, sampleRate: number) => {
+      const data = Array.from({ length: channels }, () => new Float32Array(length));
+      return {
+        numberOfChannels: channels,
+        length,
+        sampleRate,
+        duration: length / sampleRate,
+        getChannelData: (index: number) => data[index] ?? new Float32Array(0),
+      } as unknown as AudioBuffer;
+    },
   };
 }
 
