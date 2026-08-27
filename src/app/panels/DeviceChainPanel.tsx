@@ -151,10 +151,21 @@ function DevicePanel({
         border: "1px solid #333",
         borderRadius: 4,
         padding: 6,
+        // The chain scrolls horizontally, so a device keeps its size rather
+        // than being squeezed by the ones after it — a shrunk panel pushes
+        // its own controls outside its border.
         minWidth: 150,
+        maxWidth: 240,
+        flex: "0 0 auto",
         opacity: device.enabled ? 1 : 0.5,
       }}
     >
+      {/* Header, in TWO rows on purpose. As one row it packed the enable
+          dot, the title, the preset picker, save, and ◀ ▶ ✕ into a box whose
+          `minWidth` is 150 — the row needs ~224px, so with a few effects in
+          the chain the trailing buttons overflowed the panel's own border and
+          landed on top of the NEXT device's title. Splitting the row keeps
+          every control inside the box it belongs to. */}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <button
           type="button"
@@ -166,6 +177,7 @@ function DevicePanel({
           style={{
             width: 12,
             height: 12,
+            flex: "0 0 auto",
             borderRadius: "50%",
             border: "1px solid #555",
             background: device.enabled ? "#7ad67a" : "#222",
@@ -173,95 +185,117 @@ function DevicePanel({
             padding: 0,
           }}
         />
-        <span style={{ fontSize: 12, color: "#ddd", flex: 1 }}>{label}</span>
-        {def !== undefined && (
-          <>
-            <select
-              data-testid={`preset-select-${deviceId}`}
-              aria-label="Preset"
-              value=""
-              onChange={(e) => {
-                const preset = presets.find((entry) => entry.name === e.target.value);
-                if (preset === undefined) return;
-                // One undo entry for the whole bag (SS4 "presets are bags of
-                // parameter values"); unknown/out-of-range ids are dropped.
-                const values: Record<string, number> = {};
-                for (const [localId, value] of Object.entries(preset.values)) {
-                  if (def.params.some((p) => p.id === localId)) {
-                    values[deviceParamId(channelId, deviceId, localId)] = value;
-                  }
-                }
-                dispatch(commands.setParamValues(values));
-              }}
-              style={{ fontSize: 10, maxWidth: 90, background: "#181818", color: "#bbb" }}
-            >
-              <option value="">presets…</option>
-              {presets.map((preset) => (
-                <option key={preset.name} value={preset.name}>
-                  {preset.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              data-testid={`preset-save-${deviceId}`}
-              title="Save current values as a preset"
-              onClick={() => {
-                const name = window.prompt("Preset name");
-                if (name === null || name.trim() === "") return;
-                const values: Record<string, number> = {};
-                for (const paramDesc of def.params) {
-                  const stored = doc.paramValues[deviceParamId(channelId, deviceId, paramDesc.id)];
-                  values[paramDesc.id] = stored ?? paramDesc.defaultValue;
-                }
-                presetStore.save(def.id, name, values);
-                setPresetRevision((n) => n + 1);
-              }}
-              style={tinyButton}
-            >
-              ⭳
-            </button>
-          </>
-        )}
+        {/* `minWidth: 0` is what lets the name ellipsize instead of forcing
+            the row wider than the panel. */}
+        <span
+          title={label}
+          style={{
+            fontSize: 12,
+            color: "#ddd",
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {label}
+        </span>
         {inChain && (
-          <>
-            <button
-              type="button"
-              data-testid={`device-left-${deviceId}`}
-              title="Move earlier in the chain"
-              disabled={index <= 0}
-              onClick={() => dispatch(commands.moveDevice(channelId, deviceId, index - 1))}
-              style={tinyButton}
-            >
-              ◀
-            </button>
-            <button
-              type="button"
-              data-testid={`device-right-${deviceId}`}
-              title="Move later in the chain"
-              disabled={index < 0 || index >= chain.length - 1}
-              onClick={() => dispatch(commands.moveDevice(channelId, deviceId, index + 1))}
-              style={tinyButton}
-            >
-              ▶
-            </button>
-            <button
-              type="button"
-              data-testid={`device-remove-${deviceId}`}
-              title="Remove device"
-              onClick={() => dispatch(commands.removeDevices([deviceId]))}
-              style={tinyButton}
-            >
-              ✕
-            </button>
-          </>
+          <button
+            type="button"
+            data-testid={`device-remove-${deviceId}`}
+            title="Remove device"
+            onClick={() => dispatch(commands.removeDevices([deviceId]))}
+            style={tinyButton}
+          >
+            ✕
+          </button>
         )}
       </div>
 
+      {(def !== undefined || inChain) && (
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {def !== undefined && (
+            <>
+              <select
+                data-testid={`preset-select-${deviceId}`}
+                aria-label="Preset"
+                value=""
+                onChange={(e) => {
+                  const preset = presets.find((entry) => entry.name === e.target.value);
+                  if (preset === undefined) return;
+                  // One undo entry for the whole bag (SS4 "presets are bags of
+                  // parameter values"); unknown/out-of-range ids are dropped.
+                  const values: Record<string, number> = {};
+                  for (const [localId, value] of Object.entries(preset.values)) {
+                    if (def.params.some((p) => p.id === localId)) {
+                      values[deviceParamId(channelId, deviceId, localId)] = value;
+                    }
+                  }
+                  dispatch(commands.setParamValues(values));
+                }}
+                style={{ fontSize: 10, flex: 1, minWidth: 0, background: "#181818", color: "#bbb" }}
+              >
+                <option value="">presets…</option>
+                {presets.map((preset) => (
+                  <option key={preset.name} value={preset.name}>
+                    {preset.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                data-testid={`preset-save-${deviceId}`}
+                title="Save current values as a preset"
+                onClick={() => {
+                  const name = window.prompt("Preset name");
+                  if (name === null || name.trim() === "") return;
+                  const values: Record<string, number> = {};
+                  for (const paramDesc of def.params) {
+                    const stored = doc.paramValues[deviceParamId(channelId, deviceId, paramDesc.id)];
+                    values[paramDesc.id] = stored ?? paramDesc.defaultValue;
+                  }
+                  presetStore.save(def.id, name, values);
+                  setPresetRevision((n) => n + 1);
+                }}
+                style={tinyButton}
+              >
+                ⭳
+              </button>
+            </>
+          )}
+          {inChain && (
+            <span style={{ display: "inline-flex", gap: 4, marginLeft: "auto" }}>
+              <button
+                type="button"
+                data-testid={`device-left-${deviceId}`}
+                title="Move earlier in the chain"
+                disabled={index <= 0}
+                onClick={() => dispatch(commands.moveDevice(channelId, deviceId, index - 1))}
+                style={tinyButton}
+              >
+                ◀
+              </button>
+              <button
+                type="button"
+                data-testid={`device-right-${deviceId}`}
+                title="Move later in the chain"
+                disabled={index < 0 || index >= chain.length - 1}
+                onClick={() => dispatch(commands.moveDevice(channelId, deviceId, index + 1))}
+                style={tinyButton}
+              >
+                ▶
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
       {/* SS6 "Audio From" — the sidechain picker, exactly like Ableton's. */}
       {hasScPort && (
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <span style={{ fontSize: 10, color: "#888" }}>Audio From</span>
+        <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 10, color: "#888", flex: "0 0 auto" }}>Audio From</span>
           <select
             data-testid={`sc-source-${deviceId}`}
             value={scEdge?.from.channel ?? ""}
@@ -283,7 +317,7 @@ function DevicePanel({
               };
               dispatch(commands.setSidechain(edge));
             }}
-            style={{ fontSize: 10, background: "#181818", color: "#bbb" }}
+            style={{ fontSize: 10, minWidth: 0, maxWidth: 138, background: "#181818", color: "#bbb" }}
           >
             <option value="">None</option>
             {doc.channelOrder.map((id) => (
@@ -306,7 +340,7 @@ function DevicePanel({
                   }),
                 )
               }
-              style={{ fontSize: 10, background: "#181818", color: "#bbb" }}
+              style={{ fontSize: 10, minWidth: 0, maxWidth: 138, background: "#181818", color: "#bbb" }}
             >
               <option value="preFx">Pre FX</option>
               <option value="postFx" disabled={scEdge.from.channel === channelId}>
@@ -388,7 +422,7 @@ export function DeviceChainPanel({
     >
       {/* Instrument slot (tracks only, SS7) */}
       {channel.role === "track" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: "0 0 auto" }}>
           <select
             data-testid="instrument-select"
             aria-label="Instrument"
@@ -459,7 +493,7 @@ export function DeviceChainPanel({
             dispatch(commands.addEffect(channel.id, { definitionId: def.id, version: def.version }));
           }
         }}
-        style={{ fontSize: 11, background: "#181818", color: "#bbb", alignSelf: "center" }}
+        style={{ fontSize: 11, background: "#181818", color: "#bbb", alignSelf: "center", flex: "0 0 auto" }}
       >
         <option value="" disabled>
           + Add effect…
@@ -484,6 +518,7 @@ export function DeviceChainPanel({
 
 const tinyButton: React.CSSProperties = {
   fontSize: 10,
+  flex: "0 0 auto",
   background: "#222",
   color: "#999",
   border: "1px solid #444",
