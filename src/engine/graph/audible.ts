@@ -20,7 +20,7 @@
 // The result feeds `mute` gain values (audible ? 1 : 0) — never the
 // document, never history (SS13: meters and audibility are ephemeral).
 
-import type { ChannelId } from "../../types";
+import type { ChannelId, RackChainId } from "../../types";
 
 export interface AudibleChannelShape {
   readonly id: ChannelId;
@@ -158,5 +158,35 @@ export function audibleChannels(doc: AudibleDocShape): Set<ChannelId> {
     }
   }
 
+  return audible;
+}
+
+// --- rack chains -------------------------------------------------------------
+
+/** The shape `audibleChains` needs from a `RackChain` (SS7 racks). */
+export interface AudibleChainShape {
+  readonly id: RackChainId;
+  readonly mute: boolean;
+  readonly solo: boolean;
+}
+
+/**
+ * Chain solo-in-place, the rack-local twin of `audibleChannels`.
+ *
+ * A rack's chains are siblings with no tree above them and no sends between
+ * them, so the whole thing collapses to the two rules that matter: any solo
+ * in this rack means only the soloed chains sound (a soloed chain's own mute
+ * is overridden, as on a channel); otherwise everything unmuted sounds.
+ *
+ * Solo is scoped to ONE rack on purpose — soloing a chain of a drum rack's
+ * snare should not silence the chains of a rack on the bass. The result
+ * feeds `chainMute` gain values, never the document (SS13).
+ */
+export function audibleChains(chains: readonly AudibleChainShape[]): Set<RackChainId> {
+  const audible = new Set<RackChainId>();
+  const soloed = chains.some((c) => c.solo);
+  for (const chain of chains) {
+    if (soloed ? chain.solo : !chain.mute) audible.add(chain.id);
+  }
   return audible;
 }

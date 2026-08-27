@@ -21,6 +21,9 @@ import type {
   DeviceInstanceId,
   LaneId,
   ParamId,
+  RackChainId,
+  RackId,
+  RackMacroId,
 } from "./ids";
 import type { TempoSegment, Ticks, TimeSignature } from "./time";
 import type { LoopRegion } from "./transport";
@@ -96,6 +99,68 @@ export interface Channel {
   output: ChannelId | null;
 }
 
+/**
+ * One PARALLEL chain inside a rack (SS7 "racks"). Its `devices` are ordinary
+ * `DeviceState`s in `Project.devices` — a rack changes how a device is WIRED,
+ * never what a device is, so every existing device command, param path and
+ * automation lane keeps working for a device that moves into a chain.
+ *
+ * `gain`/`pan` are `ParamId`s for the same reason `Channel.volume` is: their
+ * values live in `Project.paramValues` and are registry params like any
+ * other, so they automate and undo with no special case.
+ */
+export interface RackChain {
+  id: RackChainId;
+  name: string;
+  /** Ordered; `[]` is a legal (silent-but-dry) chain. */
+  devices: DeviceInstanceId[];
+  mute: boolean;
+  solo: boolean;
+  /** `chan:<c>/dev:<rack>/chain:<id>/gain`, in dB. */
+  gain: ParamId;
+  /** `chan:<c>/dev:<rack>/chain:<id>/pan`, -1..1. */
+  pan: ParamId;
+}
+
+/**
+ * SS7 macro: one knob fanned out to N device params, each over its own
+ * sub-range. The macro is itself a registry param, so it automates like
+ * anything else; the FAN-OUT is engine behaviour (M4 of the rack plan), not
+ * document data beyond the target list.
+ */
+export interface RackMacro {
+  id: RackMacroId;
+  name: string;
+  /** `chan:<c>/dev:<rack>/macro:<id>`, 0-127 like a MIDI CC. */
+  param: ParamId;
+  /** Where the knob's 0..1 sweep lands on each target, in the target's own
+   *  real units. `min > max` is legal and inverts the target. */
+  targets: { paramId: ParamId; min: number; max: number }[];
+}
+
+/**
+ * An effect rack: parallel chains between one split and one sum, occupying a
+ * single slot of `Channel.chain`.
+ *
+ * A rack's `id` sits in `Channel.chain` exactly where a `DeviceInstanceId`
+ * would, and is resolved against `Project.racks` FIRST — the two collections
+ * share one id namespace and must stay disjoint (invariant 9). That is what
+ * lets a rack be moved, removed and addressed by every command that already
+ * speaks chain slots, and what makes its params ordinary `dev:` paths.
+ */
+export interface RackState {
+  id: RackId;
+  /** Which channel hosts it — the `chan:` segment of its params (SS4). */
+  channelId: ChannelId;
+  name: string;
+  /** Rack on/off. Disabled = split wired straight to sum: the chains stay
+   *  mounted and keep their state, exactly like a disabled device (SS7). */
+  enabled: boolean;
+  /** Ordered top-to-bottom in the UI; `[]` passes audio through dry. */
+  chains: RackChain[];
+  macros: RackMacro[];
+}
+
 /** SS6: sidechain is an explicit edge in the document, never a device hack. */
 export interface SidechainEdge {
   from: { channel: ChannelId; tap: "preFx" | "postFx" | "postFader" };
@@ -151,7 +216,11 @@ export interface AutomationLane {
  *    ids whose owning device/channel exists in this document.
  * 7. `devices[id].channelId` agrees with the channel whose `source` or
  *    `chain` names `id`.
- * 8. No key holds `undefined`: absent optional data is `null` or an empty
+ * 8. `racks` and `devices` never share a key, and every id in a
+ *    `Channel.chain` resolves through exactly one of them. A rack's
+ *    `channelId` agrees with the channel whose chain names it, and every
+ *    `RackChain.devices` entry is a device on that same channel.
+ * 9. No key holds `undefined`: absent optional data is `null` or an empty
  *    collection, so JSON round-trips are lossless.
  */
 export interface Project {
@@ -168,6 +237,9 @@ export interface Project {
   devices: Record<DeviceInstanceId, DeviceState>;
   clips: Record<ClipId, MidiClip>;
   lanes: Record<LaneId, AutomationLane>;
+  /** SS7 effect racks, keyed by the chain slot they occupy (see `RackState`).
+   *  Additive: a document with no racks carries `{}`. */
+  racks: Record<RackId, RackState>;
   sidechains: SidechainEdge[];
   /** `ParamId -> committed real-unit value` (SS4 `snapshot()` / `load()`). */
   paramValues: Record<ParamId, number>;

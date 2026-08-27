@@ -175,6 +175,7 @@ export const createEmptyProject: CreateEmptyProject = (options = {}) => {
     devices: { [instrumentId]: makeInstrumentDevice(instrumentId, trackId) },
     clips: { [clipId]: clip },
     lanes: {},
+    racks: {},
     sidechains: [],
     paramValues: {
       ...defaultMixerParamValues(masterId),

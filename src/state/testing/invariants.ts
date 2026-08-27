@@ -1,4 +1,4 @@
-// The eight document invariants from types/document.ts, as a checker.
+// The document invariants from types/document.ts, as a checker.
 //
 // Test-only: `persistence` owns the shipping validator (`ProjectCodec.validate`,
 // which also REPAIRS). This one only reports, and exists so every command test
@@ -95,10 +95,26 @@ export function checkProjectInvariants(project: ProjectSnapshot | Project): stri
   }
 
   // 7. devices[id].channelId agrees with the channel that hosts it.
+  // 8. racks and devices are disjoint; a rack's inner devices are hosted by
+  //    the rack's own channel.
   const hosts = new Map<string, string>();
+  const rackHosts = new Map<string, string>();
   for (const channel of Object.values(project.channels)) {
     if (channel.source !== null) hosts.set(channel.source.deviceId, channel.id);
-    for (const deviceId of channel.chain) hosts.set(deviceId, channel.id);
+    for (const entryId of channel.chain) {
+      const rack = project.racks[entryId];
+      if (rack !== undefined) {
+        if (project.devices[entryId] !== undefined) {
+          fail(`"${entryId}" is BOTH a rack and a device — a chain slot cannot resolve`);
+        }
+        rackHosts.set(entryId, channel.id);
+        for (const inner of rack.chains) {
+          for (const deviceId of inner.devices) hosts.set(deviceId, channel.id);
+        }
+        continue;
+      }
+      hosts.set(entryId, channel.id);
+    }
     if (channel.output !== null && project.channels[channel.output] === undefined) {
       fail(`channels["${channel.id}"].output "${channel.output}" does not exist`);
     }
@@ -114,7 +130,21 @@ export function checkProjectInvariants(project: ProjectSnapshot | Project): stri
     else if (host !== device.channelId) fail(`devices["${id}"].channelId is "${device.channelId}" but it lives on "${host}"`);
   }
 
-  // 8. no key holds `undefined` (a JSON round-trip would drop it).
+  for (const [id, rack] of Object.entries(project.racks)) {
+    const host = rackHosts.get(id);
+    if (host === undefined) fail(`racks["${id}"] is not referenced by any channel chain`);
+    else if (host !== rack.channelId) {
+      fail(`racks["${id}"].channelId is "${rack.channelId}" but it lives on "${host}"`);
+    }
+    if (rack.id !== id) fail(`racks["${id}"].id is "${rack.id}"`);
+    const seen = new Set<string>();
+    for (const chain of rack.chains) {
+      if (seen.has(chain.id)) fail(`racks["${id}"] has two chains with id "${chain.id}"`);
+      seen.add(chain.id);
+    }
+  }
+
+  // 9. no key holds `undefined` (a JSON round-trip would drop it).
   const walk = (value: unknown, path: string): void => {
     if (value === null || typeof value !== "object") return;
     if (Array.isArray(value)) {

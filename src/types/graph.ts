@@ -10,7 +10,13 @@
 // ids, which is what makes "dynamic effect chains" a diff instead of a
 // feature (SS6 "Reconciler").
 
-import type { ChannelId, DeviceDefinitionId, DeviceInstanceId } from "./ids";
+import type {
+  ChannelId,
+  DeviceDefinitionId,
+  DeviceInstanceId,
+  RackChainId,
+  RackId,
+} from "./ids";
 
 /**
  * Address of one wiring endpoint. Built ONLY by src/engine/graph/ids.ts —
@@ -18,6 +24,8 @@ import type { ChannelId, DeviceDefinitionId, DeviceInstanceId } from "./ids";
  *
  *   channel utility node : `chan:<ChannelId>/<util>`     (see `UtilNodeKind`)
  *   send gain            : `chan:<ChannelId>/send:<to>`
+ *   rack split/sum       : `rack:<RackId>/split|sum`
+ *   rack chain node      : `rack:<RackId>/chain:<RackChainId>/mute|gain|pan`
  *   device port          : `dev:<DeviceInstanceId>/in|out|port:<portId>`
  *   context destination  : `$destination`
  */
@@ -47,7 +55,28 @@ export type GraphEdgeId = string;
  * - `post`   — unity GainNode: the post-fader tap (sends, sidechain, meter)
  *              and the edge into the parent channel / destination.
  */
-export type UtilNodeKind = "input" | "postfx" | "mute" | "vol" | "pan" | "post" | "send";
+export type UtilNodeKind =
+  | "input"
+  | "postfx"
+  | "mute"
+  | "vol"
+  | "pan"
+  | "post"
+  | "send"
+  // SS7 racks. A rack occupies one slot of a channel chain and expands into
+  // a split, N parallel chains, and a sum:
+  //
+  //   ...prev -> rackSplit ─┬─> [chain A devices] -> chainMute -> chainGain -> chainPan ─┬─> rackSum -> next...
+  //                         └─> [chain B devices] -> chainMute -> chainGain -> chainPan ─┘
+  //
+  // Per-chain mute/gain/pan mirror the channel spine deliberately: chain
+  // solo is then the same pure-function-plus-gain trick as solo-in-place
+  // (see `audibleChains`), never a rewire.
+  | "rackSplit"
+  | "rackSum"
+  | "chainMute"
+  | "chainGain"
+  | "chainPan";
 
 /** What kind of native node a utility ref instantiates. */
 export type UtilNodeType = "gain" | "panner";
@@ -56,9 +85,15 @@ export interface UtilNodeSpec {
   ref: GraphNodeRef;
   type: UtilNodeType;
   kind: UtilNodeKind;
+  /** The channel hosting this node — for a rack node, the channel whose
+   *  chain holds the rack. Boundary dips and seeding both key off it. */
   channelId: ChannelId;
   /** `send` nodes only: the destination channel of the send. */
   sendTo?: ChannelId | undefined;
+  /** Rack nodes only. */
+  rackId?: RackId | undefined;
+  /** `chain*` nodes only. */
+  chainId?: RackChainId | undefined;
 }
 
 /** One device the graph wants mounted (SS7 lifecycle, run by the harness). */

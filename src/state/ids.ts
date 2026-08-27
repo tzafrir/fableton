@@ -20,6 +20,9 @@ import type {
   LaneId,
   NoteId,
   ProjectId,
+  RackChainId,
+  RackId,
+  RackMacroId,
 } from "../types";
 
 /** Kind prefixes. Short on purpose: these strings end up inside every
@@ -31,6 +34,9 @@ const PREFIX = {
   clip: "clip",
   note: "note",
   lane: "lane",
+  rack: "rack",
+  chain: "rchain",
+  macro: "macro",
 } as const;
 
 export interface IdFactoryOptions {
@@ -71,6 +77,9 @@ export function createIdFactory(options: IdFactoryOptions = {}): IdFactory {
     clip: (): ClipId => next(PREFIX.clip),
     note: (): NoteId => next(PREFIX.note),
     lane: (): LaneId => next(PREFIX.lane),
+    rack: (): RackId => next(PREFIX.rack),
+    chain: (): RackChainId => next(PREFIX.chain),
+    macro: (): RackMacroId => next(PREFIX.macro),
   };
 }
 
@@ -94,6 +103,9 @@ export function createSequentialIdFactory(prefixTag = ""): IdFactory {
     clip: (): ClipId => next(PREFIX.clip),
     note: (): NoteId => next(PREFIX.note),
     lane: (): LaneId => next(PREFIX.lane),
+    rack: (): RackId => next(PREFIX.rack),
+    chain: (): RackChainId => next(PREFIX.chain),
+    macro: (): RackMacroId => next(PREFIX.macro),
   };
 }
 

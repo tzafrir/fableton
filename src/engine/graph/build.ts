@@ -33,8 +33,15 @@ import {
   deviceOutRef,
   devicePortRef,
   edgeId,
+  rackChainUtilRef,
+  rackUtilRef,
   sendRef,
 } from "./ids";
+
+/** The document is handed in as an `Immutable<Project>`, so a rack read out
+ *  of it is deeply readonly — spelling the type this way keeps `buildRack`
+ *  honest about never mutating what it walks. */
+type RackSnapshot = ProjectSnapshot["racks"][string];
 
 interface Builder {
   utils: Map<GraphNodeRef, UtilNodeSpec>;
@@ -56,6 +63,97 @@ export function sidechainTapRef(channelId: ChannelId, tap: "preFx" | "postFx" | 
   if (tap === "preFx") return channelUtilRef(channelId, "input");
   if (tap === "postFx") return channelUtilRef(channelId, "postfx");
   return channelUtilRef(channelId, "post");
+}
+
+/**
+ * Expands one rack in place: `cursor -> split -> {chains} -> sum`, returning
+ * the ref the rest of the channel chain continues from.
+ *
+ * A DISABLED rack keeps every inner device mounted and simply wires split
+ * straight to sum — the same "mounted, silent, out of the path" rule
+ * disabled devices follow (SS7), so toggling a rack is a two-edge diff and
+ * the chains keep their state. A rack with no chains does the same, so an
+ * empty rack passes audio through dry rather than swallowing the channel.
+ */
+function buildRack(
+  b: Builder,
+  doc: ProjectSnapshot,
+  rack: RackSnapshot,
+  channelId: ChannelId,
+  cursor: GraphNodeRef,
+): GraphNodeRef {
+  const split = addUtil(b, {
+    ref: rackUtilRef(rack.id, "split"),
+    type: "gain",
+    kind: "rackSplit",
+    channelId,
+    rackId: rack.id,
+  });
+  const sum = addUtil(b, {
+    ref: rackUtilRef(rack.id, "sum"),
+    type: "gain",
+    kind: "rackSum",
+    channelId,
+    rackId: rack.id,
+  });
+  connect(b, cursor, split);
+
+  // Inner devices are mounted whether or not they are in the signal path,
+  // exactly like a bypassed device on a channel.
+  for (const chain of rack.chains) {
+    for (const deviceId of chain.devices) {
+      const device = doc.devices[deviceId];
+      if (device === undefined) continue;
+      b.mounts.set(device.id, { deviceId: device.id, definitionId: device.definitionId, channelId });
+    }
+  }
+
+  if (!rack.enabled || rack.chains.length === 0) {
+    connect(b, split, sum);
+    return sum;
+  }
+
+  for (const chain of rack.chains) {
+    const mute = addUtil(b, {
+      ref: rackChainUtilRef(rack.id, chain.id, "mute"),
+      type: "gain",
+      kind: "chainMute",
+      channelId,
+      rackId: rack.id,
+      chainId: chain.id,
+    });
+    const gain = addUtil(b, {
+      ref: rackChainUtilRef(rack.id, chain.id, "gain"),
+      type: "gain",
+      kind: "chainGain",
+      channelId,
+      rackId: rack.id,
+      chainId: chain.id,
+    });
+    const pan = addUtil(b, {
+      ref: rackChainUtilRef(rack.id, chain.id, "pan"),
+      type: "panner",
+      kind: "chainPan",
+      channelId,
+      rackId: rack.id,
+      chainId: chain.id,
+    });
+
+    let inner: GraphNodeRef = split;
+    for (const deviceId of chain.devices) {
+      const device = doc.devices[deviceId];
+      if (device === undefined || !device.enabled) continue;
+      connect(b, inner, deviceInRef(device.id));
+      inner = deviceOutRef(device.id);
+    }
+    // An EMPTY chain is the dry path — split lands straight on its mute.
+    connect(b, inner, mute);
+    connect(b, mute, gain);
+    connect(b, gain, pan);
+    connect(b, pan, sum);
+  }
+
+  return sum;
 }
 
 export function buildGraph(doc: ProjectSnapshot): GraphDescription {
@@ -86,6 +184,13 @@ export function buildGraph(doc: ProjectSnapshot): GraphDescription {
     // --- effect chain, bypassing disabled devices --------------------------
     let cursor: GraphNodeRef = input;
     for (const deviceId of channel.chain) {
+      // A chain slot holds EITHER a rack or a device; racks resolve first
+      // (the two collections share one id namespace and are disjoint).
+      const rack = doc.racks[deviceId];
+      if (rack !== undefined) {
+        cursor = buildRack(b, doc, rack, channelId, cursor);
+        continue;
+      }
       const device = doc.devices[deviceId];
       if (device === undefined) continue;
       b.mounts.set(device.id, { deviceId: device.id, definitionId: device.definitionId, channelId });

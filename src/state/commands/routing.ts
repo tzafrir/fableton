@@ -26,7 +26,14 @@ import {
   findMasterChannelId,
   makeChannel,
 } from "../project";
-import { clampInt, makeCommand, repointSurvivingOutputs, type DraftProject } from "./util";
+import { removeRackFromDoc } from "./racks";
+import {
+  clampInt,
+  detachFromChains,
+  makeCommand,
+  repointSurvivingOutputs,
+  type DraftProject,
+} from "./util";
 
 export type RoutingCommands = Pick<
   ProjectCommands,
@@ -98,14 +105,19 @@ function removeParamValuesOf(doc: DraftProject, keep: (id: string) => boolean): 
 }
 
 /** Deletes one device from wherever it hangs; lanes are deliberately kept. */
+/** A chain slot holds a device OR a rack; callers that iterate slots do not
+ *  know which, so this dispatches on the collection the id resolves in. */
+function removeChainEntry(doc: DraftProject, entryId: DeviceInstanceId): void {
+  if (doc.racks[entryId] !== undefined) removeRackFromDoc(doc, entryId);
+  else removeDeviceFromDoc(doc, entryId);
+}
+
 function removeDeviceFromDoc(doc: DraftProject, deviceId: DeviceInstanceId): void {
   const device = doc.devices[deviceId];
   if (device === undefined) return;
-  const channel = doc.channels[device.channelId];
-  if (channel !== undefined) {
-    channel.chain = channel.chain.filter((id) => id !== deviceId);
-    if (channel.source !== null && channel.source.deviceId === deviceId) channel.source = null;
-  }
+  // Covers the channel chain, the source slot AND any rack chain the device
+  // sits in — a device removed from inside a rack must leave no dead id.
+  detachFromChains(doc, deviceId);
   doc.sidechains = doc.sidechains.filter((e) => e.to.device !== deviceId);
   removeParamValuesOf(doc, (id) => !isDeviceParamId(id, deviceId));
   delete doc.devices[deviceId];
@@ -211,7 +223,7 @@ export function createRoutingCommands(ids: IdFactory): RoutingCommands {
           for (const id of dying) {
             const channel = doc.channels[id];
             if (channel === undefined) continue;
-            for (const deviceId of [...channel.chain]) removeDeviceFromDoc(doc, deviceId);
+            for (const entryId of [...channel.chain]) removeChainEntry(doc, entryId);
             if (channel.source !== null) removeDeviceFromDoc(doc, channel.source.deviceId);
           }
           for (const clip of Object.values(doc.clips)) {
@@ -373,7 +385,7 @@ export function createRoutingCommands(ids: IdFactory): RoutingCommands {
     removeDevices(deviceIds): Command {
       const targets = [...deviceIds];
       return makeCommand(targets.length === 1 ? "Remove Device" : "Remove Devices", (doc) => {
-        for (const id of targets) removeDeviceFromDoc(doc, id);
+        for (const id of targets) removeChainEntry(doc, id);
       });
     },
 

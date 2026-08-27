@@ -18,11 +18,13 @@ export {
   panParamId,
   parseParamId,
   qualifyDescriptor,
+  rackChainParamId,
+  rackMacroParamId,
   sendParamId,
   volumeParamId,
   withParamId,
 } from "./paramIds";
-export type { ParsedParamId } from "./paramIds";
+export type { ParsedParamId, RackChainLeaf } from "./paramIds";
 
 export {
   assertTaperUsable,

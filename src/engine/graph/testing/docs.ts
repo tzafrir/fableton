@@ -2,7 +2,16 @@
 // explicit ids (not the id factory) so every assertion can name its node
 // refs verbatim.
 
-import type { Channel, ChannelId, DeviceInstanceId, Project } from "../../../types";
+import type {
+  Channel,
+  ChannelId,
+  DeviceInstanceId,
+  Project,
+  RackChainId,
+  RackId,
+  RackState,
+} from "../../../types";
+import { rackChainParamId } from "../../../params/paramIds";
 import {
   defaultMixerParamValues,
   DEFAULT_BPM,
@@ -14,6 +23,15 @@ export interface DocSpec {
   channels: Partial<Channel>[];
   devices?: { id: DeviceInstanceId; definitionId: string; channelId: ChannelId; enabled?: boolean }[];
   sidechains?: Project["sidechains"];
+  racks?: RackSpec[];
+}
+
+/** A rack, as a test spells it: chains as plain device-id lists. */
+export interface RackSpec {
+  id: RackId;
+  channelId: ChannelId;
+  enabled?: boolean;
+  chains: { id: RackChainId; devices?: DeviceInstanceId[]; mute?: boolean; solo?: boolean }[];
 }
 
 /** A `Project` with just the routing parts filled in. */
@@ -46,6 +64,26 @@ export function routingDoc(spec: DocSpec): Project {
     };
   }
 
+  const racks: Record<RackId, RackState> = {};
+  for (const r of spec.racks ?? []) {
+    racks[r.id] = {
+      id: r.id,
+      channelId: r.channelId,
+      name: r.id,
+      enabled: r.enabled ?? true,
+      chains: r.chains.map((c) => ({
+        id: c.id,
+        name: c.id,
+        devices: c.devices ?? [],
+        mute: c.mute ?? false,
+        solo: c.solo ?? false,
+        gain: rackChainParamId(r.channelId, r.id, c.id, "gain"),
+        pan: rackChainParamId(r.channelId, r.id, c.id, "pan"),
+      })),
+      macros: [],
+    };
+  }
+
   return {
     id: "test-project",
     name: "Test",
@@ -57,6 +95,7 @@ export function routingDoc(spec: DocSpec): Project {
     devices,
     clips: {},
     lanes: {},
+    racks,
     sidechains: spec.sidechains ?? [],
     paramValues,
   };

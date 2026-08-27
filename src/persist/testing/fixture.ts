@@ -91,6 +91,7 @@ export function makeFixtureProject(): Project {
       },
     },
     lanes: {},
+    racks: {},
     sidechains: [
       {
         from: { channel: TRACK_ID, tap: "postFx" },
@@ -154,6 +155,7 @@ export function makeRichFixtureProject(): Project {
         color: "#ff8800",
       },
     },
+    racks: {},
     lanes: {
       [LANE_ID]: {
         id: LANE_ID,

@@ -5,12 +5,25 @@
 //   mixer volume : `chan:<ChannelId>/vol`
 //   mixer pan    : `chan:<ChannelId>/pan`
 //   send amount  : `chan:<ChannelId>/send:<ChannelId>`
+//   rack chain   : `chan:<ChannelId>/dev:<RackId>/chain:<RackChainId>/gain|pan`
+//   rack macro   : `chan:<ChannelId>/dev:<RackId>/macro:<RackMacroId>`
+//
+// A rack occupies a chain slot, so it addresses like a device (`dev:`) and
+// its chains/macros hang off that path — which is what keeps a rack param
+// automatable, undoable and saveable with no new machinery (SS4/SS11).
 //
 // Ids are hierarchical paths built from document ids, so they are stable
 // across sessions, survive reordering, and serialize into automation lanes
 // and MIDI mappings as plain strings.
 
-import type { ChannelId, DeviceInstanceId, ParamId } from "../types";
+import type {
+  ChannelId,
+  DeviceInstanceId,
+  ParamId,
+  RackChainId,
+  RackId,
+  RackMacroId,
+} from "../types";
 import type { ParamDescriptor } from "../types";
 
 /** Path segment separator. Segments themselves may never contain it. */
@@ -19,6 +32,11 @@ export const PARAM_PATH_SEPARATOR = "/";
 const CHANNEL_PREFIX = "chan:";
 const DEVICE_PREFIX = "dev:";
 const SEND_PREFIX = "send:";
+const CHAIN_PREFIX = "chain:";
+const MACRO_PREFIX = "macro:";
+
+/** The two per-chain mixer leaves a rack chain owns. */
+export type RackChainLeaf = "gain" | "pan";
 
 /** Leaf segment for a channel's volume param. */
 export const VOLUME_LEAF = "vol";
@@ -60,6 +78,34 @@ export function panParamId(channelId: ChannelId): ParamId {
   return `${CHANNEL_PREFIX}${assertSegment(channelId, "channelId")}${PARAM_PATH_SEPARATOR}${PAN_LEAF}`;
 }
 
+/** `chan:<c>/dev:<rack>/chain:<chain>/gain|pan` (SS7 racks). */
+export function rackChainParamId(
+  channelId: ChannelId,
+  rackId: RackId,
+  chainId: RackChainId,
+  leaf: RackChainLeaf,
+): ParamId {
+  return [
+    CHANNEL_PREFIX + assertSegment(channelId, "channelId"),
+    DEVICE_PREFIX + assertSegment(rackId, "rackId"),
+    CHAIN_PREFIX + assertSegment(chainId, "chainId"),
+    assertSegment(leaf, "leaf"),
+  ].join(PARAM_PATH_SEPARATOR);
+}
+
+/** `chan:<c>/dev:<rack>/macro:<macro>` (SS7 racks). */
+export function rackMacroParamId(
+  channelId: ChannelId,
+  rackId: RackId,
+  macroId: RackMacroId,
+): ParamId {
+  return [
+    CHANNEL_PREFIX + assertSegment(channelId, "channelId"),
+    DEVICE_PREFIX + assertSegment(rackId, "rackId"),
+    MACRO_PREFIX + assertSegment(macroId, "macroId"),
+  ].join(PARAM_PATH_SEPARATOR);
+}
+
 /** `chan:<from>/send:<to>` — the amount channel `from` sends to `to`. */
 export function sendParamId(from: ChannelId, to: ChannelId): ParamId {
   return `${CHANNEL_PREFIX}${assertSegment(from, "channelId")}${PARAM_PATH_SEPARATOR}${SEND_PREFIX}${assertSegment(to, "targetChannelId")}`;
@@ -70,7 +116,15 @@ export type ParsedParamId =
   | { kind: "device"; channelId: ChannelId; instanceId: DeviceInstanceId; localId: string }
   | { kind: "volume"; channelId: ChannelId }
   | { kind: "pan"; channelId: ChannelId }
-  | { kind: "send"; channelId: ChannelId; targetChannelId: ChannelId };
+  | { kind: "send"; channelId: ChannelId; targetChannelId: ChannelId }
+  | {
+      kind: "rackChain";
+      channelId: ChannelId;
+      rackId: RackId;
+      chainId: RackChainId;
+      leaf: RackChainLeaf;
+    }
+  | { kind: "rackMacro"; channelId: ChannelId; rackId: RackId; macroId: RackMacroId };
 
 /**
  * Parses a `ParamId` back into its parts, or `null` when the string is not a
@@ -104,7 +158,27 @@ export function parseParamId(id: ParamId): ParsedParamId | null {
     if (!devSeg.startsWith(DEVICE_PREFIX)) return null;
     const instanceId = devSeg.slice(DEVICE_PREFIX.length);
     if (instanceId.length === 0 || localId.length === 0) return null;
+    // A macro is not a device-local param: `macro:` is a reserved leaf
+    // prefix, so no device may declare a local id starting with it.
+    if (localId.startsWith(MACRO_PREFIX)) {
+      const macroId = localId.slice(MACRO_PREFIX.length);
+      if (macroId.length === 0) return null;
+      return { kind: "rackMacro", channelId, rackId: instanceId, macroId };
+    }
     return { kind: "device", channelId, instanceId, localId };
+  }
+
+  if (parts.length === 4) {
+    const devSeg = parts[1];
+    const chainSeg = parts[2];
+    const leaf = parts[3];
+    if (devSeg === undefined || chainSeg === undefined || leaf === undefined) return null;
+    if (!devSeg.startsWith(DEVICE_PREFIX) || !chainSeg.startsWith(CHAIN_PREFIX)) return null;
+    const rackId = devSeg.slice(DEVICE_PREFIX.length);
+    const chainId = chainSeg.slice(CHAIN_PREFIX.length);
+    if (rackId.length === 0 || chainId.length === 0) return null;
+    if (leaf !== "gain" && leaf !== "pan") return null;
+    return { kind: "rackChain", channelId, rackId, chainId, leaf };
   }
 
   return null;

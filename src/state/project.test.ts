@@ -65,6 +65,7 @@ describe("createEmptyProject", () => {
       },
       clips: { "clip-1": { id: "clip-1", trackId: "chan-2", start: 0, length: ONE_BAR_TICKS, notes: [] } },
       lanes: {},
+      racks: {},
       sidechains: [],
       paramValues: {
         [volumeParamId("chan-1")]: DEFAULT_VOLUME_DB,

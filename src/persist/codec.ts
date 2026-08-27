@@ -13,6 +13,7 @@
 // or dropped by `validate` (document.ts invariants 1-8).
 
 import { findRoutingCycle, sidechainIsFeedForward } from "../engine/graph/validate";
+import { rackChainParamId } from "../params/paramIds";
 import type {
   AutomationLane,
   AutoPoint,
@@ -29,6 +30,9 @@ import type {
   Project,
   ProjectCodec,
   ProjectFile,
+  RackChain,
+  RackMacro,
+  RackState,
   SendSpec,
   SidechainEdge,
   SourceRef,
@@ -141,6 +145,40 @@ function canonicalAutomationLane(l: AutomationLane): JsonValue {
   };
 }
 
+function canonicalRackChain(c: RackChain): JsonValue {
+  return {
+    id: c.id,
+    name: c.name,
+    devices: [...c.devices],
+    mute: c.mute,
+    solo: c.solo,
+    gain: c.gain,
+    pan: c.pan,
+  };
+}
+
+function canonicalRackMacro(m: RackMacro): JsonValue {
+  return {
+    id: m.id,
+    name: m.name,
+    param: m.param,
+    targets: m.targets.map((t) => ({ paramId: t.paramId, min: t.min, max: t.max })),
+  };
+}
+
+function canonicalRack(r: RackState): JsonValue {
+  return {
+    id: r.id,
+    channelId: r.channelId,
+    name: r.name,
+    enabled: r.enabled,
+    // Chain and macro ORDER is meaningful (it is the on-screen order), so
+    // these stay arrays and are never sorted, unlike the keyed records.
+    chains: r.chains.map(canonicalRackChain),
+    macros: r.macros.map(canonicalRackMacro),
+  };
+}
+
 function canonicalSidechainEdge(s: SidechainEdge): JsonValue {
   return {
     from: { channel: s.from.channel, tap: s.from.tap },
@@ -202,6 +240,7 @@ function canonicalProject(p: Project): JsonValue {
     devices: canonicalRecord(p.devices, lexicographicOrder(p.devices), canonicalDeviceState),
     clips: canonicalRecord(p.clips, lexicographicOrder(p.clips), canonicalClip),
     lanes: canonicalRecord(p.lanes, lexicographicOrder(p.lanes), canonicalAutomationLane),
+    racks: canonicalRecord(p.racks, lexicographicOrder(p.racks), canonicalRack),
     sidechains: p.sidechains.map(canonicalSidechainEdge),
     paramValues: canonicalParamValues(p.paramValues),
   };
@@ -480,6 +519,55 @@ function parseAutomationLane(
   };
 }
 
+function parseRackChain(raw: JsonValue, path: string, warnings: LoadWarning[]): RackChain {
+  const obj = asObject(raw, path, warnings);
+  const id = asString(obj["id"], `${path}.id`, fallbackId("rchain"), warnings);
+  return {
+    id,
+    name: asString(obj["name"], `${path}.name`, "Chain", warnings),
+    devices: asArray(obj["devices"], `${path}.devices`, warnings).filter(
+      (v): v is string => typeof v === "string",
+    ),
+    mute: asBoolean(obj["mute"], `${path}.mute`, false, warnings),
+    solo: asBoolean(obj["solo"], `${path}.solo`, false, warnings),
+    gain: asString(obj["gain"], `${path}.gain`, "", warnings),
+    pan: asString(obj["pan"], `${path}.pan`, "", warnings),
+  };
+}
+
+function parseRackMacro(raw: JsonValue, path: string, warnings: LoadWarning[]): RackMacro {
+  const obj = asObject(raw, path, warnings);
+  return {
+    id: asString(obj["id"], `${path}.id`, fallbackId("macro"), warnings),
+    name: asString(obj["name"], `${path}.name`, "Macro", warnings),
+    param: asString(obj["param"], `${path}.param`, "", warnings),
+    targets: asArray(obj["targets"], `${path}.targets`, warnings).map((t, i) => {
+      const to = asObject(t, `${path}.targets[${i}]`, warnings);
+      return {
+        paramId: asString(to["paramId"], `${path}.targets[${i}].paramId`, "", warnings),
+        min: asFiniteNumber(to["min"], `${path}.targets[${i}].min`, 0, warnings),
+        max: asFiniteNumber(to["max"], `${path}.targets[${i}].max`, 1, warnings),
+      };
+    }),
+  };
+}
+
+function parseRack(raw: JsonValue, key: string, path: string, warnings: LoadWarning[]): RackState {
+  const obj = asObject(raw, path, warnings);
+  return {
+    id: key,
+    channelId: asString(obj["channelId"], `${path}.channelId`, "", warnings),
+    name: asString(obj["name"], `${path}.name`, "Rack", warnings),
+    enabled: asBoolean(obj["enabled"], `${path}.enabled`, true, warnings),
+    chains: asArray(obj["chains"], `${path}.chains`, warnings).map((v, i) =>
+      parseRackChain(v, `${path}.chains[${i}]`, warnings),
+    ),
+    macros: asArray(obj["macros"], `${path}.macros`, warnings).map((v, i) =>
+      parseRackMacro(v, `${path}.macros[${i}]`, warnings),
+    ),
+  };
+}
+
 const SIDECHAIN_TAPS: readonly SidechainEdge["from"]["tap"][] = ["preFx", "postFx", "postFader"];
 
 function parseSidechainEdge(raw: JsonValue, path: string, warnings: LoadWarning[]): SidechainEdge {
@@ -563,6 +651,15 @@ function parseProject(raw: JsonValue, warnings: LoadWarning[]): ParseOutcome {
     if (value !== undefined) lanes[key] = parseAutomationLane(value, key, `lanes.${key}`, warnings);
   }
 
+  // Racks are ADDITIVE: a v1 file written before they existed simply has no
+  // `racks` key, and `asObject` turns that into `{}` with no warning.
+  const racksObj = asObject(raw["racks"], "racks", warnings);
+  const racks: Record<string, RackState> = {};
+  for (const key of Object.keys(racksObj)) {
+    const value = racksObj[key];
+    if (value !== undefined) racks[key] = parseRack(value, key, `racks.${key}`, warnings);
+  }
+
   const sidechains = asArray(raw["sidechains"], "sidechains", warnings).map((v, i) =>
     parseSidechainEdge(v, `sidechains[${i}]`, warnings),
   );
@@ -580,6 +677,7 @@ function parseProject(raw: JsonValue, warnings: LoadWarning[]): ParseOutcome {
     devices,
     clips,
     lanes,
+    racks,
     sidechains,
     paramValues,
   };
@@ -730,6 +828,7 @@ function validateProject(project: Project): LoadWarning[] {
   // First claimer in row order wins; `device.channelId` is then reconciled to
   // the channel that actually lists it.
   const deviceHost = new Map<string, string>();
+  const rackHost = new Map<string, string>();
   for (const channelId of project.channelOrder) {
     const channel = project.channels[channelId];
     if (channel === undefined) continue;
@@ -746,9 +845,26 @@ function validateProject(project: Project): LoadWarning[] {
         deviceHost.set(deviceId, channelId);
       }
     }
-    const chain = channel.chain.filter((deviceId) => {
-      if (!(deviceId in project.devices) || deviceHost.has(deviceId)) return false;
-      deviceHost.set(deviceId, channelId);
+    const chain = channel.chain.filter((entryId) => {
+      // A chain slot holds a rack OR a device, never both (invariant 8) —
+      // an id in both collections is unresolvable, so the slot is dropped.
+      const rack = project.racks[entryId];
+      if (rack !== undefined) {
+        if (entryId in project.devices || rackHost.has(entryId)) return false;
+        rackHost.set(entryId, channelId);
+        // Inner devices are claimed here too, so the same device can never
+        // sit in a rack chain AND a channel chain.
+        for (const inner of rack.chains) {
+          inner.devices = inner.devices.filter((deviceId) => {
+            if (!(deviceId in project.devices) || deviceHost.has(deviceId)) return false;
+            deviceHost.set(deviceId, channelId);
+            return true;
+          });
+        }
+        return true;
+      }
+      if (!(entryId in project.devices) || deviceHost.has(entryId)) return false;
+      deviceHost.set(entryId, channelId);
       return true;
     });
     if (chain.length !== channel.chain.length) {
@@ -765,6 +881,40 @@ function validateProject(project: Project): LoadWarning[] {
     if (device !== undefined && device.channelId !== host) {
       device.channelId = host;
       pushWarning(warnings, `devices.${deviceId}.channelId`, "Device re-homed to the channel that lists it.");
+    }
+  }
+
+  // Racks (invariant 8). An unclaimed rack is unreachable — no chain slot
+  // names it — so it would be invisible, unplayable and unsavable-away; drop
+  // it with its inner devices. A claimed one is re-homed to the channel that
+  // lists it, and its chain params are rebuilt on that channel's path so a
+  // re-homed rack's gain/pan keep pointing at their own values.
+  for (const rackId of Object.keys(project.racks)) {
+    const rack = project.racks[rackId];
+    if (rack === undefined) continue;
+    const host = rackHost.get(rackId);
+    if (host === undefined) {
+      for (const chain of rack.chains) {
+        for (const deviceId of chain.devices) delete project.devices[deviceId];
+      }
+      delete project.racks[rackId];
+      pushWarning(warnings, `racks.${rackId}`, "Rack no chain slot referenced; dropped with its devices.");
+      continue;
+    }
+    if (rack.channelId !== host) {
+      rack.channelId = host;
+      pushWarning(warnings, `racks.${rackId}.channelId`, "Rack re-homed to the channel that lists it.");
+    }
+    for (const chain of rack.chains) {
+      for (const leaf of ["gain", "pan"] as const) {
+        const expected = rackChainParamId(host, rackId, chain.id, leaf);
+        if (chain[leaf] === expected) continue;
+        const carried = project.paramValues[chain[leaf]];
+        delete project.paramValues[chain[leaf]];
+        if (carried !== undefined) project.paramValues[expected] = carried;
+        chain[leaf] = expected;
+        pushWarning(warnings, `racks.${rackId}.chains`, "Chain param id rebuilt on the hosting channel.");
+      }
     }
   }
 

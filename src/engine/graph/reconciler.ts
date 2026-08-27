@@ -31,10 +31,10 @@ import { dbToGain } from "../../devices/harness";
 import type { AppParamRegistry } from "../../params";
 import { p } from "../../params/descriptors";
 import { withParamId } from "../../params";
-import { audibleChannels } from "./audible";
+import { audibleChains, audibleChannels } from "./audible";
 import { buildGraph } from "./build";
 import { diffGraph } from "./diff";
-import { channelUtilRef, parseNodeRef, sendRef } from "./ids";
+import { channelUtilRef, parseNodeRef, rackChainUtilRef, sendRef } from "./ids";
 
 /** SS6: "~8 ms gain ramps at touched boundaries". */
 export const REWIRE_RAMP_SECONDS = 0.008;
@@ -147,6 +147,22 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
     doc: ProjectSnapshot,
     audible: ReadonlySet<ChannelId>,
   ): void {
+    // Rack chain nodes are addressed through the rack, not the channel.
+    if (spec.rackId !== undefined && spec.chainId !== undefined) {
+      const rack = doc.racks[spec.rackId];
+      const chain = rack?.chains.find((c) => c.id === spec.chainId);
+      if (chain === undefined) return;
+      if (spec.kind === "chainGain") {
+        (node as GainNode).gain.value = dbToGain(clampDb(doc.paramValues[chain.gain] ?? 0), VOLUME_MIN_DB);
+      } else if (spec.kind === "chainPan") {
+        (node as StereoPannerNode).pan.value = Math.min(1, Math.max(-1, doc.paramValues[chain.pan] ?? 0));
+      } else if (spec.kind === "chainMute") {
+        const open = audibleChains(rack?.chains ?? []).has(chain.id) ? 1 : 0;
+        (node as GainNode).gain.value = open;
+        muteTargets.set(spec.ref, open);
+      }
+      return;
+    }
     const channel = doc.channels[spec.channelId];
     if (channel === undefined) return;
     if (spec.kind === "vol") {
@@ -276,6 +292,37 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
       }
     }
 
+    // SS7 racks: a chain's gain/pan are ordinary registry params on the
+    // hosting channel's path, so they automate, undo and save with no
+    // special case — the only new thing is which node they drive.
+    for (const rack of Object.values(doc.racks)) {
+      for (const chain of rack.chains) {
+        const gain = utilNodes.get(rackChainUtilRef(rack.id, chain.id, "gain"));
+        const pan = utilNodes.get(rackChainUtilRef(rack.id, chain.id, "pan"));
+        if (gain !== undefined) {
+          wanted.set(chain.gain, () => {
+            const handle = params.register(
+              withParamId(
+                p.db("gain", "Chain Gain", { min: VOLUME_MIN_DB, max: VOLUME_MAX_DB, default: 0 }),
+                chain.gain,
+              ),
+            );
+            seedBase(handle, doc, chain.gain);
+            handle.bindMessage(smoothGainWrite(gain as GainNode, VOLUME_MIN_DB), {
+              cancelFrom: cancelGainWrites(gain as GainNode),
+            });
+          });
+        }
+        if (pan !== undefined) {
+          wanted.set(chain.pan, () => {
+            const handle = params.register(withParamId(p.pan("pan"), chain.pan));
+            seedBase(handle, doc, chain.pan);
+            handle.bindAudioParam((pan as StereoPannerNode).pan);
+          });
+        }
+      }
+    }
+
     for (const id of [...mixerParamIds]) {
       if (!wanted.has(id)) {
         params.unregister(id);
@@ -302,6 +349,19 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
       if (muteTargets.get(ref) === target) continue; // already there — say nothing
       muteTargets.set(ref, target);
       (mute as GainNode).gain.setTargetAtTime(target, now, 0.005);
+    }
+    // Chain solo/mute inside every rack — same trick, rack-local scope.
+    for (const rack of Object.values(doc.racks)) {
+      const open = audibleChains(rack.chains);
+      for (const chain of rack.chains) {
+        const ref = rackChainUtilRef(rack.id, chain.id, "mute");
+        const node = utilNodes.get(ref);
+        if (node === undefined) continue;
+        const target = open.has(chain.id) ? 1 : 0;
+        if (muteTargets.get(ref) === target) continue;
+        muteTargets.set(ref, target);
+        (node as GainNode).gain.setTargetAtTime(target, now, 0.005);
+      }
     }
   }
 

@@ -26,6 +26,9 @@ import type {
   LaneId,
   NoteId,
   ParamId,
+  RackChainId,
+  RackId,
+  RackMacroId,
 } from "./ids";
 import type { AutoPoint, Project, ProjectId, SidechainEdge } from "./document";
 import type { Ticks, TimeSignature } from "./time";
@@ -203,6 +206,11 @@ export interface IdFactory {
   clip(): ClipId;
   note(): NoteId;
   lane(): LaneId;
+  /** A rack occupies a chain slot, so its id shares the device namespace —
+   *  a distinct prefix keeps saved files readable, nothing more. */
+  rack(): RackId;
+  chain(): RackChainId;
+  macro(): RackMacroId;
 }
 
 // --- command payload shapes -------------------------------------------------
@@ -424,6 +432,42 @@ export interface ProjectCommands {
     init: DeviceInit,
     carryValues?: Readonly<Record<string, number>> | undefined,
   ): Command;
+
+  // racks (SS7) — a rack occupies one chain slot and holds PARALLEL chains
+  /** New rack with one empty chain, at `index` of the channel's chain. */
+  addRack(channelId: ChannelId, index?: number | undefined): Command;
+  /** Wrap existing devices of one channel into a new rack's first chain,
+   *  at the position of the earliest of them. The devices themselves are
+   *  untouched — same instances, same params, same automation. */
+  groupIntoRack(channelId: ChannelId, deviceIds: readonly DeviceInstanceId[]): Command;
+  /** Dissolve a rack back into its channel's chain, chains concatenated in
+   *  order. Per-chain gain/pan/mute are lost — they have nowhere to go. */
+  ungroupRack(rackId: RackId): Command;
+  addRackChain(rackId: RackId, name?: string | undefined): Command;
+  /** Insert a NEW effect straight into a rack chain (`index` omitted =
+   *  append). One command, so it is one undo entry — the two-step
+   *  "add to the channel, then move it in" would be two. */
+  addEffectToChain(
+    rackId: RackId,
+    chainId: RackChainId,
+    init: DeviceInit,
+    index?: number | undefined,
+  ): Command;
+  /** Removes the chain AND the devices in it (they have no other home). */
+  removeRackChain(rackId: RackId, chainId: RackChainId): Command;
+  /** Move a device into a chain of the same rack, or from the hosting
+   *  channel's chain into one (`index` omitted = append). */
+  moveDeviceToChain(
+    rackId: RackId,
+    deviceId: DeviceInstanceId,
+    chainId: RackChainId,
+    index?: number | undefined,
+  ): Command;
+  setChainMuted(rackId: RackId, chainId: RackChainId, muted: boolean): Command;
+  setChainSolo(rackId: RackId, chainId: RackChainId, solo: boolean): Command;
+  setRackEnabled(rackId: RackId, enabled: boolean): Command;
+  renameRack(rackId: RackId, name: string): Command;
+  renameRackChain(rackId: RackId, chainId: RackChainId, name: string): Command;
 
   // automation lanes (SS11/SS18-M3)
   /** One lane per (channel, param); adding an existing pair re-enables it. */

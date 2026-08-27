@@ -23,6 +23,9 @@ export type {
   LaneId,
   NoteId,
   ParamId,
+  RackChainId,
+  RackId,
+  RackMacroId,
 } from "./ids";
 
 export type {
@@ -58,6 +61,9 @@ export type {
   DeviceState,
   Project,
   ProjectId,
+  RackChain,
+  RackMacro,
+  RackState,
   SendSpec,
   SidechainEdge,
   SourceRef,

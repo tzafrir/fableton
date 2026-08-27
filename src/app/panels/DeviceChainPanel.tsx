@@ -28,6 +28,8 @@ import type {
   ParamId,
   ProjectCommands,
   ProjectSnapshot,
+  RackChainId,
+  RackId,
   SidechainEdge,
 } from "../../types";
 import { EnumSelect, Knob, ToggleLED, controlKindFor } from "../../ui/controls";
@@ -42,6 +44,12 @@ export interface DeviceChainPanelProps {
    *  creates (or re-enables) that param's lane and reveals it. */
   onShowAutomation?: ((paramId: ParamId) => void) | undefined;
 }
+
+/** Where a rendered device instance lives. */
+export type DeviceContainer =
+  | { kind: "source" }
+  | { kind: "channel" }
+  | { kind: "rackChain"; rackId: RackId; chainId: RackChainId };
 
 const definitionsById = new Map(CORE_DEVICES.map((d) => [d.id, d]));
 const instrumentDefs = CORE_DEVICES.filter((d) => d.kind === "instrument");
@@ -106,7 +114,7 @@ function DevicePanel({
   engine,
   channelId,
   deviceId,
-  inChain,
+  container,
   onShowAutomation,
 }: {
   doc: ProjectSnapshot;
@@ -117,7 +125,10 @@ function DevicePanel({
   engine: AppProjectEngine | null;
   channelId: ChannelId;
   deviceId: DeviceInstanceId;
-  inChain: boolean;
+  /** Where this device sits — the instrument slot has no reorder/remove at
+   *  all, a channel chain reorders by chain index, a rack chain by its own.
+   *  Same panel, three containers. */
+  container: DeviceContainer;
   onShowAutomation?: ((paramId: ParamId) => void) | undefined;
 }) {
   const device = doc.devices[deviceId];
@@ -137,8 +148,21 @@ function DevicePanel({
   const panel = def?.panel ?? (def !== undefined ? defaultPanel(def) : { rows: [] });
   const hasScPort = def?.audioIn.some((port) => port.id === "sc") ?? false;
   const scEdge = doc.sidechains.find((e) => e.to.device === deviceId && e.to.port === "sc");
-  const chain = doc.channels[channelId]?.chain ?? [];
-  const index = chain.indexOf(deviceId);
+  const inChain = container.kind !== "source";
+  const siblings =
+    container.kind === "rackChain"
+      ? (doc.racks[container.rackId]?.chains.find((c) => c.id === container.chainId)?.devices ?? [])
+      : (doc.channels[channelId]?.chain ?? []);
+  const index = siblings.indexOf(deviceId);
+  /** Reorder within whichever list holds this device. `moveDeviceToChain`
+   *  detaches then re-inserts, so the same index arithmetic works for both. */
+  const moveTo = (to: number): void => {
+    if (container.kind === "rackChain") {
+      dispatch(commands.moveDeviceToChain(container.rackId, deviceId, container.chainId, to));
+    } else {
+      dispatch(commands.moveDevice(channelId, deviceId, to));
+    }
+  };
 
   return (
     <div
@@ -267,12 +291,23 @@ function DevicePanel({
           )}
           {inChain && (
             <span style={{ display: "inline-flex", gap: 4, marginLeft: "auto" }}>
+              {container.kind === "channel" && (
+                <button
+                  type="button"
+                  data-testid={`device-group-${deviceId}`}
+                  title="Group into a rack (parallel chains)"
+                  onClick={() => dispatch(commands.groupIntoRack(channelId, [deviceId]))}
+                  style={tinyButton}
+                >
+                  ⧉
+                </button>
+              )}
               <button
                 type="button"
                 data-testid={`device-left-${deviceId}`}
                 title="Move earlier in the chain"
                 disabled={index <= 0}
-                onClick={() => dispatch(commands.moveDevice(channelId, deviceId, index - 1))}
+                onClick={() => moveTo(index - 1)}
                 style={tinyButton}
               >
                 ◀
@@ -281,8 +316,8 @@ function DevicePanel({
                 type="button"
                 data-testid={`device-right-${deviceId}`}
                 title="Move later in the chain"
-                disabled={index < 0 || index >= chain.length - 1}
-                onClick={() => dispatch(commands.moveDevice(channelId, deviceId, index + 1))}
+                disabled={index < 0 || index >= siblings.length - 1}
+                onClick={() => moveTo(index + 1)}
                 style={tinyButton}
               >
                 ▶
@@ -380,6 +415,280 @@ function DevicePanel({
   );
 }
 
+/**
+ * SS7 rack: the split/sum container, drawn as a column of parallel chains.
+ *
+ * Each chain gets the same three controls the graph gives it — mute, solo
+ * and gain/pan — so what the panel shows is exactly what `buildGraph`
+ * expands, and chain solo is a gain change here for the same reason it is
+ * one in the engine.
+ */
+function RackPanel({
+  doc,
+  dispatch,
+  commands,
+  engine,
+  channelId,
+  rackId,
+  onShowAutomation,
+}: {
+  doc: ProjectSnapshot;
+  dispatch: (command: Command) => CommandResult;
+  commands: ProjectCommands;
+  engine: AppProjectEngine | null;
+  channelId: ChannelId;
+  rackId: RackId;
+  onShowAutomation?: ((paramId: ParamId) => void) | undefined;
+}) {
+  const rack = doc.racks[rackId];
+  const slots = doc.channels[channelId]?.chain ?? [];
+  const index = slots.indexOf(rackId);
+  if (rack === undefined) return null;
+
+  return (
+    <div
+      className="fbl-rack"
+      data-testid={`rack-${rackId}`}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        border: "1px solid #4a4a55",
+        borderRadius: 4,
+        padding: 6,
+        background: "#1b1b20",
+        flex: "0 0 auto",
+        opacity: rack.enabled ? 1 : 0.5,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <button
+          type="button"
+          data-testid={`rack-enable-${rackId}`}
+          role="switch"
+          aria-checked={rack.enabled}
+          title={rack.enabled ? "Disable rack" : "Enable rack"}
+          onClick={() => dispatch(commands.setRackEnabled(rackId, !rack.enabled))}
+          style={{
+            width: 12,
+            height: 12,
+            flex: "0 0 auto",
+            borderRadius: "50%",
+            border: "1px solid #555",
+            background: rack.enabled ? "#7ad67a" : "#222",
+            cursor: "pointer",
+            padding: 0,
+          }}
+        />
+        <input
+          data-testid={`rack-name-${rackId}`}
+          aria-label="Rack name"
+          value={rack.name}
+          onChange={(e) => dispatch(commands.renameRack(rackId, e.target.value))}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            fontSize: 12,
+            background: "transparent",
+            color: "#dde",
+            border: "1px solid transparent",
+            borderRadius: 2,
+            padding: "1px 2px",
+          }}
+        />
+        <button
+          type="button"
+          data-testid={`rack-remove-${rackId}`}
+          title="Remove rack and everything in it"
+          onClick={() => dispatch(commands.removeDevices([rackId]))}
+          style={tinyButton}
+        >
+          ✕
+        </button>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <button
+          type="button"
+          data-testid={`rack-add-chain-${rackId}`}
+          title="Add a parallel chain"
+          onClick={() => dispatch(commands.addRackChain(rackId))}
+          style={tinyButton}
+        >
+          + Chain
+        </button>
+        <button
+          type="button"
+          data-testid={`rack-ungroup-${rackId}`}
+          title="Dissolve the rack back into the channel chain"
+          onClick={() => dispatch(commands.ungroupRack(rackId))}
+          style={tinyButton}
+        >
+          Ungroup
+        </button>
+        <span style={{ display: "inline-flex", gap: 4, marginLeft: "auto" }}>
+          <button
+            type="button"
+            data-testid={`rack-left-${rackId}`}
+            title="Move earlier in the chain"
+            disabled={index <= 0}
+            onClick={() => dispatch(commands.moveDevice(channelId, rackId, index - 1))}
+            style={tinyButton}
+          >
+            ◀
+          </button>
+          <button
+            type="button"
+            data-testid={`rack-right-${rackId}`}
+            title="Move later in the chain"
+            disabled={index < 0 || index >= slots.length - 1}
+            onClick={() => dispatch(commands.moveDevice(channelId, rackId, index + 1))}
+            style={tinyButton}
+          >
+            ▶
+          </button>
+        </span>
+      </div>
+
+      {rack.chains.map((chain) => {
+        const gain = engine?.params.get(chain.gain);
+        const pan = engine?.params.get(chain.pan);
+        return (
+          <div
+            key={chain.id}
+            className="fbl-rack-chain"
+            data-testid={`chain-${rackId}-${chain.id}`}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+              border: "1px solid #333",
+              borderRadius: 3,
+              padding: 4,
+              background: "#17171b",
+              opacity: chain.mute && !chain.solo ? 0.55 : 1,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <input
+                data-testid={`chain-name-${rackId}-${chain.id}`}
+                aria-label="Chain name"
+                value={chain.name}
+                onChange={(e) => dispatch(commands.renameRackChain(rackId, chain.id, e.target.value))}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  fontSize: 10,
+                  background: "transparent",
+                  color: "#bbb",
+                  border: "1px solid transparent",
+                  borderRadius: 2,
+                  padding: "1px 2px",
+                }}
+              />
+              <button
+                type="button"
+                data-testid={`chain-mute-${rackId}-${chain.id}`}
+                aria-pressed={chain.mute}
+                title="Mute this chain"
+                onClick={() => dispatch(commands.setChainMuted(rackId, chain.id, !chain.mute))}
+                style={{ ...tinyButton, background: chain.mute ? "#c58f00" : "#222", color: chain.mute ? "#000" : "#999" }}
+              >
+                M
+              </button>
+              <button
+                type="button"
+                data-testid={`chain-solo-${rackId}-${chain.id}`}
+                aria-pressed={chain.solo}
+                title="Solo this chain (inside this rack only)"
+                onClick={() => dispatch(commands.setChainSolo(rackId, chain.id, !chain.solo))}
+                style={{ ...tinyButton, background: chain.solo ? "#2d7ff0" : "#222", color: chain.solo ? "#fff" : "#999" }}
+              >
+                S
+              </button>
+              <button
+                type="button"
+                data-testid={`chain-remove-${rackId}-${chain.id}`}
+                title="Remove this chain and its devices"
+                onClick={() => dispatch(commands.removeRackChain(rackId, chain.id))}
+                style={tinyButton}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              {gain === undefined ? (
+                <span style={{ fontSize: 10, color: "#444" }}>gain</span>
+              ) : (
+                <Knob
+                  handle={gain}
+                  size={26}
+                  label="Gain"
+                  testId={`chain-gain-${rackId}-${chain.id}`}
+                  onShowAutomation={onShowAutomation === undefined ? undefined : () => onShowAutomation(chain.gain)}
+                />
+              )}
+              {pan === undefined ? (
+                <span style={{ fontSize: 10, color: "#444" }}>pan</span>
+              ) : (
+                <Knob
+                  handle={pan}
+                  size={26}
+                  label="Pan"
+                  testId={`chain-pan-${rackId}-${chain.id}`}
+                  onShowAutomation={onShowAutomation === undefined ? undefined : () => onShowAutomation(chain.pan)}
+                />
+              )}
+            </div>
+
+            <div style={{ display: "flex", gap: 6, alignItems: "flex-start", flexWrap: "wrap" }}>
+              {chain.devices.map((deviceId) => (
+                <DevicePanel
+                  key={deviceId}
+                  doc={doc}
+                  dispatch={dispatch}
+                  commands={commands}
+                  engine={engine}
+                  channelId={channelId}
+                  deviceId={deviceId}
+                  container={{ kind: "rackChain", rackId, chainId: chain.id }}
+                  onShowAutomation={onShowAutomation}
+                />
+              ))}
+              <select
+                data-testid={`chain-add-effect-${rackId}-${chain.id}`}
+                aria-label="Add effect to chain"
+                value=""
+                onChange={(e) => {
+                  const def = definitionsById.get(e.target.value);
+                  if (def === undefined) return;
+                  dispatch(
+                    commands.addEffectToChain(rackId, chain.id, {
+                      definitionId: def.id,
+                      version: def.version,
+                    }),
+                  );
+                }}
+                style={{ fontSize: 10, background: "#181818", color: "#bbb", alignSelf: "center" }}
+              >
+                <option value="" disabled>
+                  + Effect…
+                </option>
+                {effectDefs.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function DeviceChainPanel({
   store,
   commands,
@@ -460,27 +769,40 @@ export function DeviceChainPanel({
               engine={engine}
               channelId={channel.id}
               deviceId={sourceDevice.id}
-              inChain={false}
+              container={{ kind: "source" }}
               onShowAutomation={onShowAutomation}
             />
           )}
         </div>
       )}
 
-      {/* Effect chain, in order */}
-      {channel.chain.map((deviceId) => (
-        <DevicePanel
-          key={deviceId}
-          doc={doc}
-          dispatch={dispatch}
-          commands={commands}
-          engine={engine}
-          channelId={channel.id}
-          deviceId={deviceId}
-          inChain
-          onShowAutomation={onShowAutomation}
-        />
-      ))}
+      {/* Effect chain, in order. A slot holds a device OR a rack. */}
+      {channel.chain.map((entryId) =>
+        doc.racks[entryId] !== undefined ? (
+          <RackPanel
+            key={entryId}
+            doc={doc}
+            dispatch={dispatch}
+            commands={commands}
+            engine={engine}
+            channelId={channel.id}
+            rackId={entryId}
+            onShowAutomation={onShowAutomation}
+          />
+        ) : (
+          <DevicePanel
+            key={entryId}
+            doc={doc}
+            dispatch={dispatch}
+            commands={commands}
+            engine={engine}
+            channelId={channel.id}
+            deviceId={entryId}
+            container={{ kind: "channel" }}
+            onShowAutomation={onShowAutomation}
+          />
+        ),
+      )}
 
       {/* Add-effect caret (SS7: "into a chain at a drop caret") */}
       <select
@@ -504,6 +826,16 @@ export function DeviceChainPanel({
           </option>
         ))}
       </select>
+
+      <button
+        type="button"
+        data-testid="add-rack-button"
+        title="Add an empty rack (parallel chains)"
+        onClick={() => dispatch(commands.addRack(channel.id))}
+        style={{ ...tinyButton, alignSelf: "center", fontSize: 11, padding: "2px 6px" }}
+      >
+        + Rack
+      </button>
 
       {/* SS6: a rejected edit (a sidechain that would close a cycle) says so
           inline instead of looking like nothing happened. */}

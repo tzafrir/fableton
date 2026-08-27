@@ -5,6 +5,7 @@
 import type {
   ChannelId,
   Command,
+  DeviceInstanceId,
   Draft,
   MidiClip,
   Note,
@@ -19,6 +20,30 @@ import { findMasterChannelId } from "../project";
 export type DraftProject = Draft<Project>;
 export type DraftClip = Draft<MidiClip>;
 export type DraftNote = Draft<Note>;
+
+/**
+ * Detaches a device id from every list that can hold it on its channel: the
+ * channel's own chain, and any chain of any rack on that channel. The device
+ * itself is untouched — this is the list bookkeeping alone, shared by the
+ * routing commands and the rack commands so the two cannot drift about where
+ * a device may live (SS7 racks: a device belongs to exactly ONE list).
+ */
+export function detachFromChains(doc: DraftProject, deviceId: DeviceInstanceId): void {
+  const device = doc.devices[deviceId];
+  if (device === undefined) return;
+  const channel = doc.channels[device.channelId];
+  if (channel !== undefined) {
+    channel.chain = channel.chain.filter((id) => id !== deviceId);
+    if (channel.source !== null && channel.source.deviceId === deviceId) channel.source = null;
+  }
+  for (const rack of Object.values(doc.racks)) {
+    for (const chain of rack.chains) {
+      if (chain.devices.includes(deviceId)) {
+        chain.devices = chain.devices.filter((id) => id !== deviceId);
+      }
+    }
+  }
+}
 
 /** Document invariant 5: note `dur` is an integer >= 1. */
 export const MIN_NOTE_DUR_TICKS = 1;

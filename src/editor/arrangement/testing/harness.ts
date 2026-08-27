@@ -85,6 +85,7 @@ export function makeProject(): Project {
       [CLIP_3]: { id: CLIP_3, trackId: TRACK_B, start: BAR, length: BAR / 2, notes: [] },
     },
     lanes: {},
+    racks: {},
     sidechains: [],
     paramValues: {},
   };

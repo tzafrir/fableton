@@ -35,6 +35,19 @@ export type ClipId = string;
 /** Id of a note inside a clip (SS10). */
 export type NoteId = string;
 
+/** Id of an effect rack (SS7 "racks"): a container of PARALLEL device
+ *  chains occupying one slot of a channel's chain. A rack id lives in the
+ *  same namespace as a `DeviceInstanceId` — it sits in `Channel.chain` and
+ *  is the `dev:` segment of its params' ids — but resolves through
+ *  `Project.racks`, never `Project.devices`. */
+export type RackId = string;
+
+/** Id of one parallel chain inside a rack. */
+export type RackChainId = string;
+
+/** Id of a rack macro knob (SS7): one control fanned out to N params. */
+export type RackMacroId = string;
+
 /** Id of an automation lane (SS11). Reserved for M3; declared here so the
  *  id vocabulary lives in one place. */
 export type LaneId = string;
