@@ -15,7 +15,8 @@ import {
 } from "../persist";
 import { renderProjectToWav } from "../export/renderProject";
 import { DEFAULT_GRID_SETTINGS } from "../editor/kit";
-import { connectParamRegistry, createEmptyProject, projectCommands } from "../state";
+import { connectParamRegistry, createEmptyProject, defaultIdFactory, projectCommands } from "../state";
+import { ticksPerBar } from "../time";
 import { parseParamId } from "../params";
 import type {
   AuditionSink,
@@ -35,8 +36,15 @@ import type {
   TransportState,
 } from "../types";
 import { createAuditionProxy } from "./audition";
+import {
+  DEFAULT_OCTAVE,
+  DEFAULT_VELOCITY,
+  createKeyboardPiano,
+  type KeyboardPiano,
+} from "./keyboardPiano";
+import { createNoteRecorder } from "./noteRecorder";
 import { createProjectEngine, type AppProjectEngine } from "./engine";
-import { createUndoRedoHandler } from "./keyboard";
+import { createUndoRedoHandler, isEditableTarget } from "./keyboard";
 import type { KitArrangementView } from "../editor/arrangement";
 import { ArrangementPanel, AutomationPanel, DeviceChainPanel, MixerPanel, PianoRollPanel, Toolbar } from "./panels";
 import type { LaneFocusRequest } from "./panels";
@@ -117,6 +125,13 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   const [laneFocus, setLaneFocus] = useState<LaneFocusRequest | null>(null);
   /** How many clips the arrangement has selected — enables "Loop Clip". */
   const [clipSelectionCount, setClipSelectionCount] = useState(0);
+  /** SS10/SS12 keyboard performance: the computer keyboard plays the selected
+   *  track's instrument, and `Rec` captures what is played into a clip. */
+  const [recording, setRecording] = useState(false);
+  const [keyboardState, setKeyboardState] = useState({
+    octave: DEFAULT_OCTAVE,
+    velocity: DEFAULT_VELOCITY,
+  });
   const handleShowAutomation = useCallback((paramId: ParamId) => {
     const store = docStateRef.current?.store;
     if (store === undefined) return;
@@ -129,6 +144,8 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   }, []);
   const openClipIdRef = useRef<ClipId | null>(null);
   openClipIdRef.current = openClipId;
+  const selectedChannelIdRef = useRef<ChannelId | null>(null);
+  selectedChannelIdRef.current = selectedChannelId;
 
   /** The sink the piano roll's auditions should reach RIGHT NOW (SS10).
    *  Resolved per note rather than cached, because `engine.auditionFor`
@@ -144,6 +161,57 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     const trackId: ChannelId | undefined = bootstrap.store.getState().clips[clipId]?.trackId;
     return trackId === undefined ? undefined : currentEngine.auditionFor(trackId);
   };
+
+  /**
+   * Which track the computer keyboard plays. The SELECTION is what a user
+   * means by "this track" — the mixer strip, the arrangement header and the
+   * device chain all follow it — and the open clip's track is the fallback
+   * for someone who has only been in the piano roll.
+   */
+  const keyboardTrackId = (): ChannelId | undefined => {
+    const bootstrap = docStateRef.current;
+    if (bootstrap === null) return undefined;
+    const doc = bootstrap.store.getState();
+    const selected = selectedChannelIdRef.current;
+    if (selected !== null && doc.channels[selected]?.role === "track") return selected;
+    const clipId = openClipIdRef.current;
+    const fromClip = clipId === null ? undefined : doc.clips[clipId]?.trackId;
+    if (fromClip !== undefined) return fromClip;
+    return doc.channelOrder.find((id) => doc.channels[id]?.role === "track");
+  };
+
+  const recorderRef = useRef(
+    createNoteRecorder(() => engineRef.current?.transport.positionTicks() ?? 0),
+  );
+  const recordingRef = useRef(false);
+  recordingRef.current = recording;
+  const recordTrackRef = useRef<ChannelId | null>(null);
+
+  /** The keyboard's sink: sound it now, and capture it if we are recording.
+   *  Auditions are UI, never scheduled (SS10) — the recorder is what makes a
+   *  played note reach the document, and only while `Rec` is on. */
+  const keyboardPianoRef = useRef<KeyboardPiano | null>(null);
+  if (keyboardPianoRef.current === null) {
+    keyboardPianoRef.current = createKeyboardPiano({
+      onChange: setKeyboardState,
+      sink: () => {
+        const trackId = recordingRef.current
+          ? (recordTrackRef.current ?? keyboardTrackId())
+          : keyboardTrackId();
+        const audition = trackId === undefined ? undefined : engineRef.current?.auditionFor(trackId);
+        return {
+          noteOn(pitch: number, velocity: number): void {
+            audition?.noteOn(pitch, velocity);
+            if (recordingRef.current) recorderRef.current.noteOn(pitch, velocity);
+          },
+          noteOff(pitch: number): void {
+            audition?.noteOff(pitch);
+            if (recordingRef.current) recorderRef.current.noteOff(pitch);
+          },
+        };
+      },
+    });
+  }
 
   // A stable proxy handed to the piano roll ONCE (SS15 opaque-component
   // boundary): its target is resolved per call, instead of remounting the
@@ -204,6 +272,41 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
       window.removeEventListener("pagehide", flush);
     };
   }, [docState]);
+
+  // --- 3b. the computer keyboard as a MIDI keyboard ---------------------
+  //
+  // Window level, like undo/redo, and equally narrow: it backs off while the
+  // user is typing in a field, and ignores anything with a modifier so no
+  // editor shortcut (all of which are modified or arrow keys) is shadowed.
+  useEffect(() => {
+    const piano = keyboardPianoRef.current;
+    if (piano === null) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (isEditableTarget(event.target)) return;
+      if (piano.keyDown(event.key, { repeat: event.repeat }) !== "ignored") {
+        // Space would scroll, and the letter keys would type into anything
+        // that picks up a bare keypress.
+        event.preventDefault();
+      }
+    };
+    const onKeyUp = (event: KeyboardEvent): void => {
+      if (isEditableTarget(event.target)) return;
+      piano.keyUp(event.key);
+    };
+    // A window that loses focus never delivers the keyup, so every held note
+    // would sound forever.
+    const onBlur = (): void => piano.releaseAll();
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+      piano.releaseAll();
+    };
+  }, []);
 
   // --- 4. global undo/redo (SS18-M1: Cmd/Ctrl+Z / Shift+Z) ---------------
   useEffect(() => {
@@ -339,9 +442,88 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     engineRef.current?.transport.play();
   }, []);
 
-  const handleStop = useCallback(() => {
-    engineRef.current?.transport.stop();
+  /**
+   * Writes a finished take into the document as ONE undo entry: into the clip
+   * it was played over when there is one, and into a NEW clip otherwise —
+   * bar-aligned, so a take started mid-bar still produces a clip that lines
+   * up with the grid. Recorded ticks are SONG ticks; a clip's notes are
+   * clip-relative (SS10), which is the subtraction below.
+   */
+  const commitTake = useCallback(() => {
+    const bootstrap = docStateRef.current;
+    const take = recorderRef.current.finish();
+    const trackId = recordTrackRef.current;
+    if (bootstrap === null || trackId === null || take.length === 0) return;
+    const doc = bootstrap.store.getState();
+    const first = take[0]?.start ?? 0;
+    const last = take.reduce((end, note) => Math.max(end, note.start + note.dur), first);
+
+    const openId = openClipIdRef.current;
+    const openClip = openId === null ? undefined : doc.clips[openId];
+    const target =
+      openClip !== undefined && openClip.trackId === trackId
+        ? openClip
+        : Object.values(doc.clips).find(
+            (clip) => clip.trackId === trackId && clip.start <= first && clip.start + clip.length > first,
+          );
+
+    if (target !== undefined) {
+      bootstrap.store.dispatch(
+        projectCommands.addNotes(
+          target.id,
+          take.map((note) => ({
+            start: Math.max(0, note.start - target.start),
+            dur: note.dur,
+            pitch: note.pitch,
+            vel: note.vel,
+          })),
+        ),
+      );
+      return;
+    }
+
+    const bar = ticksPerBar(doc.timeSignature);
+    const start = Math.floor(first / bar) * bar;
+    const length = Math.max(bar, Math.ceil((last - start) / bar) * bar);
+    const clipId = defaultIdFactory.clip();
+    bootstrap.store.dispatch(
+      projectCommands.createClip({
+        id: clipId,
+        trackId,
+        start,
+        length,
+        notes: take.map((note) => ({
+          start: Math.max(0, note.start - start),
+          dur: note.dur,
+          pitch: note.pitch,
+          vel: note.vel,
+        })),
+      }),
+    );
+    setOpenClipId(clipId);
   }, []);
+
+  const handleRecord = useCallback(() => {
+    const trackId = keyboardTrackId();
+    if (trackId === undefined) return;
+    recordTrackRef.current = trackId;
+    recorderRef.current.reset();
+    setRecording(true);
+    engineRef.current?.transport.play();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleStop = useCallback(() => {
+    // The take is closed BEFORE the transport stops: `finish()` timestamps
+    // still-held notes at the current position, and a stopped transport parks
+    // the playhead back at the start point.
+    if (recordingRef.current) {
+      keyboardPianoRef.current?.releaseAll();
+      commitTake();
+      setRecording(false);
+    }
+    engineRef.current?.transport.stop();
+  }, [commitTake]);
 
   const handleUndo = useCallback(() => {
     docState?.store.undo();
@@ -464,6 +646,10 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
         transportState={transportState}
         onPlay={handlePlay}
         onStop={handleStop}
+        recording={recording}
+        onRecord={handleRecord}
+        keyboardOctave={keyboardState.octave}
+        keyboardVelocity={keyboardState.velocity}
         canUndo={store.canUndo()}
         undoLabel={store.undoLabel()}
         onUndo={handleUndo}

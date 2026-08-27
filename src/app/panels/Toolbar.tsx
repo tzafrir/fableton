@@ -20,6 +20,14 @@ export interface ToolbarProps {
   transportState: TransportState;
   onPlay: () => void;
   onStop: () => void;
+  /** SS12 record: capture what the computer keyboard plays into a clip.
+   *  Stopping is what commits the take, so there is no separate button. */
+  recording: boolean;
+  onRecord: () => void;
+  /** The QWERTY keyboard's current octave and velocity (z/x and c/v), shown
+   *  because nothing else on screen says which C the `a` key is. */
+  keyboardOctave: number;
+  keyboardVelocity: number;
 
   canUndo: boolean;
   undoLabel: string | undefined;
@@ -112,6 +120,10 @@ export function Toolbar({
   transportState,
   onPlay,
   onStop,
+  recording,
+  onRecord,
+  keyboardOctave,
+  keyboardVelocity,
   canUndo,
   undoLabel,
   onUndo,
@@ -189,6 +201,27 @@ export function Toolbar({
       <button type="button" onClick={onStop} disabled={!audioReady || transportState === "stopped"}>
         Stop
       </button>
+      <button
+        type="button"
+        data-testid="record-button"
+        aria-pressed={recording}
+        onClick={onRecord}
+        disabled={!audioReady || recording}
+        title="Record what you play on the computer keyboard into a clip — Stop commits the take"
+        style={{ background: recording ? "#c0392b" : undefined, color: recording ? "#fff" : undefined }}
+      >
+        {recording ? "● Rec" : "Rec"}
+      </button>
+      {/* The QWERTY piano: a s d f g h j k l ; are the white keys, w e t y u
+          o p the black ones, z/x shift the octave and c/v the velocity.
+          Nothing else on screen says which C the `a` key is. */}
+      <span
+        data-testid="keyboard-readout"
+        title="Computer keyboard: a-; play white keys, w/e/t/y/u/o/p black; z/x octave, c/v velocity"
+        style={{ fontSize: 11, color: "#8a8f99", fontVariantNumeric: "tabular-nums" }}
+      >
+        Oct {keyboardOctave} · Vel {keyboardVelocity}
+      </span>
 
       <button
         type="button"
