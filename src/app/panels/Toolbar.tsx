@@ -59,6 +59,12 @@ export interface ToolbarProps {
   onExportWav: () => void;
   exportingWav: boolean;
 
+  /** SS10 clip loop: toggles the loop brace over the arrangement selection.
+   *  The verb shipped in M1 as `Cmd/Ctrl+L`; without a button, looping a clip
+   *  was a shortcut you had to already know about. */
+  canLoopClip: boolean;
+  onLoopClip: () => void;
+
   /** Surfaced import/decode errors and load warnings — a one-line status
    *  string, or `null` when there is nothing to report. */
   statusMessage?: string | null | undefined;
@@ -118,6 +124,8 @@ export function Toolbar({
   onReenableAutomation,
   gridSettings,
   onGridChange,
+  canLoopClip,
+  onLoopClip,
   autosaveState,
   autosaveError,
   autosaveAvailable = true,
@@ -244,6 +252,16 @@ export function Toolbar({
           Pencil
         </button>
       </span>
+
+      <button
+        type="button"
+        data-testid="loop-clip-button"
+        onClick={onLoopClip}
+        disabled={!canLoopClip}
+        title="Loop the selected clip(s) — drag the clip's right edge to unroll repeats (Cmd/Ctrl+L)"
+      >
+        Loop Clip
+      </button>
 
       <label className="fbl-toolbar-grid" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
         <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>

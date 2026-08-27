@@ -35,6 +35,14 @@ export interface PianoRollTheme {
   velocityStalk: string;
   velocityStalkSelected: string;
   velocitySweep: string;
+
+  /** Key-name gutter down the left of the note grid. */
+  keyGutterWhite: string;
+  keyGutterBlack: string;
+  keyGutterLine: string;
+  keyGutterText: string;
+  keyGutterTextBlack: string;
+  keyGutterFont: string;
 }
 
 export const DEFAULT_PIANO_ROLL_THEME: PianoRollTheme = {
@@ -69,4 +77,13 @@ export const DEFAULT_PIANO_ROLL_THEME: PianoRollTheme = {
   velocityStalk: "#5aa9e6",
   velocityStalkSelected: "#f2c14e",
   velocitySweep: "rgba(242, 193, 78, 0.18)",
+
+  // Reads as a piano keyboard turned on its side: the gutter is opaque so a
+  // note scrolled to tick 0 cannot make the labels unreadable.
+  keyGutterWhite: "#c8ccd4",
+  keyGutterBlack: "#22252c",
+  keyGutterLine: "#0a0b0e",
+  keyGutterText: "#2a2d34",
+  keyGutterTextBlack: "#9aa3b2",
+  keyGutterFont: "9px ui-sans-serif, system-ui, sans-serif",
 };

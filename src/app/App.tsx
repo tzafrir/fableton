@@ -37,6 +37,7 @@ import type {
 import { createAuditionProxy } from "./audition";
 import { createProjectEngine, type AppProjectEngine } from "./engine";
 import { createUndoRedoHandler } from "./keyboard";
+import type { KitArrangementView } from "../editor/arrangement";
 import { ArrangementPanel, AutomationPanel, DeviceChainPanel, MixerPanel, PianoRollPanel, Toolbar } from "./panels";
 import type { LaneFocusRequest } from "./panels";
 import { bootstrapProject, type BootstrapResult } from "./persistence";
@@ -95,6 +96,14 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
 
 
   const arrangementViewRef = useRef<ArrangementView | null>(null);
+
+  /** SS10 clip loop, as a toolbar verb. `toggleLoop` is on the kit's widened
+   *  view — the frozen `ArrangementView` promises less — so this is the one
+   *  place the shell reaches for it. */
+  const handleLoopClip = useCallback(() => {
+    const view = arrangementViewRef.current as KitArrangementView | null;
+    view?.toggleLoop();
+  }, []);
   const pianoRollViewRef = useRef<PianoRollView | null>(null);
 
   // Refs the audition proxy below reads at call time — see `resolveAudition`.
@@ -106,6 +115,8 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   // (channel, param)"), select that channel, reveal the lane in the
   // automation tab, and tell the panel which lane to open.
   const [laneFocus, setLaneFocus] = useState<LaneFocusRequest | null>(null);
+  /** How many clips the arrangement has selected — enables "Loop Clip". */
+  const [clipSelectionCount, setClipSelectionCount] = useState(0);
   const handleShowAutomation = useCallback((paramId: ParamId) => {
     const store = docStateRef.current?.store;
     if (store === undefined) return;
@@ -465,6 +476,8 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
         onReenableAutomation={() => engine?.params.reenableAutomation()}
         gridSettings={gridSettings}
         onGridChange={handleGridChange}
+        canLoopClip={clipSelectionCount > 0}
+        onLoopClip={handleLoopClip}
         autosaveState={autosaveState}
         autosaveError={autosaveError}
         autosaveAvailable={docState.storage.available}
@@ -492,6 +505,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
             onSelectChannel={setSelectedChannelId}
             selectedChannelId={selectedChannelId}
             viewRef={arrangementViewRef}
+            onSelectionChange={setClipSelectionCount}
           />
         </div>
         <div style={{ flex: 1, minHeight: 0, borderTop: "1px solid #333", display: "flex", flexDirection: "column" }}>

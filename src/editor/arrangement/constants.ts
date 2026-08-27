@@ -30,6 +30,18 @@ export const CLIP_INSET_PX = 2;
 export const LOOP_BRACE_PX = 8;
 export const LOOP_BRACE_FRACTION = 0.28;
 
+/** Height of the transport loop band along the TOP of the ruler. Below it,
+ *  the ruler still seeks — so the two gestures never fight for a pixel. */
+export const LOOP_BAND_HEIGHT_PX = 10;
+
+/** Grab tolerance for either end of the transport loop brace, in CSS px. */
+export const LOOP_EDGE_GRAB_PX = 5;
+
+/** Pointer travel below which a loop-band press is a CLICK (toggle), not a
+ *  drag (define a region) — the same "did it move?" threshold the kit uses
+ *  to separate a click from a drag. */
+export const LOOP_DRAG_THRESHOLD_PX = 3;
+
 /** Grab tolerance for a loop brace handle, per side, in CSS pixels. */
 export const LOOP_HANDLE_PX = 5;
 
@@ -68,6 +80,10 @@ export interface ArrangementTheme {
   rulerBackground: string;
   rulerText: string;
   rulerLine: string;
+  /** Transport loop brace, drawn in the ruler's top band. */
+  loopBrace: string;
+  loopBraceOff: string;
+  loopHandle: string;
   playhead: string;
   headerBackground: string;
   headerText: string;
@@ -98,6 +114,12 @@ export const DEFAULT_THEME: ArrangementTheme = {
   rulerBackground: "#101216",
   rulerText: "#9aa5b1",
   rulerLine: "#333a42",
+  // Bright when the transport will actually loop, greyed when the brace is
+  // set but switched off — the same region either way, so dragging it never
+  // has to mean "and also turn looping on".
+  loopBrace: "#2d7ff0",
+  loopBraceOff: "#3a424e",
+  loopHandle: "#cfe6ff",
   playhead: "#ff5f56",
   headerBackground: "#15171b",
   headerText: "#d7dde5",

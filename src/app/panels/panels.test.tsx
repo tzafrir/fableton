@@ -160,7 +160,9 @@ describe("ArrangementPanel", () => {
     const ruler = view.element.querySelector<HTMLElement>(".fbl-arr-ruler");
     if (ruler !== null) stubRect(ruler);
     act(() => {
-      ruler?.dispatchEvent(pointerEvent("pointerdown", 192, 5));
+      // BELOW the loop band (SS12's brace owns the ruler's top 10 px): a
+      // press up there edits the loop region instead of seeking.
+      ruler?.dispatchEvent(pointerEvent("pointerdown", 192, 18));
     });
     expect(onSeek).toHaveBeenCalled();
   });
@@ -256,6 +258,8 @@ describe("Toolbar autosave status", () => {
     onReenableAutomation: () => undefined,
     gridSettings: { mode: "adaptive", denominator: 16, triplet: false },
     onGridChange: () => undefined,
+    canLoopClip: false,
+    onLoopClip: () => undefined,
     autosaveState: "idle",
     autosaveError: null,
     onSaveNow: () => undefined,

@@ -219,6 +219,11 @@ export function createArrangementView(options: ArrangementViewOptions): KitArran
     theme,
     doc: store.getState(),
     readout: cornerEl,
+    // SS12's loop brace is document state, so the ruler edits it through the
+    // command bus like everything else — one entry per completed drag.
+    onSetLoop: (loop) => {
+      store.dispatch(options.commands.setLoopRegion(loop));
+    },
     ...(options.onSeek === undefined ? {} : { onSeek: options.onSeek }),
     ...(options.dpr === undefined ? {} : { dpr: options.dpr }),
   });

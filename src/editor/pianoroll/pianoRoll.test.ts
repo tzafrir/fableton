@@ -9,7 +9,8 @@ import { createSequentialIdFactory } from "../../state/ids";
 import { createEmptyProject } from "../../state/project";
 import { createDocumentStore } from "../../state/store";
 import { installFakeCanvas2D } from "../kit/testing/fakeCanvas";
-import { createPianoRoll, createdNoteIds, redrawScopeOf } from "./pianoRoll";
+import { createPianoRoll, createPianoRollView, createdNoteIds, redrawScopeOf } from "./pianoRoll";
+import { KEY_GUTTER_WIDTH_PX } from "./keyNames";
 
 beforeAll(() => {
   installFakeCanvas2D();
@@ -47,6 +48,9 @@ function pointerEvent(type: string, x: number, y: number, detail = 1): PointerEv
   return event as PointerEvent;
 }
 
+/** The container is 800 wide; the key strip takes its cut off the left. */
+const CANVAS_WIDTH_PX = 800 - KEY_GUTTER_WIDTH_PX;
+
 function mount(options: { tool?: "select" | "pencil" } = {}) {
   const ids = createSequentialIdFactory();
   const commands = createProjectCommands(ids);
@@ -63,7 +67,7 @@ function mount(options: { tool?: "select" | "pencil" } = {}) {
   document.body.appendChild(container);
 
   const seeks: number[] = [];
-  const view = createPianoRoll({
+  const view = createPianoRollView({
     container,
     store,
     commands,
@@ -71,7 +75,14 @@ function mount(options: { tool?: "select" | "pencil" } = {}) {
     tool: options.tool,
     onSeek: (tick) => seeks.push(tick),
   });
-  view.element.getBoundingClientRect = rect(800, 400);
+  // The roll nests its canvas in a grid cell beside the key strip, and jsdom
+  // reports a zero rect for every element, so the cell is sized by hand the
+  // way `arrangement.test.ts` sizes its content cell. The canvas is narrower
+  // than the container by exactly the strip's width.
+  const cell = view.element.parentElement as HTMLElement;
+  cell.getBoundingClientRect = rect(CANVAS_WIDTH_PX, 400);
+  view.measure();
+  view.element.getBoundingClientRect = rect(CANVAS_WIDTH_PX, 400);
   return { view, store, commands, clipId, container, seeks };
 }
 

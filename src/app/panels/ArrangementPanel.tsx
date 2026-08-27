@@ -42,6 +42,10 @@ export interface ArrangementPanelProps {
    *  `KitArrangementView`, reachable through this same ref if a caller casts
    *  it — `ArrangementView` itself only promises what `editor.ts` freezes). */
   viewRef?: MutableRefObject<ArrangementView | null> | undefined;
+  /** Clip-selection size, pushed out so shell chrome (the Loop Clip button)
+   *  can enable itself. Selection is EPHEMERAL editor state (SS13), so it
+   *  reaches React this way rather than through the document. */
+  onSelectionChange?: ((count: number) => void) | undefined;
 }
 
 export function ArrangementPanel({
@@ -53,6 +57,7 @@ export function ArrangementPanel({
   onSelectChannel,
   selectedChannelId,
   viewRef,
+  onSelectionChange,
 }: ArrangementPanelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewLocalRef = useRef<ArrangementView | null>(null);
@@ -64,6 +69,8 @@ export function ArrangementPanel({
   onOpenClipRef.current = onOpenClip;
   const onSelectChannelRef = useRef(onSelectChannel);
   onSelectChannelRef.current = onSelectChannel;
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -79,7 +86,11 @@ export function ArrangementPanel({
     });
     viewLocalRef.current = view;
     if (viewRef !== undefined) viewRef.current = view;
+    const unsubscribeSelection = view.selection.onChange((ids) => {
+      onSelectionChangeRef.current?.(ids.length);
+    });
     return () => {
+      unsubscribeSelection();
       viewLocalRef.current = null;
       if (viewRef !== undefined) viewRef.current = null;
       view.dispose();

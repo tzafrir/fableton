@@ -37,6 +37,8 @@ import {
   rowOfPitch,
   type PianoRollLayout,
 } from "./layout";
+import { createKeyGutter } from "./keyGutter";
+import { KEY_GUTTER_WIDTH_PX } from "./keyNames";
 import { DEFAULT_PIANO_ROLL_THEME, type PianoRollTheme } from "./theme";
 
 /** Vertical zoom the roll opens at: one semitone per row, 16 px tall. */
@@ -102,9 +104,19 @@ export function createdNoteIds(
   return out;
 }
 
-export const createPianoRoll: CreatePianoRoll = (
-  options: PianoRollOptions,
-): PianoRollView => {
+/**
+ * The kit-flavoured view, mirroring `KitArrangementView`: the shell only
+ * needs `PianoRollView`, but the tests (and any future toolbar verb) need
+ * the host — and `measure()`, because the roll now nests its canvas in a
+ * grid cell beside the key strip, and jsdom reports a zero rect for both.
+ */
+export interface KitPianoRollView extends PianoRollView {
+  readonly host: KitEditorHost<PianoRollHit>;
+  /** Re-measures the canvas cell now (tests, and after a layout change). */
+  measure(): void;
+}
+
+export function createPianoRollView(options: PianoRollOptions): KitPianoRollView {
   const opts = options as PianoRollViewOptions;
   const selection = createSelectionModel<NoteId>();
   const theme = opts.theme ?? DEFAULT_PIANO_ROLL_THEME;
@@ -120,8 +132,31 @@ export const createPianoRoll: CreatePianoRoll = (
 
   const audition = createKeyboardAudition(() => ref().audition);
 
+  // Two columns: the key strip, then the editor canvas. The strip takes its
+  // width OUT of the editor's rather than sitting on top of it, so a note at
+  // tick 0 and a key name can never occupy the same pixel (see keyGutter.ts).
+  const root = document.createElement("div");
+  root.className = "fbl-pianoroll";
+  root.style.display = "grid";
+  root.style.gridTemplateColumns = `${String(KEY_GUTTER_WIDTH_PX)}px minmax(0, 1fr)`;
+  root.style.width = "100%";
+  root.style.height = "100%";
+  root.style.minHeight = "0";
+  options.container.appendChild(root);
+
+  const gutterCell = document.createElement("div");
+  gutterCell.style.overflow = "hidden";
+  gutterCell.style.minWidth = "0";
+  root.appendChild(gutterCell);
+
+  const canvasCell = document.createElement("div");
+  canvasCell.style.position = "relative";
+  canvasCell.style.overflow = "hidden";
+  canvasCell.style.minWidth = "0";
+  root.appendChild(canvasCell);
+
   const host: KitEditorHost<PianoRollHit> = createEditorHost<PianoRollHit>({
-    container: options.container,
+    container: canvasCell,
     store: options.store,
     layers: createPianoRollLayers(ref, {
       previewOf: (): unknown => host.gestures.preview,
@@ -140,6 +175,16 @@ export const createPianoRoll: CreatePianoRoll = (
   });
 
   const layout: PianoRollLayout = createPianoRollLayout(host.viewport);
+
+  // The strip redraws on any viewport change (row scroll, row zoom, resize),
+  // which `createKeyGutter` subscribes to itself.
+  const keyGutter = createKeyGutter({
+    container: gutterCell,
+    viewport: host.viewport,
+    layout,
+    theme,
+    ...(opts.dpr === undefined ? {} : { dpr: opts.dpr }),
+  });
 
   /** The transport position, as last pushed by the shell — in SONG ticks. */
   let playheadSongTicks: Ticks = 0;
@@ -207,7 +252,22 @@ export const createPianoRoll: CreatePianoRoll = (
     host.viewport.setScroll(host.viewport.scrollTicks, top);
   };
 
-  revealPitches();
+  // Framing needs a HEIGHT. A roll mounted into a container the browser has
+  // not laid out yet — a hidden tab, or any test harness — measures zero, and
+  // framing against zero leaves the clip's notes off screen the moment the
+  // panel is shown. So the first framing at a REAL height is the one that
+  // counts; until then it is retried on the next size change.
+  let framed = false;
+  const frameOnce = (): void => {
+    if (framed) return;
+    if (layout.noteBottomPx - layout.noteTopPx <= 0) return;
+    revealPitches();
+    framed = true;
+  };
+  frameOnce();
+  const unsubscribeViewport = host.viewport.onChange(() => {
+    frameOnce();
+  });
 
   // --- document + selection subscriptions -----------------------------------
 
@@ -252,9 +312,15 @@ export const createPianoRoll: CreatePianoRoll = (
 
   let disposed = false;
 
-  const view: PianoRollView = {
+  const view: KitPianoRollView = {
     element: host.element,
+    host,
     selection,
+
+    measure(): void {
+      host.measure();
+      keyGutter.draw();
+    },
 
     get clipId(): ClipId | null {
       return ctx.clipId;
@@ -305,12 +371,17 @@ export const createPianoRoll: CreatePianoRoll = (
       if (disposed) return;
       disposed = true;
       unsubscribeStore();
+      unsubscribeViewport();
       unsubscribeSelection();
       audition.stopAll();
       ctx.audition?.allNotesOff();
       host.dispose();
+      keyGutter.dispose();
+      root.remove();
     },
   };
 
   return view;
-};
+}
+
+export const createPianoRoll: CreatePianoRoll = createPianoRollView;
