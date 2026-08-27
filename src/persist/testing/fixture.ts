@@ -12,6 +12,7 @@ import type { Project } from "../../types";
 export const MASTER_ID = "chan-master";
 export const TRACK_ID = "chan-track-1";
 export const DEVICE_ID = "dev-synth-1";
+export const MASTER_FX_ID = "dev-comp-1";
 export const CLIP_ID = "clip-1";
 
 /** A fresh fixture project. Notes are deliberately NOT pre-sorted by
@@ -31,7 +32,7 @@ export function makeFixtureProject(): Project {
         name: "Master",
         color: null,
         source: null,
-        chain: [],
+        chain: [MASTER_FX_ID],
         volume: `chan:${MASTER_ID}/vol`,
         pan: `chan:${MASTER_ID}/pan`,
         mute: false,
@@ -62,6 +63,17 @@ export function makeFixtureProject(): Project {
         channelId: TRACK_ID,
         enabled: true,
       },
+      // The sidechain edge's target: an effect on the MASTER keyed from the
+      // track. (Keying a device from its own channel is rejected by the M2
+      // routing rules — it would be a mute-the-graph WebAudio cycle — so the
+      // fixture's sc edge crosses channels, as any valid one must.)
+      [MASTER_FX_ID]: {
+        id: MASTER_FX_ID,
+        definitionId: "core.compressor",
+        version: 1,
+        channelId: MASTER_ID,
+        enabled: true,
+      },
     },
     clips: {
       [CLIP_ID]: {
@@ -82,7 +94,7 @@ export function makeFixtureProject(): Project {
     sidechains: [
       {
         from: { channel: TRACK_ID, tap: "postFx" },
-        to: { device: DEVICE_ID, port: "sc" },
+        to: { device: MASTER_FX_ID, port: "sc" },
       },
     ],
     paramValues: {

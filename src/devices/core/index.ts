@@ -14,9 +14,32 @@
 // the sanctioned channel for enum choices.
 export { Filter } from "./filter";
 export { PolySynth } from "./polySynth";
+export { Compressor } from "./compressor";
+export { Eq3 } from "./eq3";
+export { Pluck } from "./pluck";
+export { Reverb } from "./reverb";
+export { Saturator } from "./saturator";
+export { StereoDelay } from "./stereoDelay";
 
+import { Compressor } from "./compressor";
+import { Eq3 } from "./eq3";
 import { Filter } from "./filter";
+import { Pluck } from "./pluck";
 import { PolySynth } from "./polySynth";
+import { Reverb } from "./reverb";
+import { Saturator } from "./saturator";
+import { StereoDelay } from "./stereoDelay";
 
-/** Every `DeviceDefinition` this package ships, in registration order. */
-export const CORE_DEVICES = [PolySynth, Filter] as const;
+/** Every `DeviceDefinition` this package ships, in registration order —
+ *  M0's two plus the SS18-M4 library (compressor with SC, EQ, delay,
+ *  reverb, saturator, second instrument). */
+export const CORE_DEVICES = [
+  PolySynth,
+  Pluck,
+  Filter,
+  Eq3,
+  Compressor,
+  StereoDelay,
+  Reverb,
+  Saturator,
+] as const;

@@ -13,6 +13,7 @@
 
 import { useEffect, useState } from "react";
 import { CORE_DEVICES } from "../../devices/core";
+import { presetStore } from "../../presets/store";
 import { deviceParamId } from "../../params";
 import type { AppProjectEngine } from "../engine";
 import type {
@@ -139,6 +140,54 @@ function DevicePanel({
           }}
         />
         <span style={{ fontSize: 12, color: "#ddd", flex: 1 }}>{label}</span>
+        {def !== undefined && (
+          <>
+            <select
+              data-testid={`preset-select-${deviceId}`}
+              aria-label="Preset"
+              value=""
+              onChange={(e) => {
+                const preset = presetStore.list(def.id).find((entry) => entry.name === e.target.value);
+                if (preset === undefined) return;
+                // One undo entry for the whole bag (SS4 "presets are bags of
+                // parameter values"); unknown/out-of-range ids are dropped.
+                const values: Record<string, number> = {};
+                for (const [localId, value] of Object.entries(preset.values)) {
+                  if (def.params.some((p) => p.id === localId)) {
+                    values[deviceParamId(channelId, deviceId, localId)] = value;
+                  }
+                }
+                store.dispatch(commands.setParamValues(values));
+              }}
+              style={{ fontSize: 10, maxWidth: 90, background: "#181818", color: "#bbb" }}
+            >
+              <option value="">presets…</option>
+              {presetStore.list(def.id).map((preset) => (
+                <option key={preset.name} value={preset.name}>
+                  {preset.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              data-testid={`preset-save-${deviceId}`}
+              title="Save current values as a preset"
+              onClick={() => {
+                const name = window.prompt("Preset name");
+                if (name === null || name.trim() === "") return;
+                const values: Record<string, number> = {};
+                for (const paramDesc of def.params) {
+                  const stored = doc.paramValues[deviceParamId(channelId, deviceId, paramDesc.id)];
+                  values[paramDesc.id] = stored ?? paramDesc.defaultValue;
+                }
+                presetStore.save(def.id, name, values);
+              }}
+              style={tinyButton}
+            >
+              ⭳
+            </button>
+          </>
+        )}
         {inChain && (
           <>
             <button

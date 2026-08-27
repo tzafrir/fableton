@@ -1,32 +1,16 @@
 import { expect, test } from "@playwright/test";
 
-// SS3's param fast path A, in the shipped app and a real browser: the filter
-// cutoff slider is M0's only live write into the engine. Dragging it must
-// reach the real `BiquadFilterNode` through the `ParamHandle` (never a raw
-// node reference — SS4's design rule), and releasing the gesture must commit
-// exactly one value: "one gesture = one command = one undo entry".
+// SS3's param fast path A, in the shipped app and a real browser. Suspended
+// at M1 (see git history for the original framing); M2's control kit and
+// mixer strips are exactly what it was waiting for, so it now drives the
+// REAL track volume fader: dragging writes to the engine through the SS4
+// handle with the DOCUMENT untouched, and releasing commits exactly one
+// value — "one gesture = one command = one undo entry".
 //
-// The headless half of this seam is covered in src/app/App.test.tsx; this is
-// the proof that the same wiring holds against a real AudioContext.
-//
-// SUSPENDED AT M1, DELIBERATELY. This spec drives M0's one hard-coded control
-// (`data-testid="filter-cutoff"`) and its hard-coded param id
-// `chan:demo-track/dev:demo-filter/cutoff`. Neither survives M1: devices now
-// live on a real, editable document (SS3 — "the document is the source of
-// truth"), the starter document has no filter on its chain, and M1 ships no
-// per-device knob UI at all, because the control kit and channel strips are
-// M2's deliverable (SS18-M2; SS5's control inventory). Building one here to
-// keep this spec green would be inventing M2's UI inside M1.
-//
-// What the spec covers is NOT lost meanwhile:
-//   - the fast path itself (drag writes to the engine, document untouched;
-//     release commits exactly one command) is proved headlessly in
-//     src/state/paramBridge.test.ts and src/app/App.test.tsx;
-//   - `connectParamRegistry` is wired into the live app in src/app/App.tsx,
-//     and the registry is still reachable on the e2e bridge.
-// Un-fixme this the moment M2 renders a real control bound to a real param —
-// the body below then needs only its testids and param id re-pointed.
-test.fixme("the cutoff slider writes through the handle and commits once on release", async ({
+// The headless half of this seam is covered in src/state/paramBridge.test.ts
+// and src/ui/controls/gesture.test.ts; this is the proof against a real
+// AudioContext and real pointer events.
+test("the volume fader writes through the handle and commits once on release", async ({
   page,
 }) => {
   await page.goto("/");
@@ -34,13 +18,15 @@ test.fixme("the cutoff slider writes through the handle and commits once on rele
   await expect(page.getByTestId("audio-status")).toHaveText(/^ready \(worklet loaded/, {
     timeout: 10_000,
   });
+  await page.getByTestId("tab-mixer").click();
 
-  const slider = page.getByTestId("filter-cutoff");
-  const readout = page.getByTestId("filter-cutoff-value");
-  const before = await readout.textContent();
-  expect(before).toMatch(/Hz|kHz/);
+  const strip = page.locator('[data-testid^="strip-"][data-role="track"]').first();
+  const trackId = ((await strip.getAttribute("data-testid")) ?? "").replace("strip-", "");
+  const paramId = `chan:${trackId}/vol`;
+  const fader = page.getByTestId(`vol-${trackId}`);
+  await expect(fader).toBeVisible();
 
-  // Watch the commit stream (the seam M1's command bus attaches to).
+  // Watch the commit stream (the seam the command bus attaches to).
   await page.evaluate(() => {
     const engine = window.__fabletonDemo?.engine;
     if (!engine) throw new Error("engine bridge missing — boot did not finish");
@@ -49,28 +35,33 @@ test.fixme("the cutoff slider writes through the handle and commits once on rele
     engine.onParamCommit((commit) => seen.push(commit.value));
   });
 
-  await slider.fill("0.2");
-  await expect(readout).not.toHaveText(before ?? "");
+  const box = (await fader.boundingBox())!;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx, cy + 25, { steps: 6 });
 
-  const live = await page.evaluate(() => {
+  // Mid-drag: the DSP sees the new value, the document does NOT.
+  const midDrag = await page.evaluate((id) => {
     const engine = window.__fabletonDemo?.engine;
     if (!engine) throw new Error("engine bridge missing");
-    const handle = engine.params.require("chan:demo-track/dev:demo-filter/cutoff");
-    return { live: handle.live(), base: handle.base(), text: handle.desc.toText(handle.live()) };
-  });
-  expect(await readout.textContent()).toBe(live.text);
+    const handle = engine.params.require(id);
+    return { live: handle.live(), base: handle.base() };
+  }, paramId);
+  expect(midDrag.live).not.toBe(midDrag.base);
+  expect(
+    await page.evaluate(() => (window as unknown as { __commits: number[] }).__commits),
+  ).toEqual([]);
 
-  // `fill` dispatches input without a pointer gesture, so nothing is committed
-  // yet: the drag reached the DSP, the document is untouched.
-  expect(await page.evaluate(() => (window as unknown as { __commits: number[] }).__commits)).toEqual(
-    [],
-  );
-  expect(live.base).not.toBe(live.live);
-
-  // Gesture end.
-  await slider.dispatchEvent("pointerup");
+  // Gesture end: exactly ONE commit, carrying the released value.
+  await page.mouse.up();
   const commits = await page.evaluate(
     () => (window as unknown as { __commits: number[] }).__commits,
   );
-  expect(commits).toEqual([live.live]);
+  expect(commits.length).toBe(1);
+  expect(commits[0]).toBeCloseTo(midDrag.live, 5);
+
+  // And exactly one undo entry for the whole drag.
+  await expect(page.getByTestId("undo-button")).toBeEnabled();
 });

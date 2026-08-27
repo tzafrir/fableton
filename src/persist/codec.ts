@@ -12,6 +12,7 @@
 // `{ ok: true, warnings: [...] }` with the offending bits clamped, defaulted
 // or dropped by `validate` (document.ts invariants 1-8).
 
+import { findRoutingCycle } from "../engine/graph/validate";
 import type {
   AutomationLane,
   AutoPoint,
@@ -671,6 +672,106 @@ function validateProject(project: Project): LoadWarning[] {
     }
     if (changed) {
       pushWarning(warnings, `clips.${clipId}.notes`, "Notes clamped and/or resorted to satisfy invariants.");
+    }
+  }
+
+  // --- SS18-M4 hardening: the M2/M3 structures -------------------------------
+
+  // Routing: channel outputs must name existing channels (repaired to null,
+  // which the reconciler routes to the destination); sends must land on
+  // existing channels; there is at most one master.
+  let masterSeen = false;
+  for (const channelId of project.channelOrder) {
+    const channel = project.channels[channelId];
+    if (channel === undefined) continue;
+    if (channel.role === "master") {
+      if (masterSeen) {
+        channel.role = "group";
+        pushWarning(warnings, `channels.${channelId}`, "Second master demoted to a group.");
+      }
+      masterSeen = true;
+      if (channel.output !== null) {
+        channel.output = null;
+        pushWarning(warnings, `channels.${channelId}`, "Master output cleared (it targets the destination).");
+      }
+    } else if (channel.output !== null && !(channel.output in project.channels)) {
+      channel.output = null;
+      pushWarning(warnings, `channels.${channelId}`, "Output referenced a missing channel; cleared.");
+    }
+    const validSends = channel.sends.filter((send) => send.to in project.channels && send.to !== channelId);
+    if (validSends.length !== channel.sends.length) {
+      channel.sends = validSends;
+      pushWarning(warnings, `channels.${channelId}.sends`, "Sends to missing channels dropped.");
+    }
+  }
+
+  // Sidechains: both endpoints must exist and the device must not key its
+  // own channel. Runs BEFORE the cycle check — a self-keying edge IS a
+  // one-node cycle, and this is its targeted repair.
+  const validEdges = project.sidechains.filter((edge) => {
+    const device = project.devices[edge.to.device];
+    return (
+      device !== undefined &&
+      edge.from.channel in project.channels &&
+      device.channelId !== edge.from.channel
+    );
+  });
+  if (validEdges.length !== project.sidechains.length) {
+    project.sidechains = validEdges;
+    pushWarning(warnings, "sidechains", "Sidechain edges with missing/self endpoints dropped.");
+  }
+
+  // Routing cycles (SS6): broken by clearing the cycle's first channel's
+  // output, then its sends, then any sidechain edges it feeds — audible-safe
+  // (the channel then feeds the destination directly) and loud in the
+  // warnings. Each pass removes at least one edge, so this terminates.
+  for (let guard = 0; guard < 64; guard++) {
+    const cycle = findRoutingCycle(project);
+    if (cycle === null) break;
+    const first = cycle[0];
+    const channel = first !== undefined ? project.channels[first] : undefined;
+    if (first === undefined || channel === undefined) break;
+    if (channel.output !== null) {
+      channel.output = null;
+    } else if (channel.sends.length > 0) {
+      channel.sends = [];
+    } else {
+      project.sidechains = project.sidechains.filter((edge) => edge.from.channel !== first);
+    }
+    pushWarning(warnings, `channels.${first}`, `Routing cycle broken (${cycle.join(" -> ")}).`);
+  }
+
+  // Lanes (SS11): channel must exist; points sorted by t, one per tick,
+  // curve clamped to [-1, 1], ticks non-negative integers.
+  for (const laneId of Object.keys(project.lanes)) {
+    const lane = project.lanes[laneId];
+    if (lane === undefined) continue;
+    if (!(lane.channelId in project.channels)) {
+      delete project.lanes[laneId];
+      pushWarning(warnings, `lanes.${laneId}`, "Lane referenced a missing channel; dropped.");
+      continue;
+    }
+    let changed = false;
+    for (const point of lane.points) {
+      const t = Math.max(0, Math.round(point.t));
+      const curve = Math.min(1, Math.max(-1, point.curve));
+      if (t !== point.t || curve !== point.curve || !Number.isFinite(point.v)) {
+        point.t = t;
+        point.curve = Number.isFinite(curve) ? curve : 0;
+        if (!Number.isFinite(point.v)) point.v = 0;
+        changed = true;
+      }
+    }
+    const sorted = [...lane.points].sort((a, b) => a.t - b.t);
+    const deduped: typeof sorted = [];
+    for (const point of sorted) {
+      const last = deduped[deduped.length - 1];
+      if (last !== undefined && last.t === point.t) deduped[deduped.length - 1] = point;
+      else deduped.push(point);
+    }
+    if (changed || deduped.length !== lane.points.length || deduped.some((pt, i) => pt !== lane.points[i])) {
+      lane.points = deduped;
+      pushWarning(warnings, `lanes.${laneId}.points`, "Automation points clamped/resorted to satisfy invariants.");
     }
   }
 

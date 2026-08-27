@@ -254,6 +254,8 @@ describe("Toolbar autosave status", () => {
     onNewProject: () => undefined,
     onExport: () => undefined,
     onImportFile: () => undefined,
+    onExportWav: () => undefined,
+    exportingWav: false,
     ...over,
   });
 

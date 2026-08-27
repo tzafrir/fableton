@@ -13,6 +13,7 @@ import {
   importProjectFile,
   projectCodec,
 } from "../persist";
+import { renderProjectToWav } from "../export/renderProject";
 import { DEFAULT_GRID_SETTINGS } from "../editor/kit";
 import { connectParamRegistry, createEmptyProject, projectCommands } from "../state";
 import type {
@@ -77,6 +78,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   const [selectedChannelId, setSelectedChannelId] = useState<ChannelId | null>(null);
   // SS4 transport pill: lights while any param is overridden (SS11).
   const [hasOverrides, setHasOverrides] = useState(false);
+  const [exportingWav, setExportingWav] = useState(false);
   // SS10 "Snapping": the fixed-grid override + triplet toggle. Ephemeral UI
   // state (SS13) owned here and pushed into BOTH editors, so the arrangement
   // and the piano roll always snap the same way.
@@ -311,6 +313,29 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     setStatusMessage(null);
   }, [docState]);
 
+  const handleExportWav = useCallback(async () => {
+    if (docState === null) return;
+    setExportingWav(true);
+    try {
+      // SS12: the SAME engine on an OfflineAudioContext — no live audio (or
+      // boot) required; worklet modules load into the offline context.
+      const doc = docState.store.getState();
+      const { wav, durationSeconds } = await renderProjectToWav(doc);
+      const blob = new Blob([wav], { type: "audio/wav" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${doc.name.trim() || "untitled"}.wav`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setStatusMessage(`Exported ${durationSeconds.toFixed(1)}s WAV`);
+    } catch (error) {
+      setStatusMessage(`WAV export failed: ${String(error)}`);
+    } finally {
+      setExportingWav(false);
+    }
+  }, [docState]);
+
   const handleExport = useCallback(() => {
     if (docState === null) return;
     void docState.autosave.flush().then(() => {
@@ -383,6 +408,8 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
         onNewProject={handleNewProject}
         onExport={handleExport}
         onImportFile={handleImportFile}
+        onExportWav={() => void handleExportWav()}
+        exportingWav={exportingWav}
         statusMessage={loadError ?? statusMessage}
       />
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>

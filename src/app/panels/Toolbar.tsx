@@ -52,6 +52,9 @@ export interface ToolbarProps {
   onNewProject: () => void;
   onExport: () => void;
   onImportFile: (file: File) => void;
+  /** SS12 export: render the document offline and download a .wav. */
+  onExportWav: () => void;
+  exportingWav: boolean;
 
   /** Surfaced import/decode errors and load warnings — a one-line status
    *  string, or `null` when there is nothing to report. */
@@ -119,6 +122,8 @@ export function Toolbar({
   onNewProject,
   onExport,
   onImportFile,
+  onExportWav,
+  exportingWav,
   statusMessage,
 }: ToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -272,6 +277,15 @@ export function Toolbar({
       </button>
       <button type="button" onClick={handleImportClick} data-testid="import-button">
         Import…
+      </button>
+      <button
+        type="button"
+        onClick={onExportWav}
+        disabled={exportingWav}
+        data-testid="export-wav-button"
+        title="Render the project offline (SS12) and download a 16-bit WAV"
+      >
+        {exportingWav ? "Rendering…" : "Export WAV"}
       </button>
       <input
         ref={fileInputRef}

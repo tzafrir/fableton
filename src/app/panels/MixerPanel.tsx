@@ -331,6 +331,14 @@ export function MixerPanel({ store, commands, engine, selectedChannelId, onSelec
       style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
     >
       <div style={{ display: "flex", gap: 6, padding: "4px 8px", borderBottom: "1px solid #292929" }}>
+        <button
+          type="button"
+          data-testid="add-track-button"
+          onClick={() => store.dispatch(commands.addTrack())}
+          style={miniButton}
+        >
+          + Track
+        </button>
         <button type="button" data-testid="add-return-button" onClick={addReturn} style={miniButton}>
           + Return
         </button>
