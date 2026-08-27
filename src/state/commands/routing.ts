@@ -26,7 +26,7 @@ import {
   findMasterChannelId,
   makeChannel,
 } from "../project";
-import { clampInt, makeCommand, type DraftProject } from "./util";
+import { clampInt, makeCommand, repointSurvivingOutputs, type DraftProject } from "./util";
 
 export type RoutingCommands = Pick<
   ProjectCommands,
@@ -188,15 +188,12 @@ export function createRoutingCommands(ids: IdFactory): RoutingCommands {
         (doc) => {
           const dying = new Set(targets.filter((id) => doc.channels[id]?.role !== "master"));
           if (dying.size === 0) return;
-          for (const id of dying) {
-            const channel = doc.channels[id];
-            if (channel === undefined) continue;
-            // Members re-point to the dying group's own output (SS6: moving a
-            // track is a one-field edit; deleting a group must not orphan).
-            for (const other of Object.values(doc.channels)) {
-              if (other.output === id && !dying.has(other.id)) other.output = channel.output;
-            }
-          }
+          // Members re-point to the dying group's own output (SS6: moving a
+          // track is a one-field edit; deleting a group must not orphan).
+          // Shared with `deleteTracks`: the walk climbs the whole dying branch,
+          // so deleting a group AND its parent in one dispatch cannot leave a
+          // survivor naming a deleted channel, whatever order they came in.
+          repointSurvivingOutputs(doc, dying);
           for (const other of Object.values(doc.channels)) {
             if (dying.has(other.id)) continue;
             if (other.sends.some((s) => dying.has(s.to))) {
@@ -219,6 +216,15 @@ export function createRoutingCommands(ids: IdFactory): RoutingCommands {
           }
           for (const clip of Object.values(doc.clips)) {
             if (dying.has(clip.trackId)) delete doc.clips[clip.id];
+          }
+          // Lanes hang off the channel that owns the target param (SS11), so a
+          // deleted channel takes its lanes with it. Unlike the SS7 "kept,
+          // greyed, re-bindable" rule for a removed DEVICE's lanes, there is
+          // no channel left to hang these on: keeping them would leave the
+          // document illegal (invariant: `lane.channelId` names a channel) and
+          // the codec would silently drop them on the next load.
+          for (const [laneId, lane] of Object.entries(doc.lanes)) {
+            if (dying.has(lane.channelId)) delete doc.lanes[laneId];
           }
           for (const id of dying) {
             removeParamValuesOf(doc, (paramId) => !isChannelParamId(paramId, id));

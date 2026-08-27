@@ -106,6 +106,89 @@ export class FakeStereoPannerNode extends FakeAudioNode {
   }
 }
 
+/** `AudioParamMap`-alike that auto-vivifies a param the first time it is read
+ *  — a worklet-backed device asks for its params by name. */
+class LazyParamMap extends Map<string, FakeAudioParam> {
+  override get(name: string): FakeAudioParam {
+    const existing = super.get(name);
+    if (existing !== undefined) return existing;
+    const created = new FakeAudioParam(name, 0);
+    this.set(name, created);
+    return created;
+  }
+}
+
+export class FakeAudioWorkletNode extends FakeAudioNode {
+  readonly parameters = new LazyParamMap();
+  readonly posted: unknown[] = [];
+  readonly port = {
+    postMessage: (message: unknown): void => {
+      this.posted.push(message);
+    },
+  };
+  constructor(
+    readonly processorName: string,
+    readonly options?: unknown,
+  ) {
+    super("audio-worklet");
+  }
+}
+
+export class FakeConvolverNode extends FakeAudioNode {
+  buffer: unknown = null;
+  normalize = true;
+  constructor() {
+    super("convolver");
+  }
+}
+
+export class FakeWaveShaperNode extends FakeAudioNode {
+  curve: Float32Array | null = null;
+  oversample = "none";
+  constructor() {
+    super("waveshaper");
+  }
+}
+
+export class FakeOscillatorNode extends FakeAudioNode {
+  readonly frequency = new FakeAudioParam("frequency", 440);
+  readonly detune = new FakeAudioParam("detune", 0);
+  type = "sine";
+  onended: (() => void) | null = null;
+  startedAt: number | null = null;
+  stoppedAt: number | null = null;
+  constructor() {
+    super("oscillator");
+  }
+  start(when = 0): void {
+    this.startedAt = when;
+  }
+  stop(when = 0): void {
+    this.stoppedAt = when;
+  }
+  /** Test hook: fire what the real node fires when it reaches its stop time. */
+  end(): void {
+    this.onended?.();
+  }
+}
+
+/** Just enough `AudioBuffer` for a device that generates an impulse. */
+export class FakeAudioBuffer {
+  readonly #channels: Float32Array[];
+  constructor(
+    readonly numberOfChannels: number,
+    readonly length: number,
+    readonly sampleRate: number,
+  ) {
+    this.#channels = Array.from({ length: numberOfChannels }, () => new Float32Array(length));
+  }
+  getChannelData(channel: number): Float32Array {
+    const data = this.#channels[channel];
+    if (data === undefined) throw new Error(`FakeAudioBuffer: no channel ${channel}`);
+    return data;
+  }
+}
+
 export class FakeBiquadNode extends FakeAudioNode {
   readonly frequency = new FakeAudioParam("frequency", 350);
   readonly Q = new FakeAudioParam("Q", 1);
@@ -129,6 +212,10 @@ export interface FakeAudioContext {
   createBiquadFilter(): FakeBiquadNode;
   createChannelSplitter(count?: number): FakeAudioNode;
   createChannelMerger(count?: number): FakeAudioNode;
+  createConvolver(): FakeConvolverNode;
+  createWaveShaper(): FakeWaveShaperNode;
+  createOscillator(): FakeOscillatorNode;
+  createBuffer(channels: number, length: number, sampleRate: number): FakeAudioBuffer;
 }
 
 /** A `BaseAudioContext` good enough for the harness, plus test hooks. */
@@ -157,6 +244,11 @@ export function createFakeAudioContext(options: { currentTime?: number } = {}): 
     createBiquadFilter: () => track(new FakeBiquadNode()),
     createChannelSplitter: () => track(new FakeAudioNode("splitter")),
     createChannelMerger: () => track(new FakeAudioNode("merger")),
+    createConvolver: () => track(new FakeConvolverNode()),
+    createWaveShaper: () => track(new FakeWaveShaperNode()),
+    createOscillator: () => track(new FakeOscillatorNode()),
+    createBuffer: (channels: number, length: number, rate: number) =>
+      new FakeAudioBuffer(channels, length, rate),
   };
 }
 

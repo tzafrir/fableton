@@ -31,6 +31,11 @@ export interface ArrangementPanelProps {
   onSeek?: ((tick: Ticks) => void) | undefined;
   onOpenClip?: ((clipId: ClipId) => void) | undefined;
   onSelectChannel?: ((channelId: ChannelId) => void) | undefined;
+  /** The shell's current channel selection, mirrored into the lane header
+   *  highlight so the header and the mixer/device chain never disagree about
+   *  which track is selected (the header drives it back out through
+   *  `onSelectChannel`). */
+  selectedChannelId?: ChannelId | null | undefined;
   /** The app shell reads `.current` at rAF while playing to push the
    *  playhead (SS9: a DOM element, never a canvas invalidation) and to call
    *  toolbar verbs (`splitSelection`, `toggleLoop` live on the wider
@@ -46,6 +51,7 @@ export function ArrangementPanel({
   onSeek,
   onOpenClip,
   onSelectChannel,
+  selectedChannelId,
   viewRef,
 }: ArrangementPanelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -87,6 +93,12 @@ export function ArrangementPanel({
   useEffect(() => {
     if (grid !== undefined) viewLocalRef.current?.setGrid(grid);
   }, [grid]);
+
+  useEffect(() => {
+    if (selectedChannelId !== undefined) {
+      viewLocalRef.current?.setSelectedChannel(selectedChannelId);
+    }
+  }, [selectedChannelId]);
 
   return (
     <div

@@ -11,29 +11,36 @@
 // - "Audio From" (SS6): rendered on any device whose definition declares an
 //   `'sc'` input port; writes an explicit `SidechainEdge`.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CORE_DEVICES } from "../../devices/core";
 import { presetStore } from "../../presets/store";
 import { deviceParamId } from "../../params";
 import type { AppProjectEngine } from "../engine";
 import type {
   ChannelId,
+  Command,
+  CommandResult,
   DeviceDefinition,
   DeviceInstanceId,
   DocumentStore,
   PanelSpec,
   ParamHandle,
+  ParamId,
   ProjectCommands,
   ProjectSnapshot,
   SidechainEdge,
 } from "../../types";
 import { EnumSelect, Knob, ToggleLED, controlKindFor } from "../../ui/controls";
+import { rejectionHintStyle, useDispatchHint } from "./useDispatchHint";
 
 export interface DeviceChainPanelProps {
   store: DocumentStore;
   commands: ProjectCommands;
   engine: AppProjectEngine | null;
   channelId: ChannelId | null;
+  /** SS5's control context menu: "Show/create automation lane" — the shell
+   *  creates (or re-enables) that param's lane and reveals it. */
+  onShowAutomation?: ((paramId: ParamId) => void) | undefined;
 }
 
 const definitionsById = new Map(CORE_DEVICES.map((d) => [d.id, d]));
@@ -71,32 +78,59 @@ function defaultPanel(def: DeviceDefinition): PanelSpec {
   return { rows };
 }
 
-function ParamControlFor({ handle }: { handle: ParamHandle }) {
+function ParamControlFor({
+  handle,
+  onShowAutomation,
+}: {
+  handle: ParamHandle;
+  onShowAutomation?: ((paramId: ParamId) => void) | undefined;
+}) {
   const kind = controlKindFor(handle.desc);
   if (kind === "toggle") return <ToggleLED handle={handle} testId={`ctl-${handle.desc.id}`} />;
   if (kind === "enumSelect") return <EnumSelect handle={handle} testId={`ctl-${handle.desc.id}`} />;
-  return <Knob handle={handle} testId={`ctl-${handle.desc.id}`} />;
+  return (
+    <Knob
+      handle={handle}
+      testId={`ctl-${handle.desc.id}`}
+      onShowAutomation={
+        onShowAutomation === undefined ? undefined : () => onShowAutomation(handle.desc.id)
+      }
+    />
+  );
 }
 
 function DevicePanel({
   doc,
-  store,
+  dispatch,
   commands,
   engine,
   channelId,
   deviceId,
   inChain,
+  onShowAutomation,
 }: {
   doc: ProjectSnapshot;
-  store: DocumentStore;
+  /** The panel's rejection-aware dispatch (SS6 inline hint) — see
+   *  `useDispatchHint`; the sidechain picker is the edit that gets rejected. */
+  dispatch: (command: Command) => CommandResult;
   commands: ProjectCommands;
   engine: AppProjectEngine | null;
   channelId: ChannelId;
   deviceId: DeviceInstanceId;
   inChain: boolean;
+  onShowAutomation?: ((paramId: ParamId) => void) | undefined;
 }) {
   const device = doc.devices[deviceId];
   const def = device !== undefined ? definitionsById.get(device.definitionId) : undefined;
+  // `presetStore.save` writes localStorage and notifies nobody, so the picker
+  // below — a plain render-time `list()` — kept showing the previous set and
+  // the user could not recall the preset they had just saved. This revision
+  // is the local notification (SS4 presets / SS18-M4).
+  const [presetRevision, setPresetRevision] = useState(0);
+  const presets = useMemo(
+    () => (def === undefined ? [] : presetStore.list(def.id)),
+    [def, presetRevision],
+  );
   if (device === undefined) return null;
 
   const label = def?.label ?? device.definitionId;
@@ -128,7 +162,7 @@ function DevicePanel({
           role="switch"
           aria-checked={device.enabled}
           title={device.enabled ? "Disable" : "Enable"}
-          onClick={() => store.dispatch(commands.setDeviceEnabled(deviceId, !device.enabled))}
+          onClick={() => dispatch(commands.setDeviceEnabled(deviceId, !device.enabled))}
           style={{
             width: 12,
             height: 12,
@@ -147,7 +181,7 @@ function DevicePanel({
               aria-label="Preset"
               value=""
               onChange={(e) => {
-                const preset = presetStore.list(def.id).find((entry) => entry.name === e.target.value);
+                const preset = presets.find((entry) => entry.name === e.target.value);
                 if (preset === undefined) return;
                 // One undo entry for the whole bag (SS4 "presets are bags of
                 // parameter values"); unknown/out-of-range ids are dropped.
@@ -157,12 +191,12 @@ function DevicePanel({
                     values[deviceParamId(channelId, deviceId, localId)] = value;
                   }
                 }
-                store.dispatch(commands.setParamValues(values));
+                dispatch(commands.setParamValues(values));
               }}
               style={{ fontSize: 10, maxWidth: 90, background: "#181818", color: "#bbb" }}
             >
               <option value="">presets…</option>
-              {presetStore.list(def.id).map((preset) => (
+              {presets.map((preset) => (
                 <option key={preset.name} value={preset.name}>
                   {preset.name}
                 </option>
@@ -181,6 +215,7 @@ function DevicePanel({
                   values[paramDesc.id] = stored ?? paramDesc.defaultValue;
                 }
                 presetStore.save(def.id, name, values);
+                setPresetRevision((n) => n + 1);
               }}
               style={tinyButton}
             >
@@ -195,7 +230,7 @@ function DevicePanel({
               data-testid={`device-left-${deviceId}`}
               title="Move earlier in the chain"
               disabled={index <= 0}
-              onClick={() => store.dispatch(commands.moveDevice(channelId, deviceId, index - 1))}
+              onClick={() => dispatch(commands.moveDevice(channelId, deviceId, index - 1))}
               style={tinyButton}
             >
               ◀
@@ -205,7 +240,7 @@ function DevicePanel({
               data-testid={`device-right-${deviceId}`}
               title="Move later in the chain"
               disabled={index < 0 || index >= chain.length - 1}
-              onClick={() => store.dispatch(commands.moveDevice(channelId, deviceId, index + 1))}
+              onClick={() => dispatch(commands.moveDevice(channelId, deviceId, index + 1))}
               style={tinyButton}
             >
               ▶
@@ -214,7 +249,7 @@ function DevicePanel({
               type="button"
               data-testid={`device-remove-${deviceId}`}
               title="Remove device"
-              onClick={() => store.dispatch(commands.removeDevices([deviceId]))}
+              onClick={() => dispatch(commands.removeDevices([deviceId]))}
               style={tinyButton}
             >
               ✕
@@ -232,13 +267,13 @@ function DevicePanel({
             value={scEdge?.from.channel ?? ""}
             onChange={(e) => {
               const from = e.target.value;
-              if (from === "") store.dispatch(commands.removeSidechain(deviceId, "sc"));
+              if (from === "") dispatch(commands.removeSidechain(deviceId, "sc"));
               else {
                 const edge: SidechainEdge = {
                   from: { channel: from, tap: scEdge?.from.tap ?? "postFader" },
                   to: { device: deviceId, port: "sc" },
                 };
-                store.dispatch(commands.setSidechain(edge));
+                dispatch(commands.setSidechain(edge));
               }
             }}
             style={{ fontSize: 10, background: "#181818", color: "#bbb" }}
@@ -257,7 +292,7 @@ function DevicePanel({
               data-testid={`sc-tap-${deviceId}`}
               value={scEdge.from.tap}
               onChange={(e) =>
-                store.dispatch(
+                dispatch(
                   commands.setSidechain({
                     from: { channel: scEdge.from.channel, tap: e.target.value as SidechainEdge["from"]["tap"] },
                     to: { device: deviceId, port: "sc" },
@@ -286,7 +321,13 @@ function DevicePanel({
                 </span>
               );
             }
-            return <ParamControlFor key={spec.paramId} handle={handle} />;
+            return (
+              <ParamControlFor
+                key={spec.paramId}
+                handle={handle}
+                onShowAutomation={onShowAutomation}
+              />
+            );
           })}
         </div>
       ))}
@@ -294,9 +335,26 @@ function DevicePanel({
   );
 }
 
-export function DeviceChainPanel({ store, commands, engine, channelId }: DeviceChainPanelProps) {
+export function DeviceChainPanel({
+  store,
+  commands,
+  engine,
+  channelId,
+  onShowAutomation,
+}: DeviceChainPanelProps) {
   const [, force] = useState(0);
   useEffect(() => store.onChange(() => force((n) => n + 1)), [store]);
+  // Param handles are read during render but registered ASYNCHRONOUSLY:
+  // `host.mount` awaits the definition's `prepare()` (SS7), so a device added
+  // now gets its handles well after React flushed the render for that
+  // document change. Without this subscription the freshly added effect
+  // renders the dead `<span>{spec.paramId}</span>` placeholders instead of
+  // its controls until some unrelated edit re-renders the panel (SS5).
+  useEffect(() => {
+    if (engine === null) return;
+    return engine.params.onRegistryChange(() => force((n) => n + 1));
+  }, [engine]);
+  const { hint, dispatch } = useDispatchHint(store);
   const doc = store.getState();
   const channel = channelId !== null ? doc.channels[channelId] : undefined;
 
@@ -334,7 +392,7 @@ export function DeviceChainPanel({ store, commands, engine, channelId }: DeviceC
                 sourceDef,
                 def,
               );
-              store.dispatch(
+              dispatch(
                 commands.setInstrument(channel.id, { definitionId: def.id, version: def.version }, carry),
               );
             }}
@@ -352,12 +410,13 @@ export function DeviceChainPanel({ store, commands, engine, channelId }: DeviceC
           {sourceDevice !== undefined && (
             <DevicePanel
               doc={doc}
-              store={store}
+              dispatch={dispatch}
               commands={commands}
               engine={engine}
               channelId={channel.id}
               deviceId={sourceDevice.id}
               inChain={false}
+              onShowAutomation={onShowAutomation}
             />
           )}
         </div>
@@ -368,12 +427,13 @@ export function DeviceChainPanel({ store, commands, engine, channelId }: DeviceC
         <DevicePanel
           key={deviceId}
           doc={doc}
-          store={store}
+          dispatch={dispatch}
           commands={commands}
           engine={engine}
           channelId={channel.id}
           deviceId={deviceId}
           inChain
+          onShowAutomation={onShowAutomation}
         />
       ))}
 
@@ -385,7 +445,7 @@ export function DeviceChainPanel({ store, commands, engine, channelId }: DeviceC
         onChange={(e) => {
           const def = definitionsById.get(e.target.value);
           if (def !== undefined) {
-            store.dispatch(commands.addEffect(channel.id, { definitionId: def.id, version: def.version }));
+            dispatch(commands.addEffect(channel.id, { definitionId: def.id, version: def.version }));
           }
         }}
         style={{ fontSize: 11, background: "#181818", color: "#bbb", alignSelf: "center" }}
@@ -399,6 +459,14 @@ export function DeviceChainPanel({ store, commands, engine, channelId }: DeviceC
           </option>
         ))}
       </select>
+
+      {/* SS6: a rejected edit (a sidechain that would close a cycle) says so
+          inline instead of looking like nothing happened. */}
+      {hint !== null && (
+        <span data-testid="device-chain-hint" role="status" style={{ ...rejectionHintStyle, alignSelf: "center" }}>
+          {hint}
+        </span>
+      )}
     </div>
   );
 }

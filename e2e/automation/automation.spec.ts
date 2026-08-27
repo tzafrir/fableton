@@ -152,10 +152,46 @@ test("disabling the lane frees the param; deleting the device keeps the lane gre
   const row = page.locator('[data-testid^="lane-row-"]');
   await expect(row).toHaveCount(1);
 
-  // Disable: data kept, inert (SS11).
+  // Give the lane a point, so "enabled" and "disabled" can differ at all: a
+  // lane with no points drives nothing either way (sampler.ts `setLanes`).
+  const editor = page.getByTestId("automation-lane-editor");
+  const box = (await editor.boundingBox())!;
+  await page.mouse.dblclick(box.x + box.width * 0.05, box.y + box.height * 0.2);
+  await expect.poll(async () => (await scanPoints(page)).length).toBe(1);
+
+  const paramState = async (): Promise<string> =>
+    page.evaluate((id) => {
+      const params = window.__fabletonDemo?.engine?.params;
+      if (params === undefined) throw new Error("no engine bridge");
+      return params.get(id)?.state ?? "missing";
+    }, cutoff ?? "");
+
+  // Enabled + playing: the lane owns the param (SS4 `automated`).
+  await page.getByRole("button", { name: "Play" }).click();
+  await expect.poll(paramState, { timeout: 5_000 }).toBe("automated");
+
+  // Disable: data kept, inert (SS11) — which means the PARAM is handed back,
+  // not merely that a checkbox cleared. The user's value must then survive
+  // playback instead of being dragged back onto the curve.
   const enabled = page.locator('[data-testid^="lane-enabled-"]');
   await enabled.uncheck();
   await expect(enabled).not.toBeChecked();
+  await expect.poll(paramState, { timeout: 5_000 }).toBe("free");
+
+  const held = await page.evaluate((id) => {
+    const params = window.__fabletonDemo?.engine?.params;
+    if (params === undefined) throw new Error("no engine bridge");
+    const handle = params.get(id);
+    if (handle === undefined) throw new Error("no cutoff handle");
+    const target = (handle.desc.min + handle.desc.max) / 2;
+    handle.setLive(target, "user");
+    return target;
+  }, cutoff ?? "");
+  await page.waitForTimeout(400); // several look-ahead windows of playback
+  expect(
+    await page.evaluate((id) => window.__fabletonDemo?.engine?.params.get(id)?.live(), cutoff ?? ""),
+  ).toBeCloseTo(held, 6);
+  await page.getByRole("button", { name: "Stop" }).click();
 
   // Swap the instrument away and back off the mixer's chain panel: the lane
   // survives (SS7 "kept, greyed, re-bindable"), shown greyed with a re-bind

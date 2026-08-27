@@ -115,11 +115,24 @@ export function createLaneCommands(ids: IdFactory): LaneCommands {
         const lane = laneOf(doc, laneId);
         if (lane === undefined) return;
         const byTick = new Map(moves.map((m) => [m.fromT, m]));
-        const next: AutoPoint[] = lane.points.map((point) => {
+        // Ticks a move LANDS on. A stationary point sitting there is replaced
+        // by the dragged one — dropped here rather than left for
+        // `normalizePoints`, whose tie-break is array (= tick) order and would
+        // therefore decide the winner by DRAG DIRECTION: dragging right onto a
+        // neighbour would silently discard the value the user just set while
+        // dragging left kept it. The committed lane now always matches the
+        // ghost the editor previewed (SS11).
+        const landing = new Set(moves.map((m) => m.toT));
+        const next: AutoPoint[] = [];
+        for (const point of lane.points) {
           const move = byTick.get(point.t);
-          if (move === undefined) return point;
-          return { t: move.toT, v: move.v, curve: point.curve };
-        });
+          if (move !== undefined) {
+            next.push({ t: move.toT, v: move.v, curve: point.curve });
+            continue;
+          }
+          if (landing.has(point.t)) continue;
+          next.push(point);
+        }
         lane.points = normalizePoints(next);
       });
     },

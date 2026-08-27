@@ -22,6 +22,14 @@ import { clampToDescriptor } from "./taper";
 /** SS4: "default de-zipper ramp (~15 ms) for live sets". */
 export const DEFAULT_SMOOTHING_MS = 15;
 
+/**
+ * How far past a window's start the Firefox `cancelScheduledValues` fallback
+ * cancels, so the previous window's ramp — which lands exactly ON that start —
+ * survives. One microsecond is far below a single sample frame at any rate we
+ * support, so nothing else can hide in the gap.
+ */
+const CANCEL_EPSILON_S = 1e-6;
+
 /** Discrete kinds jump; ramping an enum index through its neighbours is wrong. */
 function isDiscrete(desc: ParamDescriptor): boolean {
   return desc.kind === "enum" || desc.kind === "toggle" || desc.kind === "stepped";
@@ -30,6 +38,24 @@ function isDiscrete(desc: ParamDescriptor): boolean {
 export interface BindAudioParamOptions {
   /** Overrides `ParamDescriptor.smoothingMs` for this binding. */
   smoothingMs?: number | undefined;
+}
+
+export interface BindMessageOptions {
+  /**
+   * The message path's CANCEL primitive — the counterpart of fast path A's
+   * `cancelAndHoldAtTime`, and the reason `scheduleAutomation` is safe to
+   * interrupt. `scheduleAutomation` pushes a whole SS12 look-ahead window of
+   * timestamped writes into the binding; without a way to revoke them, a user
+   * grabbing the control mid-playback only adds ONE more value at `now` and
+   * the ~200 ms of already-queued automation writes keep firing after it,
+   * warbling the value between the lane and the hand until the queue drains.
+   *
+   * A binding whose target can revoke future writes (a `GainNode.gain` behind
+   * `setTargetAtTime`, a worklet with a "drop everything after t" message)
+   * implements this; one that cannot (a plain JS property applied at the next
+   * quantum) omits it and keeps the old behaviour.
+   */
+  cancelFrom?: ((when: Seconds) => void) | undefined;
 }
 
 /**
@@ -43,6 +69,14 @@ export interface BindAudioParamOptions {
  */
 export interface RegistryParamHandle extends ParamHandle {
   readonly id: ParamId;
+  /**
+   * The SS4 `bindMessage` plus the optional cancel primitive. Widening it
+   * here (rather than on `ParamHandle`) keeps the frozen UI-facing contract
+   * exactly as SS4 writes it while letting the caller that OWNS the binding —
+   * the reconciler, the device harness — hand the handle a way to revoke
+   * already-queued automation writes. See `BindMessageOptions.cancelFrom`.
+   */
+  bindMessage(fn: (v: number, when: Seconds) => void, options?: BindMessageOptions): void;
   /**
    * Document -> registry sync: project load, undo/redo, or a command that set
    * this param elsewhere. Clamps to the descriptor range (SS4 "Loaded values
@@ -83,6 +117,14 @@ export class ParamHandleImpl implements RegistryParamHandle {
   #audioParam: AudioParam | null = null;
   #bindingSmoothingMs: number | undefined = undefined;
   #message: ((v: number, when: Seconds) => void) | null = null;
+  #messageCancelFrom: ((when: Seconds) => void) | null = null;
+  /** True while the message binding holds automation writes timestamped in
+   *  the future — the state a user override has to revoke (see `#push`). */
+  #messageScheduledAhead = false;
+  /** Did a `'user'` write move `#live` since the last commit/sync? SS4's
+   *  "gesture end -> one document command" is about USER intent, and
+   *  `displayAutomation` moves `#live` for display only. */
+  #dirtyFromUser = false;
   #subscribers = new Set<(v: number) => void>();
   #disposed = false;
 
@@ -120,11 +162,23 @@ export class ParamHandleImpl implements RegistryParamHandle {
       // The user touched an automated control during playback.
       this.#setState("overridden");
     }
+    // Only a user write expresses the intent `commit()` is allowed to spend:
+    // an automation write moves `#live` for the DSP and the moving knob, and
+    // must never become the document's value on a later gesture end.
+    this.#dirtyFromUser = source !== "automation";
     this.#writeLive(clampToDescriptor(this.desc, v));
   }
 
   commit(): void {
     if (this.#disposed) return;
+    // A gesture the user never moved commits NOTHING, even when `#live` has
+    // drifted away from `#base` — on an automated param `displayAutomation`
+    // moves `#live` continuously (SS11: "the knob displays the moving value
+    // with the base as a ghost dot"), so a bare press+release on a lane-driven
+    // fader would otherwise write the lane's momentary value into the document
+    // and produce an undo entry the user never asked for (SS13).
+    if (!this.#dirtyFromUser) return;
+    this.#dirtyFromUser = false;
     const previous = this.#base;
     const value = this.#live;
     if (Object.is(previous, value)) return; // gesture that changed nothing
@@ -135,6 +189,9 @@ export class ParamHandleImpl implements RegistryParamHandle {
 
   setBase(value: number): void {
     if (this.#disposed) return;
+    // The document just spoke (load / undo / redo); whatever the user was
+    // holding is superseded, so the next `commit()` needs fresh intent.
+    this.#dirtyFromUser = false;
     const next = clampToDescriptor(this.desc, value);
     const changed = !Object.is(next, this.#base);
     this.#base = next;
@@ -153,6 +210,7 @@ export class ParamHandleImpl implements RegistryParamHandle {
     }
     if (this.#state === "free") return;
     this.#setState("free");
+    this.#dirtyFromUser = false; // live snapped back to base; nothing to commit
     this.#writeLive(this.#base); // lane deleted/disabled -> knob rules again
   }
 
@@ -172,16 +230,26 @@ export class ParamHandleImpl implements RegistryParamHandle {
    */
   scheduleAutomation(samples: readonly { value: number; when: Seconds }[]): void {
     if (this.#disposed || this.#state === "overridden" || samples.length === 0) return;
+    const first = samples[0] as { value: number; when: Seconds };
+    const at = Math.max(0, first.when);
     const param = this.#audioParam;
     if (param !== null) {
-      const first = samples[0] as { value: number; when: Seconds };
-      const at = Math.max(0, first.when);
       if (typeof param.cancelAndHoldAtTime === "function") {
         param.cancelAndHoldAtTime(at);
       } else {
-        // Firefox: no cancelAndHold — anchor at the current value instead.
-        param.cancelScheduledValues(at);
-        param.setValueAtTime(this.#live, at);
+        // Firefox: no cancelAndHold. Two things have to be right here, and
+        // both were wrong the obvious way. (1) `cancelScheduledValues(at)`
+        // deletes every event at time >= `at` — INCLUDING the previous
+        // window's final ramp, which ends exactly at `at` because windows are
+        // contiguous; the param then holds that ramp's start value and jumps,
+        // turning a continuous sweep into a one-step-per-window staircase.
+        // Cancelling just past `at` keeps that ramp (only genuinely
+        // overlapping tails, i.e. a live lane edit, are dropped).
+        // (2) The anchor must be the CURVE's value at `at`, not `#live` —
+        // `#live` is the display value at *now*, a whole look-ahead window
+        // behind, and writing it at `at` steps the sweep backwards.
+        param.cancelScheduledValues(at + CANCEL_EPSILON_S);
+        param.setValueAtTime(clampToDescriptor(this.desc, first.value), at);
       }
       for (const s of samples) {
         param.linearRampToValueAtTime(clampToDescriptor(this.desc, s.value), Math.max(at, s.when));
@@ -191,10 +259,15 @@ export class ParamHandleImpl implements RegistryParamHandle {
       return;
     }
     if (this.#message !== null) {
+      // The message-path counterpart of `cancelAndHoldAtTime` above: drop the
+      // tail this window is about to replace, so a lane edited during playback
+      // reschedules instead of playing both curves (SS11).
+      this.#messageCancelFrom?.(at);
       for (const s of samples) {
         this.#message(clampToDescriptor(this.desc, s.value), Math.max(0, s.when));
       }
       this.#lastPushed = Number.NaN;
+      this.#messageScheduledAhead = true;
     }
   }
 
@@ -208,6 +281,10 @@ export class ParamHandleImpl implements RegistryParamHandle {
     if (this.#disposed || this.#state === "overridden") return;
     const next = clampToDescriptor(this.desc, value);
     if (Object.is(next, this.#live)) return;
+    // The lane, not the hand, is moving the value now — any older user intent
+    // (a drag the user cancelled with Esc, say) is spent and must not let a
+    // later bare press+release commit this display value. See `commit()`.
+    this.#dirtyFromUser = false;
     this.#live = next;
     this.#host.markDirty(this);
   }
@@ -216,14 +293,18 @@ export class ParamHandleImpl implements RegistryParamHandle {
     // Fast path A. The node's `AudioParam` enters here and never leaves.
     this.#audioParam = param;
     this.#message = null;
+    this.#messageCancelFrom = null;
+    this.#messageScheduledAhead = false;
     this.#bindingSmoothingMs = options.smoothingMs;
     this.#lastPushed = Number.NaN;
     this.#push(this.#live, true);
   }
 
-  bindMessage(fn: (v: number, when: Seconds) => void): void {
+  bindMessage(fn: (v: number, when: Seconds) => void, options: BindMessageOptions = {}): void {
     // Fast path B (worklets, discrete settings).
     this.#message = fn;
+    this.#messageCancelFrom = options.cancelFrom ?? null;
+    this.#messageScheduledAhead = false;
     this.#audioParam = null;
     this.#bindingSmoothingMs = undefined;
     this.#lastPushed = Number.NaN;
@@ -233,6 +314,8 @@ export class ParamHandleImpl implements RegistryParamHandle {
   unbind(): void {
     this.#audioParam = null;
     this.#message = null;
+    this.#messageCancelFrom = null;
+    this.#messageScheduledAhead = false;
     this.#bindingSmoothingMs = undefined;
     this.#lastPushed = Number.NaN;
   }
@@ -292,7 +375,18 @@ export class ParamHandleImpl implements RegistryParamHandle {
       writeAudioParam(param, value, when, immediate ? 0 : this.#smoothingMs());
       return;
     }
-    if (this.#message !== null) this.#message(value, when);
+    if (this.#message !== null) {
+      // Fast path A's `writeAudioParam` cancels from `when` on every write, so
+      // a user grabbing an automated control there wins immediately. The
+      // message path has to do it explicitly: without this, the look-ahead
+      // window `scheduleAutomation` already queued keeps firing AFTER the
+      // user's value and drags it back onto the lane's curve.
+      if (this.#messageScheduledAhead) {
+        this.#messageCancelFrom?.(when);
+        this.#messageScheduledAhead = false;
+      }
+      this.#message(value, when);
+    }
   }
 
   #audioTime(): Seconds {

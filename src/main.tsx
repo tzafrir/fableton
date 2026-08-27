@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import type { AppProjectEngine } from "./app/engine";
 import { renderDemoOffline } from "./demo";
+import { renderSpan } from "./export/renderProject";
+import type { DocumentStore } from "./types";
 
 const container = document.getElementById("root");
 if (!container) {
@@ -32,6 +34,11 @@ declare global {
     __fabletonDemo?: {
       renderDemoOffline: typeof renderDemoOffline;
       engine?: AppProjectEngine;
+      /** The live document + the PURE span math behind an export (SS12), so
+       *  e2e/library's WAV test can assert the real frame count against what
+       *  the document says it should be instead of "more than a second". */
+      store?: DocumentStore;
+      renderSpan: typeof renderSpan;
     };
   }
 }
@@ -48,7 +55,7 @@ declare global {
 // from the shipped build.
 const E2E_BRIDGE_ENABLED = import.meta.env.DEV || import.meta.env.MODE === "e2e";
 
-const bridge: NonNullable<Window["__fabletonDemo"]> = { renderDemoOffline };
+const bridge: NonNullable<Window["__fabletonDemo"]> = { renderDemoOffline, renderSpan };
 if (E2E_BRIDGE_ENABLED) {
   window.__fabletonDemo = bridge;
 }
@@ -58,6 +65,9 @@ createRoot(container).render(
     <App
       onEngineReady={(engine) => {
         if (E2E_BRIDGE_ENABLED) bridge.engine = engine;
+      }}
+      onStoreReady={(store) => {
+        if (E2E_BRIDGE_ENABLED) bridge.store = store;
       }}
     />
   </StrictMode>

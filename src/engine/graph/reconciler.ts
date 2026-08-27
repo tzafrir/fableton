@@ -9,8 +9,8 @@
 //   - register + bind MIXER params (vol dB->linear, pan, send dB->linear) —
 //     SS4: "mixer params register exactly like device params";
 //   - apply solo-in-place as mute-gain writes (SS6: "just gain");
-//   - dip touched channel-boundary gains ~8 ms around a rewire so chain
-//     reorders / swaps / regrouping are click-free (SS6 "Reconciler").
+//   - dip the SOURCE side of every changed edge ~8 ms around a rewire so
+//     chain reorders / swaps / regrouping are click-free (SS6 "Reconciler").
 //
 // The context is `BaseAudioContext` throughout (SS3/SS12): the M4 offline
 // export instantiates this same reconciler on an `OfflineAudioContext`. In
@@ -69,6 +69,15 @@ export interface GraphReconciler {
   mountedDevice(deviceId: DeviceInstanceId): MountedDevice | undefined;
   /** The channel's post-fader node — the SS6 meter tap. */
   meterTapFor(channelId: ChannelId): AudioNode | undefined;
+  /**
+   * The live node behind a graph ref (`channelUtilRef`, `sendRef`). The
+   * reconciler owns every utility node, so this is the only way anything
+   * else — diagnostics, and the tests that assert on the mute gains
+   * solo-in-place writes — can name one by identity instead of scanning
+   * every gain the context ever handed out. Read-only by convention:
+   * nothing outside this file connects or schedules on these.
+   */
+  nodeFor(ref: GraphNodeRef): AudioNode | undefined;
   dispose(): void;
 }
 
@@ -83,6 +92,12 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
 
   let live: GraphDescription = EMPTY_GRAPH;
   const utilNodes = new Map<GraphNodeRef, AudioNode>();
+  /** The last mute-gain target written per channel. `applyMutes` runs on EVERY
+   *  document edit, so without this every note edit re-schedules a ramp on
+   *  every channel's mute gain, and a mute gain seeded at creation would be
+   *  immediately re-ramped to the value it already holds. Cleared with the
+   *  node it describes. */
+  const muteTargets = new Map<GraphNodeRef, number>();
   const mixerParamIds = new Set<ParamId>();
   let disposed = false;
 
@@ -101,20 +116,116 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
     return mounted.io.inputs[parsed.port];
   }
 
-  function createUtil(spec: UtilNodeSpec): void {
+  /** Clamp to the fader range the param descriptor will enforce anyway, so a
+   *  seeded node and its (later) param write agree exactly. */
+  function clampDb(db: number): number {
+    return Math.min(VOLUME_MAX_DB, Math.max(VOLUME_MIN_DB, db));
+  }
+
+  /**
+   * The value a freshly created node must START at.
+   *
+   * A `GainNode` is born at 1.0 and a `StereoPannerNode` at 0, but a send is
+   * born SILENT (-60 dB), a fader sits wherever the project saved it, and a
+   * muted channel's mute gain is 0. Nothing corrects that in the same audio
+   * instant: the param bind seeds through `smoothGainWrite`, and
+   * `params.load(doc.paramValues)` only lands after the whole reconcile — so
+   * a node left at its native default GLIDES in from 0 dB over the binding's
+   * smoothing time. Live that is a wet blip into the return on every new
+   * send; on the SS12 offline render it bakes the first ~30 ms of the WAV
+   * with every send wide open and every fader sliding. Starting the node
+   * where the document already says it is makes both later writes no-ops.
+   *
+   * Its partner is `seedBase` below: this puts the NODE at the document's
+   * value (it carries signal from the moment the patch connects it, before
+   * any param exists), that puts the HANDLE there (so the bind's own seed
+   * write agrees instead of overwriting it with the descriptor default).
+   */
+  function seedUtilNode(
+    node: AudioNode,
+    spec: UtilNodeSpec,
+    doc: ProjectSnapshot,
+    audible: ReadonlySet<ChannelId>,
+  ): void {
+    const channel = doc.channels[spec.channelId];
+    if (channel === undefined) return;
+    if (spec.kind === "vol") {
+      (node as GainNode).gain.value = dbToGain(clampDb(doc.paramValues[channel.volume] ?? 0), VOLUME_MIN_DB);
+    } else if (spec.kind === "send" && spec.sendTo !== undefined) {
+      const send = channel.sends.find((s) => s.to === spec.sendTo);
+      const db = send === undefined ? VOLUME_MIN_DB : (doc.paramValues[send.amount] ?? VOLUME_MIN_DB);
+      (node as GainNode).gain.value = dbToGain(clampDb(db), VOLUME_MIN_DB);
+    } else if (spec.kind === "mute") {
+      const open = audible.has(spec.channelId) ? 1 : 0;
+      (node as GainNode).gain.value = open;
+      muteTargets.set(spec.ref, open);
+    } else if (spec.kind === "pan") {
+      const value = doc.paramValues[channel.pan] ?? 0;
+      (node as StereoPannerNode).pan.value = Math.min(1, Math.max(-1, value));
+    }
+  }
+
+  function createUtil(spec: UtilNodeSpec, doc: ProjectSnapshot, audible: ReadonlySet<ChannelId>): void {
     if (utilNodes.has(spec.ref)) return;
     const node = spec.type === "panner" ? ctx.createStereoPanner() : ctx.createGain();
+    seedUtilNode(node, spec, doc, audible);
     utilNodes.set(spec.ref, node);
   }
 
   // --- mixer params ----------------------------------------------------------
 
-  const smoothGainWrite =
-    (gain: GainNode, floorDb: number) =>
-    (v: number, when: Seconds): void => {
-      const at = Math.max(when, ctx.currentTime);
-      gain.gain.setTargetAtTime(dbToGain(v, floorDb), at, 0.005);
+  /**
+   * dB param -> gain node, de-zippered. The FIRST call after a bind is the
+   * handle's seed (`bindMessage` pushes the current value immediately, the
+   * message-path counterpart of fast path A's `immediate` write), and it must
+   * JUMP: a `setTargetAtTime` seed glides over ~20 ms from wherever the node
+   * happens to be, which is exactly the artefact `seedUtilNode` exists to
+   * avoid. Every later call is a knob or automation write and keeps the
+   * short target ramp.
+   */
+  /**
+   * The message path's cancel primitive for a mixer gain (SS11). A window of
+   * automation writes is queued a whole look-ahead ahead; when the user grabs
+   * the fader mid-playback, the handle calls this to revoke the tail before
+   * writing the hand's value, so the gain does not warble between the lane
+   * and the hand until the queue drains. `bindAudioParam` gets the same
+   * guarantee for free through `cancelAndHoldAtTime`; a message binding only
+   * has it if the binder supplies one (`BindMessageOptions.cancelFrom`).
+   */
+  const cancelGainWrites =
+    (gain: GainNode) =>
+    (when: Seconds): void => {
+      gain.gain.cancelScheduledValues(Math.max(when, ctx.currentTime));
     };
+
+  const smoothGainWrite = (gain: GainNode, floorDb: number) => {
+    let seeded = false;
+    return (v: number, when: Seconds): void => {
+      const at = Math.max(when, ctx.currentTime);
+      const target = dbToGain(v, floorDb);
+      if (!seeded) {
+        seeded = true;
+        gain.gain.setValueAtTime(target, at);
+        return;
+      }
+      gain.gain.setTargetAtTime(target, at, 0.005);
+    };
+  };
+
+  /**
+   * A freshly registered handle starts at its DESCRIPTOR default, and
+   * binding seeds the node with whatever the handle holds at that moment —
+   * while the document's saved value only arrives later, when the app calls
+   * `params.load(doc.paramValues)` after the whole reconcile. Without this,
+   * every bind writes 0 dB first and the fader then slides to its real value
+   * over the de-zipper time: audible on load, and baked into the head of an
+   * offline render (SS12). Seeding the base before the bind makes the bind's
+   * own write the right one, and `load`'s later write a no-op.
+   */
+  function seedBase(handle: { setBase(value: number): void }, doc: ProjectSnapshot, id: ParamId): void {
+    const saved = doc.paramValues[id];
+    if (saved !== undefined) handle.setBase(saved);
+  }
 
   /** Registers + binds vol/pan/send params for the channels in `doc`, and
    *  unregisters what no longer exists. Device params are the harness's job. */
@@ -134,12 +245,16 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
               channel.volume,
             ),
           );
-          handle.bindMessage(smoothGainWrite(vol as GainNode, VOLUME_MIN_DB));
+          seedBase(handle, doc, channel.volume);
+          handle.bindMessage(smoothGainWrite(vol as GainNode, VOLUME_MIN_DB), {
+            cancelFrom: cancelGainWrites(vol as GainNode),
+          });
         });
       }
       if (pan !== undefined) {
         wanted.set(channel.pan, () => {
           const handle = params.register(withParamId(p.pan("pan"), channel.pan));
+          seedBase(handle, doc, channel.pan);
           handle.bindAudioParam((pan as StereoPannerNode).pan);
         });
       }
@@ -153,7 +268,10 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
               send.amount,
             ),
           );
-          handle.bindMessage(smoothGainWrite(gain as GainNode, VOLUME_MIN_DB));
+          seedBase(handle, doc, send.amount);
+          handle.bindMessage(smoothGainWrite(gain as GainNode, VOLUME_MIN_DB), {
+            cancelFrom: cancelGainWrites(gain as GainNode),
+          });
         });
       }
     }
@@ -174,38 +292,65 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
 
   // --- solo-in-place ---------------------------------------------------------
 
-  function applyMutes(doc: ProjectSnapshot): void {
-    const audible = audibleChannels(doc);
+  function applyMutes(audible: ReadonlySet<ChannelId>, doc: ProjectSnapshot): void {
     const now = ctx.currentTime;
     for (const channelId of doc.channelOrder) {
-      const mute = utilNodes.get(channelUtilRef(channelId, "mute"));
+      const ref = channelUtilRef(channelId, "mute");
+      const mute = utilNodes.get(ref);
       if (mute === undefined) continue;
       const target = audible.has(channelId) ? 1 : 0;
+      if (muteTargets.get(ref) === target) continue; // already there — say nothing
+      muteTargets.set(ref, target);
       (mute as GainNode).gain.setTargetAtTime(target, now, 0.005);
     }
   }
 
   // --- click-free rewires ----------------------------------------------------
 
-  /** Structural unity gains touched by the patch — the boundaries to dip.
-   *  vol/pan/send stay param-driven and mute stays audibility-driven. */
+  /** Which channel owns a device this patch mentions — `live.mounts` for one
+   *  already running, `patch.mountDevices` for one arriving in this patch. */
+  function channelOfDevice(deviceId: DeviceInstanceId, patch: GraphPatch): ChannelId | undefined {
+    const mounted = live.mounts.get(deviceId);
+    if (mounted !== undefined) return mounted.channelId;
+    return patch.mountDevices.find((spec) => spec.deviceId === deviceId)?.channelId;
+  }
+
+  /**
+   * Structural unity gains touched by the patch — the boundaries to dip.
+   *
+   * SOURCE side only. A changed edge's DESTINATION is very often a shared
+   * summing point: `chan:master/input` is the destination of every track's
+   * output edge, so dipping destinations drops the WHOLE mix for the length
+   * of the dip whenever an unrelated, empty track is added or re-routed.
+   * Dipping the source is sufficient — the signal about to be re-routed is
+   * the only one that can step — and it touches nothing else.
+   *
+   * vol/pan/send stay param-driven and mute stays audibility-driven, so the
+   * dip set is the structural unity gains only. A device port has no gain of
+   * its own, so an intra-chain rewire (`dev:A/out -> dev:B/in`, i.e. every
+   * chain reorder and every enable toggle in the middle of a chain) dips the
+   * owning channel's `postfx` instead: the chain's tail, downstream of every
+   * device in it, and the one node that covers the discontinuity regardless
+   * of where in the chain it happens.
+   */
   function touchedBoundaryGains(patch: GraphPatch): GainNode[] {
     const touched = new Set<GraphNodeRef>();
     const note = (ref: GraphNodeRef): void => {
       const parsed = parseNodeRef(ref);
-      if (parsed === null || parsed.kind !== "util") return;
-      if (parsed.util === "input" || parsed.util === "postfx" || parsed.util === "post") {
-        touched.add(ref);
+      if (parsed === null) return;
+      if (parsed.kind === "util") {
+        if (parsed.util === "input" || parsed.util === "postfx" || parsed.util === "post") {
+          touched.add(ref);
+        }
+        return;
       }
+      if (parsed.kind !== "devicePort") return;
+      const channelId = channelOfDevice(parsed.deviceId, patch);
+      if (channelId !== undefined) touched.add(channelUtilRef(channelId, "postfx"));
     };
-    for (const e of patch.disconnect) {
-      note(e.from);
-      note(e.to);
-    }
-    for (const e of patch.connect) {
-      note(e.from);
-      note(e.to);
-    }
+    for (const e of patch.disconnect) note(e.from);
+    for (const e of patch.connect) note(e.from);
+
     const out: GainNode[] = [];
     for (const ref of touched) {
       const node = utilNodes.get(ref);
@@ -216,16 +361,69 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
     return out;
   }
 
+  // --- routing news for devices (SS6 -> SS7) ---------------------------------
+
+  /** What each device port was last told, so a re-apply that changes nothing
+   *  says nothing. Keyed `<deviceId>/<portId>`; entries die with the mount. */
+  const portRouting = new Map<string, boolean>();
+
+  /**
+   * A device cannot see its own incoming connections, and the harness gives it
+   * a port node whether or not the document ever feeds it — so an optional
+   * input (the compressor's `sc` key) is indistinguishable from a routed one
+   * that happens to be silent. This is the reconciler telling it, because the
+   * reconciler is the only code that knows: the SS6 edge is document data.
+   *
+   * Computed from the WHOLE desired graph rather than from the patch, so a
+   * device that mounts with its sidechain already wired is told at mount, and
+   * a port fed by two sources stays routed when only one goes away.
+   */
+  function syncPortRouting(desired: GraphDescription): void {
+    const fed = new Set<string>();
+    for (const edge of desired.edges.values()) {
+      const parsed = parseNodeRef(edge.to);
+      if (parsed === null || parsed.kind !== "devicePort" || parsed.port === "in") continue;
+      fed.add(`${parsed.deviceId}/${parsed.port}`);
+    }
+    for (const deviceId of desired.mounts.keys()) {
+      const mounted = host.get(deviceId);
+      if (mounted === undefined || typeof mounted.instance.portRouted !== "function") continue;
+      for (const portId of Object.keys(mounted.io.inputs)) {
+        if (portId === "in") continue;
+        const key = `${deviceId}/${portId}`;
+        const routed = fed.has(key);
+        if (portRouting.get(key) === routed) continue;
+        portRouting.set(key, routed);
+        mounted.instance.portRouted(portId, routed);
+      }
+    }
+    // Forget the ports of devices that are no longer mounted, so a remount
+    // with the same id is told again from scratch.
+    for (const key of [...portRouting.keys()]) {
+      const deviceId = key.slice(0, key.lastIndexOf("/"));
+      if (!desired.mounts.has(deviceId) || host.get(deviceId) === undefined) {
+        portRouting.delete(key);
+      }
+    }
+  }
+
   // --- patch application -----------------------------------------------------
 
-  async function applyPatch(patch: GraphPatch): Promise<void> {
-    for (const spec of patch.createUtils) createUtil(spec);
+  async function applyPatch(
+    patch: GraphPatch,
+    doc: ProjectSnapshot,
+    audible: ReadonlySet<ChannelId>,
+  ): Promise<void> {
+    for (const spec of patch.createUtils) createUtil(spec, doc, audible);
 
+    // Ids this patch (re)mounted — see the `unmountDevices` loop below.
+    const remounted = new Set<DeviceInstanceId>();
     for (const spec of patch.mountDevices) {
       const definition = host.registry.get(spec.definitionId);
       if (definition === undefined) continue; // unknown id: stays silent, doc intact
       if (host.get(spec.deviceId) !== undefined) host.unmount(spec.deviceId);
       await host.mount({ definition, instanceId: spec.deviceId, channelId: spec.channelId });
+      remounted.add(spec.deviceId);
       if (disposed) return;
     }
 
@@ -260,7 +458,15 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
       for (const gain of dipped) gain.gain.setTargetAtTime(1, now, REWIRE_RAMP_SECONDS / 4);
     }
 
-    for (const deviceId of patch.unmountDevices) host.unmount(deviceId);
+    // A REPLACE — same instance id, new `definitionId` or `channelId` — is
+    // BOTH a mount and an unmount in the patch (diff.ts), and the mount loop
+    // above already tore the stale instance down before remounting. Running
+    // the unmount as well would dispose the device just mounted and leave the
+    // chain's edges pointing at a dead node, silencing the channel for the
+    // rest of the session. Only unmount what this patch did not remount.
+    for (const deviceId of patch.unmountDevices) {
+      if (!remounted.has(deviceId)) host.unmount(deviceId);
+    }
     for (const ref of patch.disposeUtils) {
       const node = utilNodes.get(ref);
       if (node !== undefined) {
@@ -270,6 +476,7 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
           // Node had no connections left.
         }
         utilNodes.delete(ref);
+        muteTargets.delete(ref);
       }
     }
   }
@@ -279,14 +486,21 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
       if (disposed) return;
       const desired = buildGraph(doc);
       const patch = diffGraph(live, desired);
-      await applyPatch(patch);
+      // Solo-in-place is computed once: `createUtil` seeds a new channel's
+      // mute gain from it (a channel born muted must not fade in), and
+      // `applyMutes` writes the whole set below.
+      const audible = audibleChannels(doc);
+      await applyPatch(patch, doc, audible);
       if (disposed) return;
       live = desired;
-      // New util gains start at 1 (GainNode default), which is right for
-      // every structural gain; send/vol/pan values arrive via param binds
-      // below, and mutes via the audible set.
+      // After the edges are real: the device learns whether its optional
+      // input ports are actually fed (SS6 sidechain -> SS7 device).
+      syncPortRouting(desired);
+      // Structural gains (input/postfx/post) keep the GainNode default of 1;
+      // vol/pan/send/mute were seeded from the document at creation and are
+      // driven from here on by the param binds and the audible set.
       syncMixerParams(doc);
-      applyMutes(doc);
+      applyMutes(audible, doc);
     },
 
     mountedDevice(deviceId: DeviceInstanceId): MountedDevice | undefined {
@@ -295,6 +509,10 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
 
     meterTapFor(channelId: ChannelId): AudioNode | undefined {
       return utilNodes.get(channelUtilRef(channelId, "post"));
+    },
+
+    nodeFor(ref: GraphNodeRef): AudioNode | undefined {
+      return utilNodes.get(ref);
     },
 
     dispose(): void {
@@ -310,6 +528,7 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
         }
       }
       utilNodes.clear();
+      muteTargets.clear();
       live = EMPTY_GRAPH;
     },
   };

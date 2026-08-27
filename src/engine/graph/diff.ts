@@ -29,7 +29,10 @@ export function diffGraph(live: GraphDescription, desired: GraphDescription): Gr
   for (const [id, spec] of desired.mounts) {
     const prior = live.mounts.get(id);
     // Same instance id but a different definition or channel is a REPLACE:
-    // unmount + remount (params re-register under the new channel path).
+    // unmount + remount (params re-register under the new channel path). The
+    // id lands in BOTH lists, and the reconciler resolves that by unmounting
+    // the stale instance inside its mount loop and skipping the id in the
+    // unmount loop — running both would dispose the device it just mounted.
     if (prior === undefined) {
       patch.mountDevices.push(spec);
     } else if (prior.definitionId !== spec.definitionId || prior.channelId !== spec.channelId) {

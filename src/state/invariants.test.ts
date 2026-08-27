@@ -42,6 +42,10 @@ describe("command storm", () => {
         const noteIds = (doc.clips[clipId]?.notes ?? []).map((note) => note.id);
         const someNotes = noteIds.filter(() => random() < 0.5);
         const paramIds = Object.keys(doc.paramValues);
+        const paramId = paramIds.length > 0 ? pick(paramIds) : "chan:x/vol";
+        const laneIds = Object.keys(doc.lanes);
+        const laneId = laneIds.length > 0 ? pick(laneIds) : "none";
+        const lanePoints = doc.lanes[laneId]?.points ?? [];
 
         const choices: Command[] = [
           commands.addNotes(clipId, [
@@ -80,6 +84,25 @@ describe("command storm", () => {
           commands.setTempo(60 + int(150)),
           commands.setLoopRegion({ start: int(BAR * 2), end: int(BAR * 4), enabled: random() < 0.5 }),
           commands.renameProject(`song ${step}`),
+          // M2 routing + M3 lanes in the storm: `deleteChannels` is the verb
+          // the mixer's Delete button dispatches, and it has to sweep the same
+          // dependents `deleteTracks` does (clips, devices, sends, sidechains,
+          // params AND lanes) or it leaves a document the codec truncates on
+          // the next load.
+          commands.addGroup(trackIds.filter(() => random() < 0.4)),
+          commands.addReturn(),
+          commands.deleteChannels(doc.channelOrder.filter(() => random() < 0.2)),
+          commands.setChannelOutput(pick(doc.channelOrder), pick(doc.channelOrder)),
+          commands.addLane(pick(doc.channelOrder), paramId),
+          commands.addLanePoint(laneId, { t: int(BAR * 2), v: random() * 24 - 12, curve: random() * 2 - 1 }),
+          commands.moveLanePoints(
+            laneId,
+            lanePoints
+              .filter(() => random() < 0.5)
+              .map((point) => ({ fromT: point.t, toT: int(BAR * 2), v: random() * 24 - 12 })),
+          ),
+          commands.deleteLanePoints(laneId, lanePoints.filter(() => random() < 0.3).map((point) => point.t)),
+          commands.deleteLanes(laneIds.filter(() => random() < 0.2)),
         ];
 
         store.dispatch(pick(choices));

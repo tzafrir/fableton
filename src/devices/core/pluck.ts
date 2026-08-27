@@ -8,6 +8,13 @@
 // It exists to prove the swap path (SS7): same clips, a different engine
 // underneath, params carried where local ids match (`gain` matches the
 // poly synth's).
+//
+// Voice bookkeeping is a LIST, not a map keyed by pitch: two overlapping
+// notes on one pitch are two voices, and a note-off must release the voice
+// ITS OWN note-on created (see `noteOff`). Polyphony is capped and stolen
+// oldest-first, the same LRU rule `./polySynth/voiceAllocator.ts` applies to
+// the worklet synth, so ordinary note density cannot pile up unbounded
+// against the SS2 audio budget.
 
 import type { DeviceDefinition, DeviceInstance, Seconds } from "../../types";
 import { p } from "../../params/descriptors";
@@ -26,14 +33,37 @@ export function midiToHz(pitch: number): number {
 }
 
 interface Voice {
+  pitch: number;
   osc: OscillatorNode;
   filter: BiquadFilterNode;
   env: GainNode;
+  /** When a release/choke/steal was scheduled; null while still ringing. */
   releasedAt: number | null;
+  /** A note-off has already claimed this voice (note-on/note-off pairing). */
+  matched: boolean;
+  /** The oscillator reached its stop time and disconnected itself. */
+  ended: boolean;
 }
 
 const ATTACK_S = 0.003;
 const RELEASE_S = 0.06;
+/** A stolen voice gets a much shorter fade than a released one: it has to be
+ *  gone before the note that stole it needs the headroom, and ~20 ms is the
+ *  SS7 crossfade the rest of the engine already treats as click-free. */
+const STEAL_S = 0.02;
+/**
+ * How many decay time-constants of oscillator to actually render. The decay
+ * envelope is `setTargetAtTime(0, ..., decayS / 4)`, so `2 * decayS` is eight
+ * tau — about -70 dB, past audibility. (It used to run `6 * decayS` = 24 tau,
+ * i.e. ~3.4x longer than the voice can be heard: pure wasted render.)
+ */
+const DECAY_TAILS = 2;
+/** SS2 budget ("~40 concurrent voices+effects" for a whole project), spent on
+ *  one instrument. Above this the oldest ringing voice is stolen. */
+export const MAX_VOICES = 24;
+/** Ceiling on finished-but-unmatched voices kept only for note-off pairing —
+ *  a runaway source of note-ons without note-offs cannot grow the list. */
+const MAX_TRACKED = 128;
 
 export const Pluck: DeviceDefinition = {
   id: "core.pluck",
@@ -60,15 +90,33 @@ export const Pluck: DeviceDefinition = {
     let decayS = 0.35;
     let brightnessHz = 5000;
 
-    const voices = new Map<number, Voice>();
+    /** Voices in note-on order, oldest first. */
+    const voices: Voice[] = [];
 
-    const releaseVoice = (pitch: number, voice: Voice, when: number): void => {
-      if (voice.releasedAt !== null) return;
+    const forget = (voice: Voice): void => {
+      const index = voices.indexOf(voice);
+      if (index >= 0) voices.splice(index, 1);
+    };
+
+    /** Fades a voice out over `fadeS` and stops its oscillator after it. */
+    const fadeOut = (voice: Voice, when: number, fadeS: number): void => {
+      if (voice.releasedAt !== null || voice.ended) return;
       voice.releasedAt = when;
       voice.env.gain.cancelScheduledValues(when);
-      voice.env.gain.setTargetAtTime(0, when, RELEASE_S / 3);
-      voice.osc.stop(when + RELEASE_S * 4);
-      void pitch;
+      voice.env.gain.setTargetAtTime(0, when, fadeS / 3);
+      voice.osc.stop(when + fadeS * 4);
+    };
+
+    const releaseVoice = (voice: Voice, when: number): void => fadeOut(voice, when, RELEASE_S);
+
+    /** Drops finished voices nobody can pair a note-off with any more —
+     *  oldest tombstone first, so the pairing that survives is the recent one. */
+    const prune = (): void => {
+      if (voices.length <= MAX_TRACKED) return;
+      for (let i = 0; i < voices.length && voices.length > MAX_TRACKED; ) {
+        if (voices[i]?.ended === true) voices.splice(i, 1);
+        else i++;
+      }
     };
 
     return deviceInstance({
@@ -81,9 +129,28 @@ export const Pluck: DeviceDefinition = {
 
       noteOn: (pitch, vel, when) => {
         const at = Math.max(when, ctx.currentTime);
-        // Same pitch retriggers: choke the old voice first.
-        const existing = voices.get(pitch);
-        if (existing !== undefined) releaseVoice(pitch, existing, at);
+        // Same pitch retriggers: choke the ringing voice first — a plucked
+        // string damps when it is plucked again. The choked voice STAYS in the
+        // list until its own note-off claims it, so that note-off cannot fall
+        // through onto the voice that just replaced it.
+        for (const voice of voices) {
+          if (voice.pitch === pitch && voice.releasedAt === null) releaseVoice(voice, at);
+        }
+
+        // SS2 audio budget: cap polyphony, stealing the oldest voice still
+        // ringing (LRU, as `VoiceAllocator` does). Voices already in their
+        // fade do not count — they stop themselves within tens of ms.
+        let ringing = 0;
+        for (const voice of voices) {
+          if (voice.releasedAt === null && !voice.ended) ringing++;
+        }
+        for (let i = 0; i < voices.length && ringing >= MAX_VOICES; i++) {
+          const victim = voices[i];
+          if (victim === undefined || victim.releasedAt !== null || victim.ended) continue;
+          fadeOut(victim, at, STEAL_S);
+          ringing--;
+        }
+        prune();
 
         const osc = ctx.createOscillator();
         osc.type = shape;
@@ -106,31 +173,60 @@ export const Pluck: DeviceDefinition = {
         osc.connect(filter);
         filter.connect(env);
         env.connect(outGain);
-        const voice: Voice = { osc, filter, env, releasedAt: null };
-        voices.set(pitch, voice);
+        const voice: Voice = {
+          pitch,
+          osc,
+          filter,
+          env,
+          releasedAt: null,
+          matched: false,
+          ended: false,
+        };
+        voices.push(voice);
         osc.onended = () => {
+          voice.ended = true;
           osc.disconnect();
           filter.disconnect();
           env.disconnect();
-          if (voices.get(pitch) === voice) voices.delete(pitch);
+          // Kept as a tombstone until its note-off arrives, so pairing below
+          // stays correct for a note held far longer than it rings.
+          if (voice.matched) forget(voice);
         };
         osc.start(at);
-        // A pluck ends itself: stop well past audibility.
-        osc.stop(at + decayS * 6 + RELEASE_S);
+        // A pluck ends itself: stop just past audibility (see DECAY_TAILS).
+        osc.stop(at + decayS * DECAY_TAILS + RELEASE_S);
       },
 
       noteOff: (pitch, when) => {
-        const voice = voices.get(pitch);
-        if (voice !== undefined) releaseVoice(pitch, voice, Math.max(when, ctx.currentTime));
+        const at = Math.max(when, ctx.currentTime);
+        // Pair a note-off with the note-on that made the voice, oldest first —
+        // the same FIFO rule as `VoiceAllocator.release`. Releasing "whichever
+        // voice currently holds this pitch" would let the first of two
+        // overlapping same-pitch notes cut the second one short at its own
+        // note-off (A: 0..960, B: 480..1440 — B died at 960).
+        for (const voice of voices) {
+          if (voice.pitch !== pitch || voice.matched) continue;
+          voice.matched = true;
+          releaseVoice(voice, at);
+          if (voice.ended) forget(voice);
+          return;
+        }
       },
 
       allNotesOff: (when) => {
         const at = Math.max(when, ctx.currentTime);
-        for (const [pitch, voice] of voices) releaseVoice(pitch, voice, at);
+        // Every pending note-off is answered at once: nothing is left to pair.
+        for (const voice of [...voices]) {
+          voice.matched = true;
+          releaseVoice(voice, at);
+          if (voice.ended) forget(voice);
+        }
       },
 
       dispose: (when?: Seconds): void => {
-        for (const [pitch, voice] of voices) releaseVoice(pitch, voice, when ?? ctx.currentTime);
+        const at = when ?? ctx.currentTime;
+        for (const voice of voices) releaseVoice(voice, at);
+        voices.length = 0;
         rampOutAndDisconnect(when, [outGain], { context: ctx });
       },
     });

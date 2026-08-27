@@ -30,6 +30,7 @@ import type {
   ProjectEngine,
   ProjectSnapshot,
   Seconds,
+  TempoSegment,
   Unsub,
 } from "../../types";
 import { createDocumentNoteEventSource } from "./documentEventSource";
@@ -67,12 +68,40 @@ export interface AppProjectEngine extends ProjectEngine {
    *  moving knobs track the lanes; scheduling itself rides the transport's
    *  window filler and needs nothing from the UI. */
   readonly automation: AutomationSampler;
+  /**
+   * A reconcile that threw — a worklet module that would not load, a device
+   * `create()` that failed. `applyDocument` always RESOLVES (see its
+   * implementation), so this is the only way the failure is visible; the app
+   * shell renders it in the toolbar's status line. Nothing else changes: the
+   * next document change reconciles again, which is what makes the retry
+   * `prepareDefinition` deliberately allows reachable.
+   */
+  onApplyError(cb: (error: unknown) => void): Unsub;
 }
 
 /** The transport's per-track note target — rebuilt per apply, looked up per
  *  tick without allocating (SS12). */
 interface TrackTarget {
   readonly noteTarget: NoteTarget;
+}
+
+/**
+ * Segment-wise equality over the document's tempo (SS8 data, not the built
+ * map). `EngineTransport.setTempoMap` PANICS whenever the transport is not
+ * stopped — every pending note-on gets a note-off at its own onset, every
+ * track that has played gets an `allNotesOff`, and the look-ahead cursor
+ * re-anchors — so pushing a map that did not actually change would cut every
+ * sounding voice on EVERY edit made during playback (a note drag, a knob
+ * release, an automation point move all reach `applyDocument`). That is SS2's
+ * glitch-free-audio budget blown on the most common interaction in the app,
+ * so the map is pushed only when the segments really differ.
+ */
+function sameTempoSegments(a: readonly TempoSegment[], b: readonly TempoSegment[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i]!.startTick !== b[i]!.startTick || a[i]!.bpm !== b[i]!.bpm) return false;
+  }
+  return true;
 }
 
 /** `undefined` unless every one of the three note methods is present — a
@@ -110,9 +139,13 @@ export function createProjectEngine(
   });
   const meters: MeterBus = createMeterBus(ctx);
 
+  // The tempo map the transport and the sampler are currently running, plus
+  // the document segments it was built from (see `sameTempoSegments`).
+  let currentTempoSegments: readonly TempoSegment[] = initialDoc.tempo;
+  let currentTempoMap = createTempoMap(initialDoc.tempo);
+
   // SS11: the sampler attaches to the transport's window-filler seam below
   // and follows the document's enabled lanes on every apply.
-  let currentTempoMap = createTempoMap(initialDoc.tempo);
   const automation: AutomationSampler = createAutomationSampler({
     registry: params,
     tempoMap: () => currentTempoMap,
@@ -125,7 +158,7 @@ export function createProjectEngine(
 
   const transport: EngineTransport = createEngineTransport({
     context: ctx,
-    tempoMap: createTempoMap(initialDoc.tempo),
+    tempoMap: currentTempoMap,
     events,
     resolveTarget: (trackId) => targetsByChannel.get(trackId)?.noteTarget,
     loop: initialDoc.loop,
@@ -135,6 +168,7 @@ export function createProjectEngine(
   });
 
   let disposed = false;
+  const applyErrorListeners = new Set<(error: unknown) => void>();
   // Serializes `applyDocument`: mounting awaits `prepare()` (worklet loading),
   // so two edits landing in the same tick must not race two overlapping
   // reconciles.
@@ -142,13 +176,30 @@ export function createProjectEngine(
 
   async function applyNow(doc: ProjectSnapshot): Promise<void> {
     if (disposed) return;
-    currentTempoMap = createTempoMap(doc.tempo);
-    transport.setTempoMap(currentTempoMap);
+    if (!sameTempoSegments(doc.tempo, currentTempoSegments)) {
+      currentTempoSegments = doc.tempo;
+      currentTempoMap = createTempoMap(doc.tempo);
+      transport.setTempoMap(currentTempoMap);
+    }
+    // `setLoop` only swaps a field (it takes effect from the next window), so
+    // it needs no such guard.
     transport.setLoop(doc.loop);
 
     // SS6: document -> desired graph -> diff -> patched live graph.
     await reconciler.apply(doc);
     if (disposed) return;
+
+    // BEFORE the lanes below: `setBase` writes through to the DSP only while
+    // a param is `free` (SS4's state machine), so a param an enabled lane is
+    // about to mark `automated` has exactly this one moment to receive the
+    // document's saved value. Loading after `setAutomatedIds` left every
+    // automated device/mixer param sitting at its descriptor default in the
+    // graph while the strip showed the saved one.
+    //
+    // Reloads every value, not just what changed: a device or mixer strip
+    // mounted just above starts at descriptor defaults and needs the
+    // document's saved value backfilled in (SS4 `load` contract).
+    params.load(doc.paramValues);
 
     // Note targets: each track's source instrument, freshly resolved (a swap
     // remounted the device; same map, new instance).
@@ -188,10 +239,6 @@ export function createProjectEngine(
     // point of the delegating source is making a note edit audible without a
     // transport rebuild.
     events.setDocument(doc);
-    // Reloads every value, not just what changed: a device or mixer strip
-    // mounted just above starts at descriptor defaults and needs the
-    // document's saved value backfilled in (SS4 `load` contract).
-    params.load(doc.paramValues);
   }
 
   transport.addWindowFiller(automation);
@@ -204,8 +251,22 @@ export function createProjectEngine(
     onParamCommit(cb: (commit: ParamCommit) => void): Unsub {
       return params.onCommit(cb);
     },
+    onApplyError(cb: (error: unknown) => void): Unsub {
+      applyErrorListeners.add(cb);
+      return () => {
+        applyErrorListeners.delete(cb);
+      };
+    },
     applyDocument(doc: ProjectSnapshot): Promise<void> {
-      queue = queue.then(() => applyNow(doc));
+      // The chain must ALWAYS resolve. `queue` is the serialization point for
+      // every apply of the session, so a single rejection left in it (one
+      // worklet module that would not load) poisoned it permanently: every
+      // later `.then` was skipped and the engine silently stopped following
+      // the document — no reconcile, no `events.setDocument`, no param load —
+      // while the UI happily showed the edits.
+      queue = queue.then(() => applyNow(doc)).catch((error: unknown) => {
+        for (const cb of [...applyErrorListeners]) cb(error);
+      });
       return queue;
     },
     auditionFor(channelId: ChannelId): AuditionSink | undefined {
@@ -233,6 +294,7 @@ export function createProjectEngine(
       reconciler.dispose();
       host.dispose();
       params.dispose();
+      applyErrorListeners.clear();
     },
   };
 }

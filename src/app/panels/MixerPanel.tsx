@@ -14,12 +14,16 @@ import type {
 } from "../engine";
 import type {
   ChannelId,
+  Command,
+  CommandResult,
   DocumentStore,
+  ParamId,
   ProjectCommands,
   ProjectSnapshot,
 } from "../../types";
 import type { Immutable, Channel } from "../../types";
 import { Fader, Knob } from "../../ui/controls";
+import { rejectionHintStyle, useDispatchHint } from "./useDispatchHint";
 
 export interface MixerPanelProps {
   store: DocumentStore;
@@ -27,6 +31,10 @@ export interface MixerPanelProps {
   engine: AppProjectEngine | null;
   selectedChannelId: ChannelId | null;
   onSelectChannel: (channelId: ChannelId) => void;
+  /** SS5's control context menu: "Show/create automation lane". The shell
+   *  creates (or re-enables) the lane for that param and reveals it — this
+   *  is what makes the menu row more than decoration. */
+  onShowAutomation?: ((paramId: ParamId) => void) | undefined;
 }
 
 type RChannel = Immutable<Channel>;
@@ -111,20 +119,27 @@ function MeterBar({ engine, channelId }: { engine: AppProjectEngine | null; chan
 function Strip({
   doc,
   channel,
-  store,
+  dispatch,
   commands,
   engine,
   selected,
   onSelect,
+  onShowAutomation,
 }: {
   doc: ProjectSnapshot;
   channel: RChannel;
-  store: DocumentStore;
+  /** The panel's rejection-aware dispatch (SS6 inline hint), not
+   *  `store.dispatch` — see `useDispatchHint`. */
+  dispatch: (command: Command) => CommandResult;
   commands: ProjectCommands;
   engine: AppProjectEngine | null;
   selected: boolean;
   onSelect: (id: ChannelId) => void;
+  onShowAutomation?: ((paramId: ParamId) => void) | undefined;
 }) {
+  /** SS5 menu row -> the shell's lane reveal, or absent (row hidden). */
+  const showAutomation = (paramId: ParamId): (() => void) | undefined =>
+    onShowAutomation === undefined ? undefined : () => onShowAutomation(paramId);
   const volume = engine?.params.get(channel.volume);
   const pan = engine?.params.get(channel.pan);
   const returns = returnsOf(doc);
@@ -173,7 +188,16 @@ function Strip({
             const send = channel.sends.find((s) => s.to === ret.id);
             const handle = send !== undefined ? engine?.params.get(send.amount) : undefined;
             if (send !== undefined && handle !== undefined) {
-              return <Knob key={ret.id} handle={handle} size={26} label={ret.name.replace("Return ", "")} testId={`send-${channel.id}-${ret.id}`} />;
+              return (
+                <Knob
+                  key={ret.id}
+                  handle={handle}
+                  size={26}
+                  label={ret.name.replace("Return ", "")}
+                  testId={`send-${channel.id}-${ret.id}`}
+                  onShowAutomation={showAutomation(send.amount)}
+                />
+              );
             }
             if (send !== undefined) {
               // The send EXISTS in the document; its handle arrives when
@@ -204,7 +228,7 @@ function Strip({
                 type="button"
                 data-testid={`add-send-${channel.id}-${ret.id}`}
                 title={`Send to ${ret.name}`}
-                onClick={() => store.dispatch(commands.setSend(channel.id, ret.id))}
+                onClick={() => dispatch(commands.setSend(channel.id, ret.id))}
                 style={{
                   width: 26,
                   height: 26,
@@ -225,7 +249,11 @@ function Strip({
 
       <div style={{ display: "flex", alignItems: "flex-end", gap: 4 }}>
         {volume !== undefined ? (
-          <Fader handle={volume} testId={`vol-${channel.id}`} />
+          <Fader
+            handle={volume}
+            testId={`vol-${channel.id}`}
+            onShowAutomation={showAutomation(channel.volume)}
+          />
         ) : (
           <div style={{ width: 28, height: 106, display: "grid", placeItems: "center", color: "#444", fontSize: 10 }}>
             —
@@ -235,7 +263,13 @@ function Strip({
       </div>
 
       {pan !== undefined ? (
-        <Knob handle={pan} size={28} label="Pan" testId={`pan-${channel.id}`} />
+        <Knob
+          handle={pan}
+          size={28}
+          label="Pan"
+          testId={`pan-${channel.id}`}
+          onShowAutomation={showAutomation(channel.pan)}
+        />
       ) : (
         <div style={{ height: 40 }} />
       )}
@@ -248,7 +282,7 @@ function Strip({
               data-testid={`mute-${channel.id}`}
               aria-pressed={channel.mute}
               title="Mute"
-              onClick={() => store.dispatch(commands.setChannelMuted(channel.id, !channel.mute))}
+              onClick={() => dispatch(commands.setChannelMuted(channel.id, !channel.mute))}
               style={{
                 width: 22,
                 fontSize: 10,
@@ -266,7 +300,7 @@ function Strip({
               data-testid={`solo-${channel.id}`}
               aria-pressed={channel.solo}
               title="Solo (in place)"
-              onClick={() => store.dispatch(commands.setChannelSolo(channel.id, !channel.solo))}
+              onClick={() => dispatch(commands.setChannelSolo(channel.id, !channel.solo))}
               style={{
                 width: 22,
                 fontSize: 10,
@@ -289,7 +323,7 @@ function Strip({
           data-testid={`output-${channel.id}`}
           aria-label={`${channel.name} output`}
           value={channel.output ?? ""}
-          onChange={(e) => store.dispatch(commands.setChannelOutput(channel.id, e.target.value))}
+          onChange={(e) => dispatch(commands.setChannelOutput(channel.id, e.target.value))}
           style={{ fontSize: 10, maxWidth: 78, background: "#181818", color: "#bbb" }}
         >
           {targets.map((t) => (
@@ -303,26 +337,44 @@ function Strip({
   );
 }
 
-export function MixerPanel({ store, commands, engine, selectedChannelId, onSelectChannel }: MixerPanelProps) {
+export function MixerPanel({
+  store,
+  commands,
+  engine,
+  selectedChannelId,
+  onSelectChannel,
+  onShowAutomation,
+}: MixerPanelProps) {
   const doc = store.getState();
   const [, force] = useState(0);
   useEffect(() => store.onChange(() => force((n) => n + 1)), [store]);
+  // Handles are read during render (`engine.params.get`) but are registered
+  // ASYNCHRONOUSLY — `host.mount` awaits `prepare()`, and the reconciler syncs
+  // mixer params after `await applyPatch`, i.e. long after React flushed the
+  // render for the document change that added the channel. Without this
+  // subscription a new track/return/send shows the `—` fader and the greyed
+  // send circle until some UNRELATED edit re-renders the panel (SS4/SS6).
+  useEffect(() => {
+    if (engine === null) return;
+    return engine.params.onRegistryChange(() => force((n) => n + 1));
+  }, [engine]);
+  const { hint, dispatch } = useDispatchHint(store);
 
   const selection = selectedChannelId !== null && doc.channels[selectedChannelId] !== undefined
     ? [selectedChannelId]
     : [];
 
   const addReturn = useCallback(() => {
-    store.dispatch(commands.addReturn());
-  }, [store, commands]);
+    dispatch(commands.addReturn());
+  }, [dispatch, commands]);
 
   const groupSelected = useCallback(() => {
-    if (selection.length > 0) store.dispatch(commands.addGroup(selection));
-  }, [store, commands, selection]);
+    if (selection.length > 0) dispatch(commands.addGroup(selection));
+  }, [dispatch, commands, selection]);
 
   const deleteSelected = useCallback(() => {
-    if (selection.length > 0) store.dispatch(commands.deleteChannels(selection));
-  }, [store, commands, selection]);
+    if (selection.length > 0) dispatch(commands.deleteChannels(selection));
+  }, [dispatch, commands, selection]);
 
   return (
     <div
@@ -334,7 +386,7 @@ export function MixerPanel({ store, commands, engine, selectedChannelId, onSelec
         <button
           type="button"
           data-testid="add-track-button"
-          onClick={() => store.dispatch(commands.addTrack())}
+          onClick={() => dispatch(commands.addTrack())}
           style={miniButton}
         >
           + Track
@@ -362,6 +414,13 @@ export function MixerPanel({ store, commands, engine, selectedChannelId, onSelec
         >
           Delete
         </button>
+        {/* SS6: "cycle-forming edits are rejected with an inline hint" — the
+            Audio To picker, Group and Delete all land here. */}
+        {hint !== null && (
+          <span data-testid="mixer-hint" role="status" style={rejectionHintStyle}>
+            {hint}
+          </span>
+        )}
       </div>
       <div style={{ display: "flex", overflowX: "auto", flex: 1, minHeight: 0 }}>
         {doc.channelOrder.map((id) => {
@@ -372,11 +431,12 @@ export function MixerPanel({ store, commands, engine, selectedChannelId, onSelec
               key={id}
               doc={doc}
               channel={channel}
-              store={store}
+              dispatch={dispatch}
               commands={commands}
               engine={engine}
               selected={selectedChannelId === id}
               onSelect={onSelectChannel}
+              onShowAutomation={onShowAutomation}
             />
           );
         })}

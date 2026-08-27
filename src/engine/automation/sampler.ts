@@ -12,6 +12,9 @@
 //     and none of that call's overlap restrictions);
 //   - message: timestamped values at ~200 Hz control rate (SS11), the
 //     worklet interpolating between them.
+// Which of the two a lane takes is the BINDING's business; whether its values
+// are swept or held is the PARAM KIND's (see `isHeld` below) — a stepped,
+// enum or toggle lane jumps at segment boundaries down either path.
 // Overridden params drop their writes inside the handle (SS4).
 //
 // Tick -> seconds inside a window: the window's END is `horizonSeconds`, so
@@ -30,7 +33,7 @@ import type { AutomationLane, Immutable, ParamId, Seconds, TempoMap, Ticks, Wind
 /** The sampler only READS lanes, so it accepts the store's immutable view. */
 export type LaneView = Immutable<AutomationLane>;
 import type { AppParamRegistry } from "../../params";
-import { laneValueAt, sampleLane, type AutomationSample } from "./curve";
+import { laneValueAt, sampleLane, type AutomationSample, type LaneSampleMode, type SegmentMode } from "./curve";
 
 /** SS11 message-path control rate. */
 export const CONTROL_RATE_HZ = 200;
@@ -63,6 +66,22 @@ export function createAutomationSampler(deps: AutomationSamplerDeps): Automation
   let enabled: LaneView[] = [];
   let ids = new Set<ParamId>();
 
+  /**
+   * SS11 "Stepped/enum/toggle params render and edit as steps": a discrete
+   * param's lane is HELD between points, never swept (curve.ts `SegmentMode`).
+   *
+   * Read from the registry per window instead of cached in `setLanes`: a lane
+   * may name a param that mounts later (the SS7 "kept, greyed, re-bindable"
+   * lane), so a cache taken at `setLanes` time can be wrong until the next
+   * document change — and a `Map.get` per lane per ~25 ms window allocates
+   * nothing, which is what the tick path actually cares about.
+   */
+  const isHeld = (id: ParamId): boolean => {
+    const kind = registry.get(id)?.desc.kind;
+    return kind !== undefined && kind !== "continuous";
+  };
+  const segmentModeOf = (id: ParamId): SegmentMode => (isHeld(id) ? "hold" : "interpolate");
+
   // Reused across windows — SS12's zero-allocation-in-tick-paths guardrail.
   const scratch: AutomationSample[] = [];
   const sendBuffer: { value: number; when: Seconds }[] = [];
@@ -82,10 +101,15 @@ export function createAutomationSampler(deps: AutomationSamplerDeps): Automation
       const tempo = deps.tempoMap();
       for (const lane of enabled) {
         const message = isMessageBound(lane.paramId);
+        const mode: LaneSampleMode = isHeld(lane.paramId)
+          ? "hold"
+          : message
+            ? "controlRate"
+            : "ramp";
         const stepTicks = message
           ? Math.max(1, Math.round(tempo.ticksAt(1 / CONTROL_RATE_HZ)))
           : AUDIO_PARAM_STEP_TICKS;
-        const samples = sampleLane(lane.points, fromTick, toTick, stepTicks, scratch, message);
+        const samples = sampleLane(lane.points, fromTick, toTick, stepTicks, mode, scratch);
         if (samples.length === 0) continue;
         sendBuffer.length = 0;
         for (const s of samples) {
@@ -100,7 +124,7 @@ export function createAutomationSampler(deps: AutomationSamplerDeps): Automation
 
     updateDisplay(positionTicks: Ticks): void {
       for (const lane of enabled) {
-        const value = laneValueAt(lane.points, positionTicks);
+        const value = laneValueAt(lane.points, positionTicks, segmentModeOf(lane.paramId));
         if (value !== undefined) registry.displayAutomation(lane.paramId, value);
       }
     },

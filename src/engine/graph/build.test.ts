@@ -234,6 +234,9 @@ describe("diffGraph", () => {
       devices: [{ id: "fx1", definitionId: "core.delay", channelId: "t1" }],
     });
     const patch = diffGraph(buildGraph(a), buildGraph(b));
+    // A REPLACE lists the instance in BOTH lists. The reconciler's mount loop
+    // is what tears the stale instance down, so it must NOT also run the
+    // unmount (reconciler.ts) — see "device replace" in reconciler.test.ts.
     expect(patch.unmountDevices).toEqual(["fx1"]);
     expect(patch.mountDevices.map((m) => m.definitionId)).toEqual(["core.delay"]);
   });

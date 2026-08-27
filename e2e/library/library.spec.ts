@@ -164,6 +164,19 @@ test("Export WAV renders the document offline into a real, non-silent RIFF file"
     count++;
   }
   const rms = Math.sqrt(sumSquares / Math.max(1, count));
-  expect(count).toBeGreaterThan(sampleRate); // more than a second of audio
   expect(rms).toBeGreaterThan(0.005);
+
+  // The file is exactly as long as the DOCUMENT says it should be — the span
+  // math (`renderSpan`, SS12) is pure, so the browser can hand us the number
+  // the render used. "More than a second of audio" passed for any truncated
+  // or runaway render; this does not.
+  const durationSeconds = await page.evaluate(() => {
+    const bridge = window.__fabletonDemo;
+    if (bridge?.store === undefined) throw new Error("no e2e store bridge");
+    return bridge.renderSpan(bridge.store.getState()).durationSeconds;
+  });
+  const dataBytes = bytes.readUInt32LE(40);
+  const frames = dataBytes / (channels * (bits / 8));
+  expect(frames).toBe(Math.ceil(durationSeconds * sampleRate));
+  expect(count).toBe(frames * channels);
 });

@@ -20,13 +20,15 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import type { ParamHandle } from "../../types";
+import type { ParamHandle, ParamState } from "../../types";
 import { createControlGesture } from "./gesture";
 
 export interface ParamControlProps {
   handle: ParamHandle;
-  /** Draws the control face given the live value. */
-  children: (value: number, dragging: boolean) => ReactNode;
+  /** Draws the control face given the live value, whether a drag is in
+   *  flight, and the SS4 automation state (SS5 control inventory: an
+   *  `overridden` param must READ as overridden — "arc pulses dim"). */
+  children: (value: number, dragging: boolean, state: ParamState) => ReactNode;
   /** Post-processes the live value during a DRAG only (fader 0 dB detent).
    *  `fine` (Shift) bypasses it, per the SS5 fader row. */
   snapDragValue?: ((value: number) => number) | undefined;
@@ -49,6 +51,38 @@ export function useParamValue(handle: ParamHandle): number {
   return value;
 }
 
+/**
+ * Live value AND SS4 state, in one subscription.
+ *
+ * Why not two `useState`s over `onChange(v => ...)`: a state flip
+ * (`automated` -> `overridden`) marks the handle dirty but does NOT move the
+ * value, so a `setValue(sameNumber)` bails out of re-rendering and the control
+ * would keep drawing the old state forever. Reading `handle.state` inside the
+ * same callback — and storing both in one object — is what makes the state
+ * change actually repaint.
+ */
+export function useParamDisplay(handle: ParamHandle): { value: number; state: ParamState } {
+  const [display, setDisplay] = useState(() => ({ value: handle.live(), state: handle.state }));
+  useEffect(() => {
+    const read = (): void => {
+      setDisplay((previous) =>
+        previous.value === handle.live() && previous.state === handle.state
+          ? previous
+          : { value: handle.live(), state: handle.state },
+      );
+    };
+    read(); // the handle may have moved between render and effect
+    return handle.onChange(read);
+  }, [handle]);
+  return display;
+}
+
+/** Accent for the live value (arc, fader fill) — one palette for the kit. */
+export const ARC_ACCENT = "#5aa9e6";
+/** SS5 "overridden = arc pulses dim": desaturated, plus the pulse the faces
+ *  animate. Naming it here keeps knob and fader saying the same thing. */
+export const ARC_OVERRIDDEN = "#7d8b96";
+
 interface MenuState {
   x: number;
   y: number;
@@ -63,7 +97,7 @@ export function ParamControl({
   onShowAutomation,
   title,
 }: ParamControlProps) {
-  const value = useParamValue(handle);
+  const { value, state } = useParamDisplay(handle);
   const gesture = useMemo(() => createControlGesture(handle), [handle]);
   const [dragging, setDragging] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -139,15 +173,35 @@ export function ParamControl({
     setEditing(true);
   }, [handle]);
 
-  const onWheel = useCallback(
-    (e: React.WheelEvent<HTMLDivElement>): void => {
-      // Hover-only by construction: the listener is on the control root.
+  // SS5 "Wheel events consumed only while hovering the control proper".
+  //
+  // Deliberately NOT React's `onWheel`: React 19 registers `wheel` on the root
+  // container as a PASSIVE listener, so `preventDefault()` from a synthetic
+  // handler does nothing (and Chrome logs an error per notch) — the strip row
+  // and the page keep scrolling while the knob steps, sliding the control out
+  // from under the pointer mid-adjustment. A native listener on the control
+  // root with `{ passive: false }` is the only way to consume it, and being on
+  // the root is what makes it hover-only (same shape as the editor kit's
+  // `gestureEngine` DOM binding).
+  useEffect(() => {
+    const el = rootRef.current;
+    if (el === null) return;
+    const onWheel = (e: WheelEvent): void => {
       e.preventDefault();
       e.stopPropagation();
-      gesture.wheel(e.deltaY < 0 ? 1 : -1, e.shiftKey);
-    },
-    [gesture],
-  );
+      // Shift+wheel and trackpad side-swipes arrive on deltaX on some
+      // platforms (`points.ts` makes the same fallback for the editors), and a
+      // zero delta carries no direction at all — reading `deltaY < 0 ? 1 : -1`
+      // blind turned every one of those into a DOWNWARD notch that dirtied the
+      // document. `deltaMode` needs no normalization here because only the
+      // sign is used and both axes carry the same mode.
+      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      if (delta === 0) return;
+      gesture.wheel(delta < 0 ? 1 : -1, e.shiftKey);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [gesture]);
 
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>): void => {
@@ -202,6 +256,7 @@ export function ParamControl({
       ref={rootRef}
       className={`fbl-control ${className ?? ""}`.trim()}
       data-testid={testId}
+      data-param-state={state}
       role="slider"
       tabIndex={0}
       title={title ?? handle.desc.label}
@@ -215,7 +270,6 @@ export function ParamControl({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
       onDoubleClick={onDoubleClick}
-      onWheel={onWheel}
       onKeyDown={onKeyDown}
       onContextMenu={onContextMenu}
       style={{
@@ -230,7 +284,7 @@ export function ParamControl({
         outline: "none",
       }}
     >
-      {children(value, dragging)}
+      {children(value, dragging, state)}
 
       {dragging && (
         // SS5: floating readout follows the control showing toText(live()).

@@ -3,6 +3,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeFixture, type Fixture } from "../testing/fixture";
+import { expectLegalProject } from "../testing/invariants";
 import { sendParamId, volumeParamId } from "../../params";
 import { DEFAULT_SEND_DB } from "./routing";
 import type { ChannelId } from "../../types";
@@ -75,6 +76,33 @@ describe("addGroup / addReturn / deleteChannels", () => {
   it("refuses to delete the master (silently keeps it)", () => {
     f.store.dispatch(f.commands.deleteChannels([f.masterId]));
     expect(f.store.getState().channels[f.masterId]?.role).toBe("master");
+  });
+
+  it("deletes the lanes of a dying channel (SS11: a lane hangs off its channel)", () => {
+    f.store.dispatch(f.commands.addGroup([f.trackId], { id: "g1" }));
+    f.store.dispatch(f.commands.addLane("g1", volumeParamId("g1"), { id: "lane-g" }));
+    f.store.dispatch(f.commands.addLane(f.trackId, volumeParamId(f.trackId), { id: "lane-t" }));
+    f.store.dispatch(f.commands.deleteChannels(["g1"]));
+    const doc = f.store.getState();
+    // Left behind, `lane-g` would be a lane naming a channel that no longer
+    // exists: legal in memory, silently dropped by the codec on the next load.
+    expect(doc.lanes["lane-g"]).toBeUndefined();
+    expect(doc.lanes["lane-t"]).toBeDefined();
+    expectLegalProject(doc);
+  });
+
+  it("deleting a nested group stack re-points survivors to the master, in EITHER argument order", () => {
+    for (const order of [["inner", "outer"], ["outer", "inner"]] as const) {
+      f = makeFixture();
+      f.store.dispatch(f.commands.addGroup([f.trackId], { id: "outer" }));
+      f.store.dispatch(f.commands.addGroup([f.trackId], { id: "inner" })); // track -> inner -> outer -> master
+      f.store.dispatch(f.commands.deleteChannels([...order]));
+      const doc = f.store.getState();
+      // A single hop would leave the track pointing at whichever group was
+      // processed first — a dangling id that bypasses the whole master chain.
+      expect(doc.channels[f.trackId]?.output, order.join(",")).toBe(f.masterId);
+      expectLegalProject(doc);
+    }
   });
 
   it("delete + undo restores the channel byte-for-byte", () => {

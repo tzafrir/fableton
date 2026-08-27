@@ -9,4 +9,4 @@ export type { MixerPanelProps } from "./MixerPanel";
 export { DeviceChainPanel, carryValuesForSwap } from "./DeviceChainPanel";
 export type { DeviceChainPanelProps } from "./DeviceChainPanel";
 export { AutomationPanel } from "./AutomationPanel";
-export type { AutomationPanelProps } from "./AutomationPanel";
+export type { AutomationPanelProps, LaneFocusRequest } from "./AutomationPanel";

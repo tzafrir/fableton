@@ -2,7 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { JsonValue } from "../types";
 import { PROJECT_SCHEMA_VERSION } from "../types";
 import { createProjectCodec } from "./codec";
-import { cloneProject, makeFixtureProject, MASTER_ID, TRACK_ID } from "./testing/fixture";
+import { findRoutingCycle } from "../engine/graph/validate";
+import {
+  cloneProject,
+  FX_DEVICE_ID,
+  makeFixtureProject,
+  makeRichFixtureProject,
+  MASTER_FX_ID,
+  MASTER_ID,
+  TRACK_ID,
+} from "./testing/fixture";
 
 describe("ProjectCodec.encode", () => {
   it("is deterministic across repeated encodes of the same document", () => {
@@ -316,5 +325,111 @@ describe("ProjectCodec.validate", () => {
       const cur = notes[i]!;
       expect(prev.start < cur.start || (prev.start === cur.start && prev.pitch <= cur.pitch)).toBe(true);
     }
+  });
+});
+
+// SS18-M4 project-format hardening. Every case here is a file the app itself
+// would never write, so these are the untrusted-input paths: what matters is
+// that the repair is CORRECT, not merely that decode says ok.
+describe("ProjectCodec.validate: routing and device-chain hardening", () => {
+  it("de-duplicates channelOrder instead of demoting the project's only master", () => {
+    const codec = createProjectCodec();
+    const project = cloneProject(makeFixtureProject());
+    project.channelOrder = [TRACK_ID, MASTER_ID, MASTER_ID];
+    const warnings = codec.validate(project);
+    expect(project.channelOrder).toEqual([TRACK_ID, MASTER_ID]);
+    // The bug this pins: the duplicate made the master pass meet the same
+    // master twice, so the "second master" guard demoted the only one — the
+    // project silently lost its master strip behind a channelOrder warning.
+    expect(project.channels[MASTER_ID]?.role).toBe("master");
+    expect(project.channels[MASTER_ID]?.output).toBeNull();
+    expect(warnings.some((w) => w.path === "channelOrder")).toBe(true);
+    expect(warnings.some((w) => w.message.includes("demoted"))).toBe(false);
+  });
+
+  it("still demotes a genuine SECOND master", () => {
+    const codec = createProjectCodec();
+    const project = cloneProject(makeFixtureProject());
+    project.channels[TRACK_ID]!.role = "master";
+    codec.validate(project);
+    const masters = Object.values(project.channels).filter((c) => c.role === "master");
+    expect(masters.length).toBe(1);
+  });
+
+  it("drops a device id repeated in one chain (buildGraph would self-feedback it)", () => {
+    const codec = createProjectCodec();
+    const project = makeRichFixtureProject();
+    project.channels[TRACK_ID]!.chain = [FX_DEVICE_ID, FX_DEVICE_ID];
+    const warnings = codec.validate(project);
+    expect(project.channels[TRACK_ID]?.chain).toEqual([FX_DEVICE_ID]);
+    expect(warnings.some((w) => w.path === `channels.${TRACK_ID}.chain`)).toBe(true);
+  });
+
+  it("drops a chain entry that names no device", () => {
+    const codec = createProjectCodec();
+    const project = makeRichFixtureProject();
+    project.channels[TRACK_ID]!.chain = ["ghost-device", FX_DEVICE_ID];
+    codec.validate(project);
+    expect(project.channels[TRACK_ID]?.chain).toEqual([FX_DEVICE_ID]);
+  });
+
+  it("gives a device claimed by two chains to the first in row order, and re-homes it", () => {
+    const codec = createProjectCodec();
+    const project = makeRichFixtureProject(); // channelOrder = [TRACK_ID, MASTER_ID]
+    project.channels[MASTER_ID]!.chain = [MASTER_FX_ID, FX_DEVICE_ID];
+    project.devices[FX_DEVICE_ID]!.channelId = MASTER_ID; // and it disagrees with the track
+    codec.validate(project);
+    expect(project.channels[TRACK_ID]?.chain).toEqual([FX_DEVICE_ID]);
+    expect(project.channels[MASTER_ID]?.chain).toEqual([MASTER_FX_ID]);
+    // Invariant 7: the mount's channelId is now the channel that lists it, so
+    // deleting the other channel cannot take this device with it.
+    expect(project.devices[FX_DEVICE_ID]?.channelId).toBe(TRACK_ID);
+  });
+
+  it("clears an instrument slot naming a missing device", () => {
+    const codec = createProjectCodec();
+    const project = cloneProject(makeFixtureProject());
+    project.channels[TRACK_ID]!.source = { kind: "instrument", deviceId: "ghost-device" };
+    codec.validate(project);
+    expect(project.channels[TRACK_ID]?.source).toBeNull();
+  });
+
+  it("breaks EVERY routing cycle, past the old constant loop bound", () => {
+    const codec = createProjectCodec();
+    const project = cloneProject(makeFixtureProject());
+    // 70 independent two-channel loops: more than the 64-pass constant the
+    // repair loop used to be bounded by, so the tail of them used to survive
+    // into an `ok: true` document and render those channels silent.
+    const PAIRS = 70;
+    for (let i = 0; i < PAIRS; i++) {
+      const a = `loop-a-${i}`;
+      const b = `loop-b-${i}`;
+      for (const [id, output] of [[a, b], [b, a]] as const) {
+        project.channels[id] = {
+          id,
+          role: "track",
+          name: id,
+          color: null,
+          source: null,
+          chain: [],
+          volume: `chan:${id}/vol`,
+          pan: `chan:${id}/pan`,
+          mute: false,
+          solo: false,
+          sends: [],
+          output,
+        };
+        project.channelOrder.unshift(id);
+      }
+    }
+    const warnings = codec.validate(project);
+    expect(findRoutingCycle(project)).toBeNull();
+    expect(warnings.filter((w) => w.message.includes("Routing cycle")).length).toBe(PAIRS);
+
+    // ...and the same file through the real decode path stays clean.
+    const decoded = codec.decode(codec.encode(project));
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) return;
+    expect(findRoutingCycle(decoded.project)).toBeNull();
   });
 });

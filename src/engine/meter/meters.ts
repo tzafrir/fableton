@@ -61,6 +61,16 @@ interface Ballistics {
 export function createMeterBus(ctx: BaseAudioContext): MeterBus {
   const taps = new Map<ChannelId, Tap>();
   const shown = new Map<ChannelId, Ballistics>();
+  /**
+   * Worklet attach is DEFERRED behind `ready` (the module is still loading),
+   * so the node an attach was scheduled for has to be remembered: inside that
+   * window the reconciler can hand the same channel a different post node
+   * (a channel deleted and re-created, a reconcile racing the first apply),
+   * and a callback that fires against the stale node binds the meter to a
+   * node nothing plays through — a permanently dark strip. Last attach wins;
+   * every earlier pending callback sees its node superseded and bails.
+   */
+  const pendingNodes = new Map<ChannelId, AudioNode>();
   const freeSlots: number[] = [];
   let disposed = false;
 
@@ -123,6 +133,12 @@ export function createMeterBus(ctx: BaseAudioContext): MeterBus {
     shown.delete(channelId);
   }
 
+  /** Detach plus "cancel any attach still waiting on `ready`". */
+  function dropTap(channelId: ChannelId): void {
+    pendingNodes.delete(channelId);
+    detachTap(channelId);
+  }
+
   function now(): number {
     return typeof performance === "undefined" ? Date.now() / 1000 : performance.now() / 1000;
   }
@@ -137,10 +153,21 @@ export function createMeterBus(ctx: BaseAudioContext): MeterBus {
       if (disposed) return;
       const existing = taps.get(channelId);
       if (existing !== undefined && existing.node === node) return;
-      detachTap(channelId);
+      if (pendingNodes.get(channelId) === node) return; // already on its way
+      dropTap(channelId);
       if (kind === "worklet" && workletAttach !== undefined) {
+        pendingNodes.set(channelId, node);
         void ready.then(() => {
-          if (!disposed && !taps.has(channelId)) workletAttach?.(channelId, node);
+          if (disposed) return;
+          // Superseded by a later attach (or cancelled by a detach) while the
+          // module loaded — that call owns the strip now.
+          if (pendingNodes.get(channelId) !== node) return;
+          pendingNodes.delete(channelId);
+          // `ready` also resolves when `addModule` FAILED, and `kind` is
+          // 'none' by then: constructing an `AudioWorkletNode` for a
+          // processor that was never registered would throw.
+          if (kind !== "worklet") return;
+          workletAttach?.(channelId, node);
         });
       } else if (kind === "analyser") {
         const analyser = (ctx as AudioContext).createAnalyser();
@@ -155,7 +182,7 @@ export function createMeterBus(ctx: BaseAudioContext): MeterBus {
       }
     },
 
-    detach: detachTap,
+    detach: dropTap,
 
     frame(channelId: ChannelId): MeterFrame | undefined {
       const tap = taps.get(channelId);
@@ -183,6 +210,7 @@ export function createMeterBus(ctx: BaseAudioContext): MeterBus {
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      pendingNodes.clear();
       for (const channelId of [...taps.keys()]) detachTap(channelId);
     },
   };

@@ -250,6 +250,33 @@ describe("the mounted arrangement", () => {
     expect(store.getState().channels[TRACK_A]?.mute).toBe(true);
   });
 
+  // The other direction: the shell selects a strip in the mixer (or deletes a
+  // channel), and the lane header highlight has to follow, or the header and
+  // the mixer disagree about which track is selected.
+  it("mirrors the shell's channel selection into the header highlight", () => {
+    const { view } = mount();
+    const headerOf = (name: string): HTMLElement =>
+      [...view.element.querySelectorAll<HTMLElement>(".fbl-arr-header")].find(
+        (el) => el.querySelector(".fbl-arr-header-name")?.textContent === name,
+      ) as HTMLElement;
+    const trackA = headerOf("Track A");
+    const trackB = headerOf("Track B");
+    const unselected = trackA.style.background;
+
+    view.setSelectedChannel(TRACK_A);
+    expect(trackA.style.background).not.toBe(unselected);
+    expect(trackB.style.background).toBe(unselected);
+
+    // A header click still drives the shell, and the shell's mirror-back of
+    // that same id must not fight it.
+    trackB.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(trackB.style.background).not.toBe(unselected);
+    expect(trackA.style.background).toBe(unselected);
+
+    view.setSelectedChannel(null);
+    expect(trackB.style.background).toBe(unselected);
+  });
+
   it("splits and loops the selection through the toolbar verbs", () => {
     const { view, store } = mount();
     view.selection.set([CLIP_1]);

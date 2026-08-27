@@ -14,6 +14,7 @@ import type {
   ProjectSnapshot,
   Ticks,
 } from "../../types";
+import { findMasterChannelId } from "../project";
 
 export type DraftProject = Draft<Project>;
 export type DraftClip = Draft<MidiClip>;
@@ -131,6 +132,41 @@ export function clampNoteDelta(notes: readonly { start: number; pitch: number }[
 /** Row index of a channel in `channelOrder` (= its arrangement row, SS9). */
 export function rowOfChannel(doc: DraftProject, channelId: ChannelId): number {
   return doc.channelOrder.indexOf(channelId);
+}
+
+/**
+ * SS6: "moving a track is a one-field edit (`output`)" — so deleting a
+ * channel must leave every survivor's `output` naming a channel that still
+ * exists. Anything that fed a doomed channel now feeds what IT fed, walked
+ * UP through the doomed set so a whole nested group branch collapses onto
+ * the first surviving output rather than onto a dangling id.
+ *
+ * Must be called while the doomed channels are still in the document (the
+ * walk reads their `output`) and with the doomed set COMPLETE — resolving one
+ * hop at a time inside a loop over the doomed channels would make the result
+ * depend on the order the caller happened to list them in, and could leave a
+ * survivor pointing at a channel deleted later in the same command. A stale
+ * `output` survives the session and the save file, where the codec repairs it
+ * to `null` — i.e. a permanent, silent master bypass.
+ */
+export function repointSurvivingOutputs(doc: DraftProject, doomed: ReadonlySet<ChannelId>): void {
+  if (doomed.size === 0) return;
+  const fallback = findMasterChannelId(doc) ?? null;
+  const survivingOutput = (from: ChannelId | null): ChannelId | null => {
+    let cursor = from;
+    const seen = new Set<ChannelId>(); // a pre-existing output cycle must not hang the walk
+    while (cursor !== null && doomed.has(cursor) && !seen.has(cursor)) {
+      seen.add(cursor);
+      cursor = doc.channels[cursor]?.output ?? null;
+    }
+    return cursor ?? fallback;
+  };
+  for (const channel of Object.values(doc.channels)) {
+    if (doomed.has(channel.id)) continue;
+    if (channel.output !== null && doomed.has(channel.output)) {
+      channel.output = survivingOutput(channel.output);
+    }
+  }
 }
 
 /**

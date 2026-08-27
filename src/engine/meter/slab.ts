@@ -36,22 +36,43 @@ export function readMeterSlot(view: Float32Array, slot: number): { peak: number;
   };
 }
 
-/** Peak + RMS of one (or two summed) channel blocks — the worklet's math,
- *  shared here so the fallback path and the tests use the same numbers. */
-export function blockPeakRms(channels: readonly Float32Array[]): { peak: number; rms: number } {
+/**
+ * Peak + RMS of one (or two summed) channel blocks, written into `out` as
+ * `[peak, rms]` — the worklet's math, shared here so the fallback path and
+ * the tests use the same numbers.
+ *
+ * Out-param, and index loops rather than `for...of`, because this runs inside
+ * `AudioWorkletProcessor.process`: SS12's guardrail is "zero allocation in
+ * per-tick paths", and a returned object plus two array iterators per render
+ * quantum per metered strip is ~6,000 short-lived allocations a second at
+ * SS2's 16-track target. `blockPeakRms` below is the same math for the
+ * main-thread callers, where an object is the nicer shape.
+ */
+export function blockPeakRmsInto(channels: readonly Float32Array[], out: Float32Array): void {
   let peak = 0;
   let sumSquares = 0;
   let count = 0;
-  for (const samples of channels) {
+  for (let c = 0; c < channels.length; c++) {
+    const samples = channels[c];
+    if (samples === undefined) continue;
     for (let i = 0; i < samples.length; i++) {
       const v = samples[i] ?? 0;
-      const abs = Math.abs(v);
+      const abs = v < 0 ? -v : v;
       if (abs > peak) peak = abs;
       sumSquares += v * v;
       count += 1;
     }
   }
-  return { peak, rms: count === 0 ? 0 : Math.sqrt(sumSquares / count) };
+  out[PEAK_OFFSET] = peak;
+  out[RMS_OFFSET] = count === 0 ? 0 : Math.sqrt(sumSquares / count);
+}
+
+/** `blockPeakRmsInto` as an object — the main-thread analyser fallback and
+ *  the tests, never the render thread. */
+export function blockPeakRms(channels: readonly Float32Array[]): { peak: number; rms: number } {
+  const out = new Float32Array(FLOATS_PER_SLOT);
+  blockPeakRmsInto(channels, out);
+  return { peak: out[PEAK_OFFSET] ?? 0, rms: out[RMS_OFFSET] ?? 0 };
 }
 
 /**

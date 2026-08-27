@@ -16,6 +16,7 @@ import {
 import { renderProjectToWav } from "../export/renderProject";
 import { DEFAULT_GRID_SETTINGS } from "../editor/kit";
 import { connectParamRegistry, createEmptyProject, projectCommands } from "../state";
+import { parseParamId } from "../params";
 import type {
   AuditionSink,
   AutosaveState,
@@ -23,6 +24,7 @@ import type {
   ClipId,
   DocumentStore,
   GridSettings,
+  ParamId,
   PianoRollView,
   Project,
   ProjectStorage,
@@ -31,9 +33,11 @@ import type {
   ToolMode,
   TransportState,
 } from "../types";
+import { createAuditionProxy } from "./audition";
 import { createProjectEngine, type AppProjectEngine } from "./engine";
 import { createUndoRedoHandler } from "./keyboard";
 import { ArrangementPanel, AutomationPanel, DeviceChainPanel, MixerPanel, PianoRollPanel, Toolbar } from "./panels";
+import type { LaneFocusRequest } from "./panels";
 import { bootstrapProject, type BootstrapResult } from "./persistence";
 
 export interface AppProps {
@@ -88,31 +92,66 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     setGridSettings((current) => ({ ...current, ...next }));
   }, []);
 
+
   const arrangementViewRef = useRef<ArrangementView | null>(null);
   const pianoRollViewRef = useRef<PianoRollView | null>(null);
 
+  // Refs the audition proxy below reads at call time — see `resolveAudition`.
+  const docStateRef = useRef<BootstrapResult | null>(null);
+  docStateRef.current = docState;
+  // SS5's control context menu, "Show/create automation lane". The row exists
+  // on every knob and fader; this is what it does: create the lane if the
+  // param has none (`addLane` re-enables an existing one, SS11 "one lane per
+  // (channel, param)"), select that channel, reveal the lane in the
+  // automation tab, and tell the panel which lane to open.
+  const [laneFocus, setLaneFocus] = useState<LaneFocusRequest | null>(null);
+  const handleShowAutomation = useCallback((paramId: ParamId) => {
+    const store = docStateRef.current?.store;
+    if (store === undefined) return;
+    const parsed = parseParamId(paramId);
+    if (parsed === null) return;
+    store.dispatch(projectCommands.addLane(parsed.channelId, paramId));
+    setSelectedChannelId(parsed.channelId);
+    setBottomTab("automation");
+    setLaneFocus({ paramId }); // a fresh object: asking twice still re-selects
+  }, []);
+  const openClipIdRef = useRef<ClipId | null>(null);
+  openClipIdRef.current = openClipId;
+
+  /** The sink the piano roll's auditions should reach RIGHT NOW (SS10).
+   *  Resolved per note rather than cached, because `engine.auditionFor`
+   *  captures the mounted instrument eagerly (SS7: a swap remounts the
+   *  device, giving a new instance): a cached sink goes silent the moment
+   *  the track's instrument changes, and — since nothing remounts the piano
+   *  roll — stays silent until the user closes and reopens the clip. */
+  const resolveAudition = (): AuditionSink | undefined => {
+    const currentEngine = engineRef.current;
+    const bootstrap = docStateRef.current;
+    const clipId = openClipIdRef.current;
+    if (currentEngine === null || bootstrap === null || clipId === null) return undefined;
+    const trackId: ChannelId | undefined = bootstrap.store.getState().clips[clipId]?.trackId;
+    return trackId === undefined ? undefined : currentEngine.auditionFor(trackId);
+  };
+
   // A stable proxy handed to the piano roll ONCE (SS15 opaque-component
-  // boundary): its target is redirected as the open clip/engine change,
-  // instead of remounting the editor every time (`PianoRollOptions.audition`
-  // is create-time-only).
-  const currentAuditionRef = useRef<AuditionSink | undefined>(undefined);
-  const auditionProxyRef = useRef<AuditionSink>({
-    noteOn(pitch, vel) {
-      currentAuditionRef.current?.noteOn(pitch, vel);
-    },
-    noteOff(pitch) {
-      currentAuditionRef.current?.noteOff(pitch);
-    },
-    allNotesOff() {
-      currentAuditionRef.current?.allNotesOff();
-    },
-  });
+  // boundary): its target is resolved per call, instead of remounting the
+  // editor every time (`PianoRollOptions.audition` is create-time-only).
+  // Only the first render's `resolveAudition` is ever kept (`useRef`), which
+  // is safe precisely because it reads nothing but refs.
+  const auditionProxyRef = useRef<AuditionSink>(createAuditionProxy(() => resolveAudition()));
 
   // --- 1. load or create the project on mount ---------------------------
   useEffect(() => {
     let cancelled = false;
     void bootstrapProject(storage).then((result) => {
-      if (cancelled) return;
+      if (cancelled) {
+        // Resolved after unmount: nothing will ever render this store, so its
+        // autosave's subscription and debounce timer have to be released here
+        // (SS13) — the unmount cleanup already ran with `docStateRef` null.
+        result.autosave.dispose();
+        return;
+      }
+      docStateRef.current = result;
       setDocState(result);
       if (result.loadResult.loadError !== undefined) setLoadError(result.loadResult.loadError);
       onStoreReady?.(result.store);
@@ -187,6 +226,9 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     if (docState === null || engine === null) return;
     const unsubParams = connectParamRegistry(docState.store, engine.params);
     const unsubApply = docState.store.onChange((change) => {
+      // `applyDocument` always resolves — a reconcile failure is reported
+      // through `onApplyError` (wired in `handleBoot`) instead of rejecting,
+      // so this `void` can never become an unhandled rejection.
       void engine.applyDocument(change.doc);
     });
     void engine.applyDocument(docState.store.getState());
@@ -217,22 +259,19 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     return () => cancelAnimationFrame(raf);
   }, [engine, transportState]);
 
-  // --- 7. redirect the audition proxy as the open clip/engine change -----
-  useEffect(() => {
-    if (docState === null || engine === null || openClipId === null) {
-      currentAuditionRef.current = undefined;
-      return;
-    }
-    const trackId: ChannelId | undefined = docState.store.getState().clips[openClipId]?.trackId;
-    currentAuditionRef.current = trackId !== undefined ? engine.auditionFor(trackId) : undefined;
-  }, [docState, engine, openClipId]);
-
-  // --- 8. teardown on unmount ---------------------------------------------
+  // --- 7. teardown on unmount ---------------------------------------------
   useEffect(
     () => () => {
       engineRef.current?.dispose();
       engineRef.current = null;
-      docState?.autosave.dispose();
+      // Through the REF, never the `docState` this closure captured: with
+      // empty deps that is the first render's value — always `null` — so the
+      // autosave's `store.onChange` subscription and its pending ~2 s
+      // debounce timer used to outlive the component. An edit made inside
+      // that window before a remount would then write the old store's bytes
+      // over the new instance's (SS13).
+      docStateRef.current?.autosave.dispose();
+      docStateRef.current = null;
     },
     // Deliberately empty: this is unmount-only cleanup, re-reading the refs
     // at that point rather than the render that captured them.
@@ -245,11 +284,17 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     bootingRef.current = true;
     setAudioBooting(true);
     setAudioStatus("booting");
+    let nextEngine: AppProjectEngine | null = null;
     try {
       const ctx = await bootAudioContext();
-      const nextEngine = createProjectEngine(ctx, ctx.destination, docState.store.getState());
+      nextEngine = createProjectEngine(ctx, ctx.destination, docState.store.getState());
       nextEngine.transport.onStateChange(setTransportState);
-      engineRef.current = nextEngine;
+      // A reconcile that throws no longer rejects (the engine's apply queue
+      // must never poison itself), so this subscription — attached before the
+      // very first apply — is how a failed mount becomes visible at all.
+      nextEngine.onApplyError((error) => {
+        setStatusMessage(`Audio update failed: ${String(error)}`);
+      });
       // Mount the document's instruments — and with them the poly-synth
       // worklet module — BEFORE reporting ready. `applyDocument` awaits every
       // device's `prepare()` (SS7), so without this the button says "ready"
@@ -258,10 +303,19 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
       // engine just gets the device set from the document (SS3) instead of a
       // hard-coded chain.
       await nextEngine.applyDocument(docState.store.getState());
+      // Published only once the boot SUCCEEDED. `engineRef` is what the
+      // re-entrancy guard above tests, so assigning it before the await left
+      // a failed boot (a context that would not resume, a module that would
+      // not load) with a non-null ref and a null `engine` state: every retry
+      // returned at the guard and audio was unstartable for the rest of the
+      // session, with nothing but a page reload to clear it.
+      engineRef.current = nextEngine;
       setEngine(nextEngine);
       setAudioStatus(`ready (worklet loaded, state=${ctx.state})`);
       onEngineReady?.(nextEngine);
     } catch (error) {
+      nextEngine?.dispose();
+      engineRef.current = null;
       setAudioStatus(`failed: ${String(error)}`);
     } finally {
       bootingRef.current = false;
@@ -420,6 +474,13 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
             grid={gridSettings}
             onSeek={handleSeek}
             onOpenClip={setOpenClipId}
+            // The arrangement header IS a channel selection (it paints its own
+            // highlight), so it has to drive the app's `selectedChannelId` —
+            // otherwise clicking track B highlights B while the device chain,
+            // the automation add-lane menu and the mixer's Group/Delete
+            // buttons all keep acting on the previously selected channel.
+            onSelectChannel={setSelectedChannelId}
+            selectedChannelId={selectedChannelId}
             viewRef={arrangementViewRef}
           />
         </div>
@@ -503,6 +564,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
                 engine={engine}
                 channelId={selectedChannelId}
                 grid={gridSettings}
+                focusRequest={laneFocus}
               />
             </div>
           )}
@@ -515,6 +577,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
                   engine={engine}
                   selectedChannelId={selectedChannelId}
                   onSelectChannel={setSelectedChannelId}
+                  onShowAutomation={handleShowAutomation}
                 />
               </div>
               <div style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
@@ -523,6 +586,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
                   commands={projectCommands}
                   engine={engine}
                   channelId={selectedChannelId}
+                  onShowAutomation={handleShowAutomation}
                 />
               </div>
             </div>

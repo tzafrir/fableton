@@ -37,6 +37,27 @@ export interface RenderProjectOptions {
   toTick?: Ticks | undefined;
 }
 
+/**
+ * The span an export covers and how long the rendered file is, as a PURE
+ * function of the document — so the length of a WAV (the one thing a user
+ * notices instantly) is assertable without an audio context, and the e2e can
+ * check the real frame count against it instead of "more than a second".
+ *
+ * The floor matters: an empty document still has to produce a valid file, so
+ * the span is at least one beat wide, plus the tail.
+ */
+export function renderSpan(
+  doc: ProjectSnapshot,
+  options: RenderProjectOptions = {},
+): { fromTick: Ticks; toTick: Ticks; durationSeconds: Seconds } {
+  const tempo = createTempoMap(doc.tempo);
+  const fromTick = options.fromTick ?? 0;
+  const toTick = options.toTick ?? Math.max(contentEndTick(doc), fromTick + PPQ);
+  const durationSeconds =
+    Math.max(0.1, tempo.secondsBetween(fromTick, toTick)) + EXPORT_TAIL_SECONDS;
+  return { fromTick, toTick, durationSeconds };
+}
+
 export interface RenderedProject {
   buffer: AudioBuffer;
   durationSeconds: number;
@@ -49,11 +70,7 @@ export async function renderProject(
   options: RenderProjectOptions = {},
 ): Promise<RenderedProject> {
   const sampleRate = options.sampleRate ?? 44100;
-  const tempo = createTempoMap(doc.tempo);
-  const fromTick = options.fromTick ?? 0;
-  const toTick = options.toTick ?? Math.max(contentEndTick(doc), fromTick + PPQ);
-  const durationSeconds =
-    Math.max(0.1, tempo.secondsBetween(fromTick, toTick)) + EXPORT_TAIL_SECONDS;
+  const { fromTick, durationSeconds } = renderSpan(doc, options);
 
   const ctx = new OfflineAudioContext(2, Math.ceil(durationSeconds * sampleRate), sampleRate);
   const clock = createManualClock();

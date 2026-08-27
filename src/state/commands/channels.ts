@@ -22,7 +22,7 @@ import {
   makeChannel,
   makeInstrumentDevice,
 } from "../project";
-import { clampInt, makeCommand, type DraftProject } from "./util";
+import { clampInt, makeCommand, repointSurvivingOutputs, type DraftProject } from "./util";
 
 export type ChannelCommands = Pick<
   ProjectCommands,
@@ -120,24 +120,9 @@ export function createChannelCommands(ids: IdFactory): ChannelCommands {
           }
           if (removed.size === 0) return;
 
-          const fallbackOutput = findMasterChannelId(doc) ?? null;
           // Anything that fed a removed channel now feeds what IT fed —
-          // walked before the deletion, so a whole group branch collapses onto
-          // the first surviving output rather than onto a dangling id.
-          const survivingOutput = (from: ChannelId | null): ChannelId | null => {
-            let cursor = from;
-            const seen = new Set<ChannelId>();
-            while (cursor !== null && removed.has(cursor) && !seen.has(cursor)) {
-              seen.add(cursor);
-              cursor = doc.channels[cursor]?.output ?? null;
-            }
-            return cursor ?? fallbackOutput;
-          };
-          for (const other of Object.values(doc.channels)) {
-            if (other.output !== null && removed.has(other.output) && !removed.has(other.id)) {
-              other.output = survivingOutput(other.output);
-            }
-          }
+          // walked before the deletion (see `repointSurvivingOutputs`).
+          repointSurvivingOutputs(doc, removed);
           for (const channelId of removed) {
             delete doc.channels[channelId];
             const row = doc.channelOrder.indexOf(channelId);

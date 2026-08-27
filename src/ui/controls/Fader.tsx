@@ -5,7 +5,7 @@
 
 import type { ParamHandle } from "../../types";
 import { toNormalized } from "../../params/taper";
-import { ParamControl } from "./ParamControl";
+import { ARC_ACCENT, ARC_OVERRIDDEN, ParamControl } from "./ParamControl";
 
 export const FADER_DETENT_DB = 0;
 export const FADER_DETENT_SNAP_DB = 0.5;
@@ -35,9 +35,13 @@ export function Fader({ handle, height = 96, slim = false, testId, onShowAutomat
       onShowAutomation={onShowAutomation}
       title={desc.label}
     >
-      {(value) => {
+      {(value, _dragging, state) => {
         const n = toNormalized(desc, value);
         const y = (1 - n) * height;
+        // SS5: an overridden param's fill dims and pulses, same language as
+        // the knob's arc — the lane is still playing, this control just isn't
+        // listening to it until *Re-enable automation*.
+        const overridden = state === "overridden";
         return (
           <svg width={width + 12} height={height + 10} aria-hidden="true">
             {/* rail */}
@@ -49,8 +53,13 @@ export function Fader({ handle, height = 96, slim = false, testId, onShowAutomat
               width={4}
               height={height - y}
               rx={2}
-              fill="#5aa9e6"
-            />
+              fill={overridden ? ARC_OVERRIDDEN : ARC_ACCENT}
+              data-param-arc={overridden ? "overridden" : "live"}
+            >
+              {overridden && (
+                <animate attributeName="opacity" values="1;0.35;1" dur="1.4s" repeatCount="indefinite" />
+              )}
+            </rect>
             {/* 0 dB detent line */}
             <line
               x1={2}

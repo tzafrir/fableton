@@ -625,13 +625,23 @@ function validateProject(project: Project): LoadWarning[] {
     pushWarning(warnings, "tempo", "Tempo map was invalid; reset to a single 120 bpm segment.");
   }
 
-  // Invariant 2: channelOrder is a permutation of Object.keys(channels).
-  const channelKeys = Object.keys(project.channels);
-  const orderSet = new Set(project.channelOrder);
-  const missing = channelKeys.filter((k) => !orderSet.has(k)).sort();
-  const stale = project.channelOrder.filter((k) => !(k in project.channels));
-  if (missing.length > 0 || stale.length > 0) {
-    project.channelOrder = [...project.channelOrder.filter((k) => k in project.channels), ...missing];
+  // Invariant 2: channelOrder is a PERMUTATION of Object.keys(channels) —
+  // no strangers, no gaps, and no duplicates. The duplicate half matters as
+  // much as the others: every later pass here walks `channelOrder`, so a
+  // doubled id is a channel visited twice, and the master pass below would
+  // then see the project's only master a second time and demote it.
+  const kept: string[] = [];
+  const seen = new Set<string>();
+  for (const key of project.channelOrder) {
+    if (!(key in project.channels) || seen.has(key)) continue;
+    seen.add(key);
+    kept.push(key);
+  }
+  const missing = Object.keys(project.channels)
+    .filter((k) => !seen.has(k))
+    .sort();
+  if (missing.length > 0 || kept.length !== project.channelOrder.length) {
+    project.channelOrder = [...kept, ...missing];
     pushWarning(warnings, "channelOrder", "channelOrder repaired to match channels.");
   }
 
@@ -681,7 +691,10 @@ function validateProject(project: Project): LoadWarning[] {
   // which the reconciler routes to the destination); sends must land on
   // existing channels; there is at most one master.
   let masterSeen = false;
-  for (const channelId of project.channelOrder) {
+  // Belt and braces over the invariant-2 repair above: iterating a de-duped
+  // id list means no channel can be counted twice here even if `channelOrder`
+  // is ever fed to this pass unrepaired.
+  for (const channelId of new Set(project.channelOrder)) {
     const channel = project.channels[channelId];
     if (channel === undefined) continue;
     if (channel.role === "master") {
@@ -705,6 +718,56 @@ function validateProject(project: Project): LoadWarning[] {
     }
   }
 
+  // Device chains (SS6 signal flow, invariant 7): a device instance hangs off
+  // exactly ONE channel, once. Nothing upstream enforces that — the parser
+  // only filters `chain` to strings — and every violation is audible:
+  //   - a chain entry naming no device is a dead id the reconciler skips;
+  //   - the SAME id twice in one chain makes buildGraph connect that device's
+  //     output back to its own input — a zero-delay WebAudio cycle, which per
+  //     spec outputs silence, so the channel dies with no warning at all;
+  //   - one id in two chains cross-wires one device into two channels and
+  //     makes its mount's `channelId` depend on iteration order.
+  // First claimer in row order wins; `device.channelId` is then reconciled to
+  // the channel that actually lists it.
+  const deviceHost = new Map<string, string>();
+  for (const channelId of project.channelOrder) {
+    const channel = project.channels[channelId];
+    if (channel === undefined) continue;
+    if (channel.source !== null) {
+      const deviceId = channel.source.deviceId;
+      if (!(deviceId in project.devices) || deviceHost.has(deviceId)) {
+        channel.source = null;
+        pushWarning(
+          warnings,
+          `channels.${channelId}.source`,
+          "Instrument named a missing or already-claimed device; cleared.",
+        );
+      } else {
+        deviceHost.set(deviceId, channelId);
+      }
+    }
+    const chain = channel.chain.filter((deviceId) => {
+      if (!(deviceId in project.devices) || deviceHost.has(deviceId)) return false;
+      deviceHost.set(deviceId, channelId);
+      return true;
+    });
+    if (chain.length !== channel.chain.length) {
+      channel.chain = chain;
+      pushWarning(
+        warnings,
+        `channels.${channelId}.chain`,
+        "Chain entries naming missing or duplicated devices dropped.",
+      );
+    }
+  }
+  for (const [deviceId, host] of deviceHost) {
+    const device = project.devices[deviceId];
+    if (device !== undefined && device.channelId !== host) {
+      device.channelId = host;
+      pushWarning(warnings, `devices.${deviceId}.channelId`, "Device re-homed to the channel that lists it.");
+    }
+  }
+
   // Sidechains: both endpoints must exist and the device must not key its
   // own channel. Runs BEFORE the cycle check — a self-keying edge IS a
   // one-node cycle, and this is its targeted repair.
@@ -725,7 +788,15 @@ function validateProject(project: Project): LoadWarning[] {
   // output, then its sends, then any sidechain edges it feeds — audible-safe
   // (the channel then feeds the destination directly) and loud in the
   // warnings. Each pass removes at least one edge, so this terminates.
-  for (let guard = 0; guard < 64; guard++) {
+  //
+  // Bounded by the GRAPH, not by a constant: each pass clears one of
+  // {output, sends, sidechains} on one channel, so 3 passes per channel is
+  // the worst case. A constant bound (this was 64) let a file with more
+  // independent cycles than the bound decode `ok: true` with cycles still in
+  // it — silent channels, and an untrusted-input pass claiming a repair it
+  // did not make.
+  const channelCount = Object.keys(project.channels).length;
+  for (let guard = 0; guard < channelCount * 3 + 8; guard++) {
     const cycle = findRoutingCycle(project);
     if (cycle === null) break;
     const first = cycle[0];
@@ -738,6 +809,20 @@ function validateProject(project: Project): LoadWarning[] {
     } else {
       project.sidechains = project.sidechains.filter((edge) => edge.from.channel !== first);
     }
+    pushWarning(warnings, `channels.${first}`, `Routing cycle broken (${cycle.join(" -> ")}).`);
+  }
+  // Unreachable given the bound above, but `decode` must never hand the
+  // reconciler a document it KNOWS is cyclic: cut every outgoing edge of the
+  // offending channel at once, which strictly shrinks the edge set each pass.
+  for (let guard = 0; guard <= channelCount; guard++) {
+    const cycle = findRoutingCycle(project);
+    if (cycle === null) break;
+    const first = cycle[0];
+    const channel = first !== undefined ? project.channels[first] : undefined;
+    if (first === undefined || channel === undefined) break;
+    channel.output = null;
+    channel.sends = [];
+    project.sidechains = project.sidechains.filter((edge) => edge.from.channel !== first);
     pushWarning(warnings, `channels.${first}`, `Routing cycle broken (${cycle.join(" -> ")}).`);
   }
 

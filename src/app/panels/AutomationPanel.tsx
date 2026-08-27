@@ -15,8 +15,18 @@ import type {
   DocumentStore,
   GridSettings,
   LaneId,
+  ParamDescriptor,
+  ParamId,
   ProjectCommands,
 } from "../../types";
+import { rejectionHintStyle, useDispatchHint } from "./useDispatchHint";
+
+/** One "show me this param's lane" request from SS5's control context menu.
+ *  A fresh object per request (never a bare id), so asking twice for the same
+ *  param still moves the selection back to it. */
+export interface LaneFocusRequest {
+  paramId: ParamId;
+}
 
 export interface AutomationPanelProps {
   store: DocumentStore;
@@ -24,14 +34,39 @@ export interface AutomationPanelProps {
   engine: AppProjectEngine | null;
   channelId: ChannelId | null;
   grid?: Partial<GridSettings> | undefined;
+  /** SS5 "Show/create automation lane": the shell has already created (or
+   *  re-enabled) the lane; this selects it for editing. */
+  focusRequest?: LaneFocusRequest | null | undefined;
 }
 
-export function AutomationPanel({ store, commands, engine, channelId, grid }: AutomationPanelProps) {
+export function AutomationPanel({
+  store,
+  commands,
+  engine,
+  channelId,
+  grid,
+  focusRequest,
+}: AutomationPanelProps) {
   const [, force] = useState(0);
   useEffect(() => store.onChange(() => force((n) => n + 1)), [store]);
+  // The add-lane menu below IS `engine.params.list()` (SS11), read during
+  // render — but handles are registered asynchronously, after the reconcile
+  // that mounted their device. Without this the menu is stale for the whole
+  // mount window (and forever when nothing else re-renders the panel).
+  // Its own tick, not `force`: it is also a cache key of the menu's `useMemo`.
+  const [registryTick, setRegistryTick] = useState(0);
+  useEffect(() => {
+    if (engine === null) return;
+    return engine.params.onRegistryChange(() => setRegistryTick((n) => n + 1));
+  }, [engine]);
+  const { hint, dispatch } = useDispatchHint(store);
   const [selectedLaneId, setSelectedLaneId] = useState<LaneId | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<AutomationLaneView | null>(null);
+  // Bumped whenever the view below is (re)created, so the lane push that
+  // follows re-runs against the NEW view — it can no longer rely on the
+  // document churn it used to depend on to heal itself.
+  const [viewEpoch, setViewEpoch] = useState(0);
 
   const doc = store.getState();
   const lanes = useMemo(
@@ -39,6 +74,11 @@ export function AutomationPanel({ store, commands, engine, channelId, grid }: Au
     [doc, channelId],
   );
   const selectedLane = lanes.find((lane) => lane.id === selectedLaneId) ?? lanes[0];
+  // Resolved here rather than inside the effect below so the effect can depend
+  // on the descriptor's IDENTITY (stable for the life of a handle) instead of
+  // on the document.
+  const selectedDesc: ParamDescriptor | null =
+    selectedLane === undefined ? null : engine?.params.get(selectedLane.paramId)?.desc ?? null;
 
   // The SS11 registry-filtered lane menu.
   const registryParams = useMemo(() => {
@@ -47,14 +87,23 @@ export function AutomationPanel({ store, commands, engine, channelId, grid }: Au
       .list()
       .filter((handle) => isChannelParamId(handle.desc.id, channelId))
       .sort((a, b) => a.desc.id.localeCompare(b.desc.id));
-  }, [engine, channelId, doc]);
+    // `doc` and `registryTick` are cache keys, not reads: the list changes
+    // when the document does (channels come and go) and when the registry
+    // does (devices mount).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, channelId, doc, registryTick]);
 
   // --- imperative canvas bridge (same discipline as PianoRollPanel) --------
+  // Grid is read once at creation and pushed on every later change through
+  // `setGrid` — re-creating the view would tear the canvas down under the
+  // user's hands (viewport and point selection with it).
+  const initialGrid = useRef(grid);
   useEffect(() => {
     const container = containerRef.current;
     if (container === null) return;
-    const view = createAutomationLaneView({ container, store, commands, grid });
+    const view = createAutomationLaneView({ container, store, commands, grid: initialGrid.current });
     viewRef.current = view;
+    setViewEpoch((n) => n + 1);
     return () => {
       viewRef.current = null;
       view.dispose();
@@ -62,16 +111,49 @@ export function AutomationPanel({ store, commands, engine, channelId, grid }: Au
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store, commands]);
 
+  // SS5's "Show automation lane" landing here: select the lane bound to the
+  // param the user right-clicked. Keyed on the REQUEST object, never on the
+  // document, so it selects once and then leaves the lane list alone — the
+  // row the user clicks next must win.
+  useEffect(() => {
+    if (focusRequest === null || focusRequest === undefined) return;
+    const lane = Object.values(store.getState().lanes).find(
+      (candidate) => candidate.paramId === focusRequest.paramId,
+    );
+    if (lane !== undefined) setSelectedLaneId(lane.id);
+  }, [focusRequest, store]);
+
+  // SS10's grid override menu / triplet toggle reaches the lane editor, so a
+  // point drag snaps to the same division the toolbar shows.
+  useEffect(() => {
+    if (grid !== undefined) viewRef.current?.setGrid(grid);
+  }, [grid, viewEpoch]);
+
+  // Keyed on the lane's ID and the descriptor, NEVER on `doc`: `setLane`
+  // clears the editor's point selection and invalidates all three layers, so
+  // depending on the document ran it after every dispatch — including the
+  // lane editor's own. Marquee-select points and press ArrowUp: the first
+  // nudge wiped the selection, leaving the second nudge (and Delete) acting
+  // on nothing — SS11's "marquee + the same keyboard nudges", unusable.
+  //
+  // `pushedRef` makes the push idempotent for the same reason: a re-render
+  // for any other cause (the view epoch below, a registry tick) must not
+  // reach `setLane` with arguments it already has.
+  const selectedLaneKey = selectedLane?.id ?? null;
+  const pushedRef = useRef<{ view: AutomationLaneView | null; laneId: LaneId | null; desc: ParamDescriptor | null }>({
+    view: null,
+    laneId: null,
+    desc: null,
+  });
   useEffect(() => {
     const view = viewRef.current;
     if (view === null) return;
-    if (selectedLane === undefined) {
-      view.setLane(null, null);
-      return;
-    }
-    const desc = engine?.params.get(selectedLane.paramId)?.desc ?? null;
-    view.setLane(selectedLane.id, desc);
-  }, [selectedLane, engine, doc]);
+    const desc = selectedLaneKey === null ? null : selectedDesc;
+    const pushed = pushedRef.current;
+    if (pushed.view === view && pushed.laneId === selectedLaneKey && pushed.desc === desc) return;
+    pushedRef.current = { view, laneId: selectedLaneKey, desc };
+    view.setLane(selectedLaneKey, desc);
+  }, [selectedLaneKey, selectedDesc, viewEpoch]);
 
   // Lane-editor playhead at rAF (the app shell owns the SS11 moving-knob
   // display loop — it must run whichever tab is open).
@@ -108,7 +190,7 @@ export function AutomationPanel({ store, commands, engine, channelId, grid }: Au
           disabled={engine === null || channelId === null}
           onChange={(e) => {
             if (channelId !== null && e.target.value !== "") {
-              store.dispatch(commands.addLane(channelId, e.target.value));
+              dispatch(commands.addLane(channelId, e.target.value));
             }
           }}
           style={{ fontSize: 11, background: "#181818", color: "#bbb" }}
@@ -126,6 +208,14 @@ export function AutomationPanel({ store, commands, engine, channelId, grid }: Au
             </option>
           ))}
         </select>
+
+        {/* SS6's inline hint: `dispatch` reports any rejected lane edit here
+            rather than letting it look like nothing happened. */}
+        {hint !== null && (
+          <span data-testid="automation-hint" role="status" style={rejectionHintStyle}>
+            {hint}
+          </span>
+        )}
 
         {lanes.length === 0 && (
           <span style={{ fontSize: 11, color: "#555" }}>No automation lanes yet.</span>
@@ -155,7 +245,7 @@ export function AutomationPanel({ store, commands, engine, channelId, grid }: Au
                 data-testid={`lane-enabled-${lane.id}`}
                 aria-label="Lane enabled"
                 checked={lane.enabled}
-                onChange={(e) => store.dispatch(commands.setLaneEnabled(lane.id, e.target.checked))}
+                onChange={(e) => dispatch(commands.setLaneEnabled(lane.id, e.target.checked))}
                 onClick={(e) => e.stopPropagation()}
               />
               <span style={{ fontSize: 10, color: "#ccc", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={lane.paramId}>
@@ -168,7 +258,7 @@ export function AutomationPanel({ store, commands, engine, channelId, grid }: Au
                   value=""
                   onClick={(e) => e.stopPropagation()}
                   onChange={(e) => {
-                    if (e.target.value !== "") store.dispatch(commands.rebindLane(lane.id, e.target.value));
+                    if (e.target.value !== "") dispatch(commands.rebindLane(lane.id, e.target.value));
                   }}
                   style={{ fontSize: 9, maxWidth: 60, background: "#181818", color: "#bbb" }}
                 >
@@ -186,7 +276,7 @@ export function AutomationPanel({ store, commands, engine, channelId, grid }: Au
                 title="Delete lane"
                 onClick={(e) => {
                   e.stopPropagation();
-                  store.dispatch(commands.deleteLanes([lane.id]));
+                  dispatch(commands.deleteLanes([lane.id]));
                 }}
                 style={{ fontSize: 10, background: "none", border: "none", color: "#777", cursor: "pointer" }}
               >

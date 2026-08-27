@@ -19,7 +19,7 @@ import {
   createProjectCommands,
   createSequentialIdFactory,
 } from "../../state";
-import type { NoteEvent, Project, ProjectSnapshot } from "../../types";
+import type { AutomationLane, MidiClip, NoteEvent, Project, ProjectSnapshot } from "../../types";
 import { createProjectEngine } from "./projectEngine";
 import { createDocumentNoteEventSource } from "./documentEventSource";
 
@@ -176,6 +176,125 @@ describe("createProjectEngine — mounting (SS18-M1 engine glue)", () => {
   });
 });
 
+/** The project's single track, its instrument, and its one clip. */
+function parts(project: Project): { track: string; deviceId: string; clipId: string } {
+  const track = project.channelOrder.find((id) => project.channels[id]?.role === "track")!;
+  const deviceId = project.channels[track]!.source!.deviceId;
+  const clipId = Object.keys(project.clips)[0]!;
+  return { track, deviceId, clipId };
+}
+
+/** The same project with one note in its clip — enough for the transport to
+ *  have something scheduled (and therefore something to panic about). */
+function withNote(project: Project, start = 0): Project {
+  const { track, clipId } = parts(project);
+  const clip: MidiClip = {
+    ...project.clips[clipId]!,
+    trackId: track,
+    notes: [{ id: "n1", start, dur: 240, pitch: 60, vel: 100 }],
+  };
+  return { ...project, clips: { ...project.clips, [clipId]: clip } };
+}
+
+describe("createProjectEngine — applying while the transport plays (SS2/SS12)", () => {
+  it("leaves the transport alone when an edit does not change the tempo", async () => {
+    const { ctx, base } = setup();
+    const project = withNote(makeProject());
+    const engine = createProjectEngine(ctx, base.destination as unknown as AudioNode, project, {
+      clock: createManualClock(),
+    });
+    await engine.applyDocument(project as unknown as ProjectSnapshot);
+    engine.transport.play();
+    const node = synthNode();
+    // The first look-ahead window handed the note to the instrument; it is
+    // now sounding, and it is what a panic would cut.
+    expect(node.posted.some((m) => m.type === "noteOn")).toBe(true);
+    node.posted.length = 0;
+
+    // An ordinary mid-playback edit: one more note, far outside the window.
+    const { clipId } = parts(project);
+    const edited: Project = {
+      ...project,
+      clips: {
+        ...project.clips,
+        [clipId]: {
+          ...project.clips[clipId]!,
+          notes: [...project.clips[clipId]!.notes, { id: "n2", start: 480, dur: 240, pitch: 64, vel: 100 }],
+        },
+      },
+    };
+    await engine.applyDocument(edited as unknown as ProjectSnapshot);
+
+    // `setTempoMap` panics whenever the transport is not stopped: every
+    // pending note-on gets a note-off at its own onset and every played track
+    // an `allNotesOff`. Pushing an unchanged map therefore silenced the whole
+    // project on EVERY edit made during playback.
+    expect(node.posted.filter((m) => m.type === "allNotesOff")).toHaveLength(0);
+    expect(node.posted.filter((m) => m.type === "noteOff")).toHaveLength(0);
+
+    engine.dispose();
+  });
+
+  it("still re-anchors when the tempo really changes", async () => {
+    const { ctx, base } = setup();
+    const project = withNote(makeProject());
+    const engine = createProjectEngine(ctx, base.destination as unknown as AudioNode, project, {
+      clock: createManualClock(),
+    });
+    await engine.applyDocument(project as unknown as ProjectSnapshot);
+    engine.transport.play();
+    const node = synthNode();
+    node.posted.length = 0;
+
+    const faster: Project = { ...project, tempo: [{ startTick: 0, bpm: 140 }] };
+    await engine.applyDocument(faster as unknown as ProjectSnapshot);
+
+    expect(engine.transport.tempoMap.bpmAt(0)).toBe(140);
+    expect(node.posted.some((m) => m.type === "allNotesOff")).toBe(true);
+    engine.dispose();
+  });
+});
+
+describe("createProjectEngine — a failed apply (SS3/SS6)", () => {
+  it("reports the error and keeps following the document afterwards", async () => {
+    const { ctx, base } = setup();
+    const project = makeProject();
+    // The instrument's `prepare()` is `audioWorklet.addModule` — the one step
+    // of a mount that talks to the network and can genuinely fail.
+    let failNextModule = true;
+    base.audioWorklet.addModule = (url: string): Promise<void> => {
+      if (failNextModule) {
+        failNextModule = false;
+        return Promise.reject(new Error("module load failed"));
+      }
+      base.addedModules.push(url);
+      return Promise.resolve();
+    };
+
+    const engine = createProjectEngine(ctx, base.destination as unknown as AudioNode, project, {
+      clock: createManualClock(),
+    });
+    const errors: unknown[] = [];
+    engine.onApplyError((error) => errors.push(error));
+
+    await engine.applyDocument(project as unknown as ProjectSnapshot);
+    expect(errors).toHaveLength(1);
+    expect(workletNodes).toHaveLength(0);
+
+    // The whole point: the serializing queue is still usable. Before the
+    // `.catch`, the rejection stayed in `queue` and every later apply was
+    // skipped — the engine stopped following the document for the rest of the
+    // session, silently.
+    const { track, deviceId } = parts(project);
+    await engine.applyDocument(project as unknown as ProjectSnapshot);
+    expect(workletNodes).toHaveLength(1);
+    expect(engine.auditionFor(track)).toBeDefined();
+    expect(engine.params.get(deviceParamId(track, deviceId, "cutoff"))).toBeDefined();
+
+    engine.dispose();
+  });
+});
+
 describe("createProjectEngine — audition (SS10)", () => {
   it("is undefined before the track's instrument is mounted", () => {
     const { ctx, base } = setup();
@@ -205,6 +324,40 @@ describe("createProjectEngine — audition (SS10)", () => {
     const posted = synthNode().posted;
     expect(posted.some((m) => m.type === "noteOn" && m.pitch === 60 && m.when === 1.5)).toBe(true);
     expect(posted.some((m) => m.type === "noteOff" && m.pitch === 60 && m.when === 1.5)).toBe(true);
+
+    engine.dispose();
+  });
+});
+
+describe("createProjectEngine — automated params at load (SS4/SS11)", () => {
+  it("pushes an automated param's SAVED value to the DSP, not the descriptor default", async () => {
+    const { ctx, base } = setup();
+    const project = makeProject();
+    const { track, deviceId } = parts(project);
+    const cutoffId = deviceParamId(track, deviceId, "cutoff");
+    project.paramValues[cutoffId] = 400; // descriptor default is 8000 Hz
+    const lane: AutomationLane = {
+      id: "lane1",
+      channelId: track,
+      paramId: cutoffId,
+      points: [{ t: 0, v: 12000, curve: 0 }],
+      enabled: true,
+    };
+    project.lanes[lane.id] = lane;
+
+    const engine = createProjectEngine(ctx, base.destination as unknown as AudioNode, project, {
+      clock: createManualClock(),
+    });
+    await engine.applyDocument(project as unknown as ProjectSnapshot);
+
+    const handle = engine.params.require(cutoffId);
+    expect(handle.state).toBe("automated");
+    expect(handle.base()).toBe(400);
+    // `setBase` writes through to the binding only while the param is `free`
+    // (SS4), so loading AFTER `setAutomatedIds` left the device mounted at
+    // its descriptor default while the knob showed the saved value — audible
+    // on any pre-playback audition.
+    expect(handle.live()).toBe(400);
 
     engine.dispose();
   });

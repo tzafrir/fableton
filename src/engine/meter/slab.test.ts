@@ -3,7 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FLOATS_PER_SLOT,
+  PEAK_OFFSET,
+  RMS_OFFSET,
   blockPeakRms,
+  blockPeakRmsInto,
   decayed,
   readMeterSlot,
   slabByteLength,
@@ -34,6 +37,31 @@ describe("slab math", () => {
     const { peak, rms } = blockPeakRms([sine]);
     expect(peak).toBeCloseTo(1, 2);
     expect(rms).toBeCloseTo(1 / Math.SQRT2, 2);
+  });
+
+  it("blockPeakRmsInto: the render-thread form agrees with the object form", () => {
+    const n = 256;
+    const left = new Float32Array(n);
+    const right = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      left[i] = Math.sin((2 * Math.PI * 5 * i) / n);
+      right[i] = -0.25;
+    }
+    const out = new Float32Array(FLOATS_PER_SLOT);
+    blockPeakRmsInto([left, right], out);
+    const expected = blockPeakRms([left, right]);
+    expect(out[PEAK_OFFSET]).toBeCloseTo(expected.peak, 6);
+    expect(out[RMS_OFFSET]).toBeCloseTo(expected.rms, 6);
+  });
+
+  it("blockPeakRmsInto: an empty block writes zeros, and the buffer is reusable", () => {
+    const out = new Float32Array(FLOATS_PER_SLOT);
+    blockPeakRmsInto([new Float32Array(64).fill(0.8)], out);
+    expect(out[PEAK_OFFSET]).toBeCloseTo(0.8, 6);
+    // Same buffer, second block: every field must be overwritten, not merged.
+    blockPeakRmsInto([], out);
+    expect(out[PEAK_OFFSET]).toBe(0);
+    expect(out[RMS_OFFSET]).toBe(0);
   });
 
   it("decayed: instant attack, exponential release", () => {
@@ -87,5 +115,20 @@ describe("MeterProcessor.process", () => {
     const processor = await makeProcessor({});
     expect(processor.process([[]])).toBe(true);
     expect(processor.process([])).toBe(true);
+  });
+
+  it("never calls the allocating measurement form (SS12: zero allocation per tick)", async () => {
+    // The guardrail, made mechanical: `blockPeakRms` returns a fresh object
+    // per call, which is exactly what must not happen once per render quantum
+    // per strip. `process` has to use the out-param form.
+    const slab = await import("./slab");
+    const spy = vi.spyOn(slab, "blockPeakRms");
+    const sab = new SharedArrayBuffer(slabByteLength(2));
+    const processor = await makeProcessor({ processorOptions: { sab, slot: 0 } });
+    processor.process([[new Float32Array(128).fill(0.25)]]);
+    processor.process([[new Float32Array(128).fill(0.5)]]);
+    expect(spy).not.toHaveBeenCalled();
+    expect(readMeterSlot(new Float32Array(sab), 0).peak).toBeCloseTo(0.5, 6);
+    spy.mockRestore();
   });
 });

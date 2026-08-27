@@ -11,7 +11,14 @@ export const StereoDelay: DeviceDefinition = {
   version: 1,
   kind: "audioEffect",
   label: "Stereo Delay",
-  audioIn: [{ id: "in" }],
+  // The input port is declared STEREO on purpose (SS7 `PortSpec.channels`):
+  // `io.in` feeds a ChannelSplitter, and a splitter's up-mix is DISCRETE — a
+  // mono source (the Pluck today, an SS2 audio track later) would land on
+  // channel 0 with silence on channel 1, so `dr` would never see signal and
+  // every repeat would be hard-panned left. `createDeviceIO` honours this by
+  // giving the port node `channelCount 2 / explicit / speakers`, which up-mixes
+  // mono to L = R before the split.
+  audioIn: [{ id: "in", channels: 2 }],
   audioOut: [{ id: "out" }],
   params: [
     p.time("timeL", "Time L", { min: 1, max: 2000, default: 250 }),

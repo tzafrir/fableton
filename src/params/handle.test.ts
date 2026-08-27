@@ -343,3 +343,173 @@ describe("onChange coalescing (SS4: coalesced to rAF)", () => {
     expect(cb).toHaveBeenCalledWith(1234);
   });
 });
+
+describe("automation writes never become document values (SS4/SS11/SS13)", () => {
+  it("a press+release with no movement on an automated param commits nothing", () => {
+    // The probe from the review: an automated knob's `#live` is moved by
+    // `displayAutomation` for DISPLAY only (SS11 "the knob displays the moving
+    // value with the base as a ghost dot"). A bare click — pointer down, no
+    // move, pointer up — used to hand that momentary lane value to `commit()`.
+    const handle = registry.register(cutoffDesc());
+    const commits = vi.fn();
+    registry.onCommit(commits);
+
+    registry.setAutomatedIds(new Set([CUTOFF]));
+    registry.displayAutomation(CUTOFF, 400);
+    expect(handle.live()).toBe(400);
+    expect(handle.base()).toBe(1000);
+
+    handle.commit(); // gesture end with nothing dragged
+    expect(commits).not.toHaveBeenCalled();
+    expect(handle.base()).toBe(1000);
+  });
+
+  it("an Esc-cancelled drag does not leave intent behind for a later click", () => {
+    const handle = registry.register(cutoffDesc());
+    const commits = vi.fn();
+    registry.onCommit(commits);
+
+    handle.setLive(5000, "user"); // drag...
+    handle.setLive(1000, "user"); // ...Esc restores the pre-drag value, no commit
+
+    registry.setAutomatedIds(new Set([CUTOFF]));
+    registry.displayAutomation(CUTOFF, 320);
+    handle.commit();
+
+    expect(commits).not.toHaveBeenCalled();
+    expect(handle.base()).toBe(1000);
+  });
+
+  it("still commits when the user actually moved an automated control", () => {
+    const handle = registry.register(cutoffDesc());
+    const commits = vi.fn();
+    registry.onCommit(commits);
+
+    registry.setAutomatedIds(new Set([CUTOFF]));
+    registry.displayAutomation(CUTOFF, 400);
+    handle.setLive(2500, "user"); // -> overridden, real intent
+    handle.commit();
+
+    expect(handle.state).toBe("overridden");
+    expect(handle.base()).toBe(2500);
+    expect(commits).toHaveBeenCalledTimes(1);
+    expect(commits.mock.calls[0]?.[0]).toMatchObject({ value: 2500, previous: 1000 });
+  });
+});
+
+describe("scheduleAutomation (SS11 look-ahead windows)", () => {
+  it("cancelAndHoldAtTime anchors the window where the browser has it", () => {
+    const handle = registry.register(cutoffDesc());
+    const { param, calls } = fakeAudioParam(0);
+    const held: number[] = [];
+    (param as unknown as { cancelAndHoldAtTime: (t: number) => void }).cancelAndHoldAtTime = (t) => {
+      held.push(t);
+    };
+    handle.bindAudioParam(param);
+    calls.length = 0;
+
+    registry.scheduleAutomation(CUTOFF, [
+      { value: 500, when: 10 },
+      { value: 600, when: 10.5 },
+    ]);
+
+    expect(held).toEqual([10]);
+    expect(calls).toEqual([
+      { kind: "ramp", value: 500, time: 10 },
+      { kind: "ramp", value: 600, time: 10.5 },
+    ]);
+  });
+
+  it("the Firefox fallback keeps the previous window's ramp and anchors on the curve", () => {
+    // `cancelScheduledValues(at)` would delete the previous window's final
+    // ramp — which lands exactly ON `at` — flattening every window into a
+    // step; and anchoring with `#live` (the display value at *now*, a whole
+    // look-ahead behind) would step the sweep backwards.
+    const handle = registry.register(cutoffDesc());
+    const { param, calls } = fakeAudioParam(0);
+    handle.bindAudioParam(param);
+    registry.displayAutomation(CUTOFF, 300); // what the knob shows NOW
+    calls.length = 0;
+
+    registry.scheduleAutomation(CUTOFF, [
+      { value: 500, when: 10 },
+      { value: 600, when: 10.5 },
+    ]);
+
+    expect(calls[0]?.kind).toBe("cancel");
+    expect(calls[0]?.time).toBeGreaterThan(10);
+    expect(calls[0]?.time).toBeLessThan(10.001);
+    expect(calls[1]).toEqual({ kind: "set", value: 500, time: 10 }); // curve, not 300
+    expect(calls.slice(2)).toEqual([
+      { kind: "ramp", value: 500, time: 10 },
+      { kind: "ramp", value: 600, time: 10.5 },
+    ]);
+  });
+
+  it("drops windows while overridden (SS4: automation suspended)", () => {
+    const handle = registry.register(cutoffDesc());
+    const { param, calls } = fakeAudioParam(0);
+    handle.bindAudioParam(param);
+    handle.setAutomated(true);
+    handle.setLive(2000, "user"); // -> overridden
+    calls.length = 0;
+    registry.scheduleAutomation(CUTOFF, [{ value: 500, when: 10 }]);
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("message path cancellation (SS11 override during playback)", () => {
+  function messageBinding() {
+    const writes: Array<[number, number]> = [];
+    const cancels: number[] = [];
+    return {
+      writes,
+      cancels,
+      write: (v: number, when: number) => writes.push([v, when]),
+      cancelFrom: (when: number) => cancels.push(when),
+    };
+  }
+
+  it("revokes the queued look-ahead when the user takes over", () => {
+    // Without this the ~200 ms of already-queued automation writes keep firing
+    // AFTER the user's value and pull the param back onto the lane's curve —
+    // an audible warble between the fader and the lane.
+    const handle = registry.register(cutoffDesc());
+    const b = messageBinding();
+    handle.bindMessage(b.write, { cancelFrom: b.cancelFrom });
+    handle.setAutomated(true);
+
+    clock = 9;
+    registry.scheduleAutomation(CUTOFF, [
+      { value: 500, when: 10 },
+      { value: 600, when: 10.2 },
+    ]);
+    expect(b.cancels).toEqual([10]); // the window replaces its own tail
+    expect(b.writes.at(-1)).toEqual([600, 10.2]);
+
+    b.cancels.length = 0;
+    handle.setLive(2000, "user"); // grabs the control mid-playback
+    expect(handle.state).toBe("overridden");
+    expect(b.cancels).toEqual([9]); // cancelled at `now`, BEFORE the write
+    expect(b.writes.at(-1)).toEqual([2000, 9]);
+
+    // Only the interrupted window needs revoking; plain user writes don't.
+    b.cancels.length = 0;
+    handle.setLive(2100, "user");
+    expect(b.cancels).toEqual([]);
+  });
+
+  it("works unchanged for a binding with no cancel primitive", () => {
+    const handle = registry.register(cutoffDesc());
+    const writes: Array<[number, number]> = [];
+    handle.bindMessage((v, when) => writes.push([v, when]));
+    registry.scheduleAutomation(CUTOFF, [{ value: 500, when: 10 }]);
+    clock = 11;
+    handle.setLive(2000, "user");
+    expect(writes).toEqual([
+      [1000, 0],
+      [500, 10],
+      [2000, 11],
+    ]);
+  });
+});

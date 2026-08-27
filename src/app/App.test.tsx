@@ -269,6 +269,219 @@ describe("App (SS18-M1 app shell)", () => {
     expect(posted.some((m) => m.type === "noteOn" && m.pitch === UNIQUE_PITCH)).toBe(false);
   });
 
+  it("reports a failed device mount and keeps the app usable (SS3/SS6)", async () => {
+    // The instrument's `prepare()` is `audioWorklet.addModule`: the one part
+    // of a mount that talks to the network and can genuinely fail.
+    const base = createFakeAudioContext();
+    let failNextModule = true;
+    base.audioWorklet.addModule = (url: string): Promise<void> => {
+      if (failNextModule) {
+        failNextModule = false;
+        return Promise.reject(new Error("module load failed"));
+      }
+      base.addedModules.push(url);
+      return Promise.resolve();
+    };
+    bootAudioContext.mockResolvedValue(base as unknown as BaseAudioContext);
+
+    let store: DocumentStore | undefined;
+    await act(async () => {
+      root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
+    });
+    await flushMicrotasks();
+    const boot = [...container.querySelectorAll("button")].find((b) => b.textContent === "Boot audio")!;
+    await act(async () => {
+      boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushMicrotasks();
+
+    // The failure is REPORTED (the apply queue swallows nothing)...
+    expect(container.querySelector("[data-testid=toolbar-status-message]")!.textContent).toContain(
+      "Audio update failed",
+    );
+    // ...and the engine still follows the document: the next edit reconciles,
+    // which is what makes the retry `prepareDefinition` allows reachable. A
+    // poisoned queue left the app showing edits that never reached audio.
+    const commands = createProjectCommands();
+    posted.length = 0;
+    const doc = store!.getState();
+    const clipId = Object.keys(doc.clips)[0]!;
+    await act(async () => {
+      store!.dispatch(commands.addNotes(clipId, [{ start: 0, dur: 240, pitch: 41, vel: 100 }]));
+    });
+    await flushMicrotasks();
+    await flushMicrotasks();
+    await act(async () => {
+      [...container.querySelectorAll("button")].find((b) => b.textContent === "Play")!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    expect(posted.some((m) => m.type === "noteOn" && m.pitch === 41)).toBe(true);
+  });
+
+  it("stays bootable after a failed boot (the engine ref is published on success only)", async () => {
+    await act(async () => {
+      root.render(<App storage={storage} />);
+    });
+    await flushMicrotasks();
+    const boot = [...container.querySelectorAll("button")].find((b) => b.textContent === "Boot audio")!;
+
+    bootAudioContext.mockRejectedValueOnce(new Error("context refused"));
+    await act(async () => {
+      boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushMicrotasks();
+    expect(container.querySelector("[data-testid=audio-status]")!.textContent).toContain("failed");
+
+    // The retry must actually reach `bootAudioContext` again: a failed boot
+    // that left `engineRef` set would be turned away by the re-entrancy guard
+    // for the rest of the session, with only a page reload as the way out.
+    await act(async () => {
+      boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await waitFor(
+      () => container.querySelector("[data-testid=audio-status]")!.textContent!.startsWith("ready"),
+    );
+    expect(bootAudioContext).toHaveBeenCalledTimes(2);
+  });
+
+  it("clicking a track's arrangement header selects that channel for the mixer (SS3/SS15)", async () => {
+    let store: DocumentStore | undefined;
+    await act(async () => {
+      root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
+    });
+    await flushMicrotasks();
+
+    const commands = createProjectCommands();
+    await act(async () => {
+      store!.dispatch(commands.addTrack());
+    });
+    const doc = store!.getState();
+    const tracks = doc.channelOrder.filter((id) => doc.channels[id]?.role === "track");
+    expect(tracks.length).toBeGreaterThan(1);
+    const second = tracks[1]!;
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>("[data-testid=tab-mixer]")!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+
+    const header = container.querySelector<HTMLElement>(`.fbl-arr-header[data-channel-id="${second}"]`);
+    expect(header).not.toBeNull();
+    await act(async () => {
+      header!.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    });
+
+    // The arrangement header paints its own highlight, so a selection it does
+    // not report leaves the mixer's Group/Delete buttons, the device chain and
+    // the automation menu acting on a DIFFERENT channel than the highlighted
+    // one — "Delete" would delete the track the user is not looking at.
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>("[data-testid=delete-channel-button]")!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    expect(store!.getState().channels[second]).toBeUndefined();
+    expect(store!.getState().channels[tracks[0]!]).toBeDefined();
+  });
+
+  // SS5's control context menu row, end to end: it is the only path from a
+  // knob to "automate THIS", and until the shell handed the controls an
+  // `onShowAutomation` it did not render at all.
+  it("'Show automation lane' on a mixer fader creates the lane and reveals it (SS5/SS11)", async () => {
+    let store: DocumentStore | undefined;
+    await act(async () => {
+      root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
+    });
+    await flushMicrotasks();
+
+    const boot = [...container.querySelectorAll("button")].find((b) => b.textContent === "Boot audio")!;
+    await act(async () => {
+      boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await waitFor(
+      () => container.querySelector("[data-testid=audio-status]")!.textContent!.startsWith("ready"),
+    );
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>("[data-testid=tab-mixer]")!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+
+    const doc = store!.getState();
+    const track = doc.channelOrder.find((id) => doc.channels[id]?.role === "track")!;
+    const volumeParam = doc.channels[track]!.volume;
+    expect(Object.values(store!.getState().lanes)).toHaveLength(0);
+
+    // The fader only exists once its handle registered (the reconciler syncs
+    // mixer params after the mount) — that wait is the panel's own test.
+    await waitFor(() => container.querySelector(`[data-testid=vol-${track}]`) !== null);
+    const fader = container.querySelector<HTMLElement>(`[data-testid=vol-${track}]`)!;
+    await act(async () => {
+      fader.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+    const row = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent === "Show automation lane",
+    );
+    expect(row, "SS5's context menu must offer the automation row").toBeDefined();
+
+    await act(async () => {
+      row!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    // A lane for that exact param, and the automation tab showing it.
+    const lanes = Object.values(store!.getState().lanes);
+    expect(lanes.map((lane) => lane.paramId)).toEqual([volumeParam]);
+    expect(lanes[0]!.enabled).toBe(true);
+    expect(container.querySelector("[data-testid=automation-panel]")).not.toBeNull();
+    expect(container.querySelector(`[data-testid=lane-row-${lanes[0]!.id}]`)).not.toBeNull();
+  });
+
+  it("disposes the autosave on unmount (SS13)", async () => {
+    // Only `setTimeout` is faked: React's own scheduling must keep running.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let store: DocumentStore | undefined;
+      await act(async () => {
+        root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
+      });
+      await flushMicrotasks();
+      const write = vi.spyOn(storage, "write");
+      const commands = createProjectCommands();
+
+      // Positive control: while mounted, an edit debounces into a write.
+      await act(async () => {
+        store!.dispatch(commands.renameProject("While Mounted"));
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+      await flushMicrotasks();
+      expect(write).toHaveBeenCalled();
+
+      write.mockClear();
+      act(() => {
+        root.unmount();
+      });
+
+      // The unmount cleanup used to read the FIRST render's `docState`
+      // (always null with `[]` deps), so the autosave kept its `onChange`
+      // subscription and its pending timer, and an orphaned write could land
+      // on the slot a remounted app had already written.
+      await act(async () => {
+        store!.dispatch(commands.renameProject("After Unmount"));
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+      await flushMicrotasks();
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("boots once even when clicked twice in the same frame", async () => {
     await act(async () => {
       root.render(<App storage={storage} />);

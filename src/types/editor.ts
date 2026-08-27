@@ -170,6 +170,10 @@ export interface ArrangementView extends EditorView {
   readonly selection: SelectionModel<ClipId>;
   /** Scrolls the given clip/track into view (shell "show me this clip"). */
   reveal(clipId: ClipId): void;
+  /** The other direction of `ArrangementOptions.onSelectChannel`: the shell's
+   *  channel selection (mixer strip, device chain, add-lane menu) mirrored
+   *  into the lane header highlight, so the two never name different tracks. */
+  setSelectedChannel(channelId: ChannelId | null): void;
 }
 
 export type CreateArrangement = (options: ArrangementOptions) => ArrangementView;

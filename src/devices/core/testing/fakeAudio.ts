@@ -9,7 +9,7 @@
 import type { DeviceIO } from "../../../types";
 
 export interface ParamEvent {
-  kind: "cancel" | "set" | "linear";
+  kind: "cancel" | "set" | "linear" | "exponential" | "target";
   value: number;
   time: number;
 }
@@ -34,6 +34,16 @@ export class FakeAudioParam {
     this.events.push({ kind: "linear", value, time });
     return this;
   }
+  exponentialRampToValueAtTime(value: number, time: number): this {
+    this.value = value;
+    this.events.push({ kind: "exponential", value, time });
+    return this;
+  }
+  setTargetAtTime(value: number, time: number): this {
+    this.value = value;
+    this.events.push({ kind: "target", value, time });
+    return this;
+  }
 }
 
 export class FakeAudioNode {
@@ -54,6 +64,28 @@ export class FakeGainNode extends FakeAudioNode {
   readonly gain = new FakeAudioParam(1);
   constructor() {
     super("gain");
+  }
+}
+
+/** `OscillatorNode`-alike: records start/stop and can fire `onended` on cue. */
+export class FakeOscillatorNode extends FakeAudioNode {
+  readonly frequency = new FakeAudioParam(440);
+  type = "sine";
+  onended: (() => void) | null = null;
+  startedAt: number | null = null;
+  stoppedAt: number | null = null;
+  constructor() {
+    super("oscillator");
+  }
+  start(when = 0): void {
+    this.startedAt = when;
+  }
+  stop(when = 0): void {
+    this.stoppedAt = when;
+  }
+  /** Test hook: what the real node does when it reaches its stop time. */
+  end(): void {
+    this.onended?.();
   }
 }
 
@@ -101,24 +133,34 @@ export class FakeAudioWorkletNode extends FakeAudioNode {
 export interface FakeAudioContext {
   currentTime: number;
   readonly addedModules: string[];
+  /** Every node the context handed out, in creation order. */
+  readonly created: FakeAudioNode[];
   audioWorklet: { addModule(url: string): Promise<void> };
   createGain(): FakeGainNode;
   createBiquadFilter(): FakeBiquadNode;
+  createOscillator(): FakeOscillatorNode;
 }
 
 export function createFakeAudioContext(options: { currentTime?: number } = {}): FakeAudioContext {
   const addedModules: string[] = [];
+  const created: FakeAudioNode[] = [];
+  const track = <T extends FakeAudioNode>(node: T): T => {
+    created.push(node);
+    return node;
+  };
   return {
     currentTime: options.currentTime ?? 0,
     addedModules,
+    created,
     audioWorklet: {
       addModule(url: string): Promise<void> {
         addedModules.push(url);
         return Promise.resolve();
       },
     },
-    createGain: () => new FakeGainNode(),
-    createBiquadFilter: () => new FakeBiquadNode(),
+    createGain: () => track(new FakeGainNode()),
+    createBiquadFilter: () => track(new FakeBiquadNode()),
+    createOscillator: () => track(new FakeOscillatorNode()),
   };
 }
 

@@ -5,7 +5,7 @@ import type { ControlKind, ParamDescriptor } from "../../types";
 
 export { createControlGesture, DRAG_FULL_SWEEP_PX, FINE_FACTOR, KEY_STEP, PAGE_STEP, WHEEL_STEP } from "./gesture";
 export type { ControlGesture } from "./gesture";
-export { ParamControl, useParamValue } from "./ParamControl";
+export { ARC_ACCENT, ARC_OVERRIDDEN, ParamControl, useParamDisplay, useParamValue } from "./ParamControl";
 export { Knob } from "./Knob";
 export { Fader, FADER_DETENT_DB, FADER_DETENT_SNAP_DB } from "./Fader";
 export { EnumSelect, ToggleLED } from "./EnumSelect";

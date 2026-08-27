@@ -2,11 +2,13 @@
 // center when `bipolar`), accent arc for the live value plus a small ghost
 // dot marking `base()` when automation moves the live value away from it
 // (the M3 `automated` display; harmless and truthful before M3 too, since
-// live == base whenever the param is free).
+// live == base whenever the param is free), and "overridden = arc pulses
+// dim" — the one per-param signal that this control's lane is suspended
+// (the transport pill says only that SOMETHING is overridden).
 
 import type { ParamHandle } from "../../types";
 import { toNormalized } from "../../params/taper";
-import { ParamControl } from "./ParamControl";
+import { ARC_ACCENT, ARC_OVERRIDDEN, ParamControl } from "./ParamControl";
 
 const SWEEP_DEG = 270;
 const START_DEG = 135; // arc runs 135° -> 405° (i.e. through the top)
@@ -45,7 +47,8 @@ export function Knob({ handle, size = 36, label, testId, onShowAutomation }: Kno
 
   return (
     <ParamControl handle={handle} testId={testId} onShowAutomation={onShowAutomation} title={desc.label}>
-      {(value) => {
+      {(value, _dragging, state) => {
+        const overridden = state === "overridden";
         const n = toNormalized(desc, value);
         const nBase = toNormalized(desc, handle.base());
         const zero = desc.bipolar === true ? 0.5 : 0;
@@ -57,7 +60,26 @@ export function Knob({ handle, size = 36, label, testId, onShowAutomation }: Kno
           <>
             <svg width={size} height={size} aria-hidden="true">
               <path d={arcPath(cx, cy, r, START_DEG, START_DEG + SWEEP_DEG)} stroke="#333" strokeWidth={3} fill="none" />
-              {valueArc !== "" && <path d={valueArc} stroke="#5aa9e6" strokeWidth={3} fill="none" />}
+              {valueArc !== "" && (
+                <path
+                  d={valueArc}
+                  stroke={overridden ? ARC_OVERRIDDEN : ARC_ACCENT}
+                  strokeWidth={3}
+                  fill="none"
+                  data-param-arc={overridden ? "overridden" : "live"}
+                >
+                  {/* SMIL rather than a CSS keyframe: the control kit ships no
+                      stylesheet, and a per-instance <style> would be worse. */}
+                  {overridden && (
+                    <animate
+                      attributeName="opacity"
+                      values="1;0.35;1"
+                      dur="1.4s"
+                      repeatCount="indefinite"
+                    />
+                  )}
+                </path>
+              )}
               <line x1={cx} y1={cy} x2={tip.x} y2={tip.y} stroke="#ddd" strokeWidth={2} strokeLinecap="round" />
               {showGhost && <circle cx={ghost.x} cy={ghost.y} r={2} fill="#f2c14e" />}
             </svg>

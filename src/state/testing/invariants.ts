@@ -43,6 +43,13 @@ export function checkProjectInvariants(project: ProjectSnapshot | Project): stri
   }
   for (const [id, lane] of Object.entries(project.lanes)) {
     if (lane.id !== id) fail(`lanes["${id}"].id is "${lane.id}"`);
+    // SS11: a lane hangs off the channel that owns its target param. A lane
+    // whose channel is gone is not "kept and re-bindable" (that promise is
+    // about a removed DEVICE's params, SS7) — it is unreachable data the
+    // codec drops on the next load, so encode/decode stops being a fixpoint.
+    if (project.channels[lane.channelId] === undefined) {
+      fail(`lanes["${id}"].channelId "${lane.channelId}" is not a channel`);
+    }
   }
   for (const [id, clip] of Object.entries(project.clips)) {
     if (clip.id !== id) fail(`clips["${id}"].id is "${clip.id}"`);

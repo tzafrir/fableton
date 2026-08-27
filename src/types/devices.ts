@@ -124,6 +124,17 @@ export interface DeviceInstance {
   noteOn?(pitch: number, vel: number, when: Seconds): void;
   noteOff?(pitch: number, when: Seconds): void;
   allNotesOff?(when: Seconds): void;
+  /**
+   * SS6 routing -> the device. A device cannot observe its own incoming
+   * connections (Web Audio exposes no such API) and the harness owns its
+   * ports, so a port that only sometimes carries signal — the compressor's
+   * optional `sc` key above all — cannot tell "nothing routed here" from
+   * "routed, currently silent". The reconciler calls this whenever an SS6
+   * edge into a NON-DEFAULT input port appears or disappears, and once per
+   * mount for the ports already wired. Ports named here are the optional
+   * ones (`DeviceIO.inputs` keys other than `'in'`).
+   */
+  portRouted?(portId: string, routed: boolean): void;
   /** Future PDC (SS6); return 0 when the device adds no latency. */
   latencySamples?(): number;
   /** Called after ramps/tails complete; must disconnect everything it made. */
@@ -148,6 +159,8 @@ export interface DeviceInstanceSpec {
   noteOn?: ((pitch: number, vel: number, when: Seconds) => void) | undefined;
   noteOff?: ((pitch: number, when: Seconds) => void) | undefined;
   allNotesOff?: ((when: Seconds) => void) | undefined;
+  /** See `DeviceInstance.portRouted`. */
+  portRouted?: ((portId: string, routed: boolean) => void) | undefined;
   latencySamples?: (() => number) | undefined;
   dispose(when?: Seconds): void;
 }

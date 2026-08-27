@@ -314,6 +314,11 @@ export function createArrangementView(options: ArrangementViewOptions): KitArran
       ruler.setPlayheadTicks(tick);
     },
 
+    setSelectedChannel(channelId: ChannelId | null): void {
+      if (headers.selectedChannel === channelId) return;
+      headers.setSelectedChannel(channelId);
+    },
+
     setGrid(settings: Partial<GridSettings>): void {
       // SS10's grid override menu (shared by both editors through the kit's
       // `Grid`); the host invalidates the grid + content layers itself.

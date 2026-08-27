@@ -77,11 +77,32 @@ describe("point editing", () => {
     ]);
   });
 
-  it("a move landing two points on one tick keeps the moved one", () => {
+  it("a move landing two points on one tick keeps the moved one, dragging LEFT", () => {
     f.store.dispatch(f.commands.addLanePoint("lane-1", { t: 0, v: 1 }));
     f.store.dispatch(f.commands.addLanePoint("lane-1", { t: 960, v: 2 }));
     f.store.dispatch(f.commands.moveLanePoints("lane-1", [{ fromT: 960, toT: 0, v: 2 }]));
     expect(f.store.getState().lanes["lane-1"]?.points).toEqual([{ t: 0, v: 2, curve: 0 }]);
+  });
+
+  it("...and dragging RIGHT: the dragged point wins in both directions", () => {
+    // The mirror image of the test above. Resolving the collision by array
+    // order would keep the STATIONARY point here, so the same gesture would
+    // silently discard the value the user just set, one way round only.
+    f.store.dispatch(f.commands.addLanePoint("lane-1", { t: 0, v: 1 }));
+    f.store.dispatch(f.commands.addLanePoint("lane-1", { t: 960, v: 2 }));
+    f.store.dispatch(f.commands.moveLanePoints("lane-1", [{ fromT: 0, toT: 960, v: 1 }]));
+    expect(f.store.getState().lanes["lane-1"]?.points).toEqual([{ t: 960, v: 1, curve: 0 }]);
+  });
+
+  it("a point dragged THROUGH a neighbour swallows it, keeping the drag's own curve", () => {
+    f.store.dispatch(f.commands.addLanePoint("lane-1", { t: 0, v: 1, curve: 0.5 }));
+    f.store.dispatch(f.commands.addLanePoint("lane-1", { t: 480, v: 2 }));
+    f.store.dispatch(f.commands.addLanePoint("lane-1", { t: 960, v: 3 }));
+    f.store.dispatch(f.commands.moveLanePoints("lane-1", [{ fromT: 0, toT: 480, v: -1 }]));
+    expect(f.store.getState().lanes["lane-1"]?.points).toEqual([
+      { t: 480, v: -1, curve: 0.5 },
+      { t: 960, v: 3, curve: 0 },
+    ]);
   });
 
   it("deleteLanePoints removes by tick", () => {

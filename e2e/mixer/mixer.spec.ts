@@ -72,6 +72,40 @@ test("grouping: select the track, group it, its Audio To points at the group", a
   await expect(output).not.toHaveValue(groupId);
 });
 
+/** The rms bar's height inside a strip's meter, as a number of percent. */
+async function meterLevel(page: Page, channelId: string): Promise<number> {
+  const bar = page.getByTestId(`meter-${channelId}`).locator("div").first();
+  const height = await bar.evaluate((el) => (el as HTMLElement).style.height);
+  return Number.parseFloat(height) || 0;
+}
+
+// SS6 "Solo / mute": the engine applies it via per-channel mute gains. The
+// pressed states below prove the DOCUMENT toggled; this proves the AUDIO did
+// — with one audible track, muting it has to empty the master bus.
+test("muting the only audible track silences the master bus (SS6)", async ({ page }) => {
+  await openMixer(page);
+  await bootAudio(page);
+  const trackId = await firstTrackId(page);
+  const masterStrip = page.locator('[data-testid^="strip-"][data-role="master"]');
+  const masterId = (await masterStrip.getAttribute("data-testid"))!.replace("strip-", "");
+
+  await page.getByRole("button", { name: "Play" }).click();
+  await expect
+    .poll(() => meterLevel(page, masterId), { timeout: 10_000, message: "master should be sounding" })
+    .toBeGreaterThan(1);
+
+  await page.getByTestId(`mute-${trackId}`).click();
+  await expect
+    .poll(() => meterLevel(page, masterId), { timeout: 10_000, message: "mute must close the bus" })
+    .toBeLessThan(0.5);
+
+  await page.getByTestId(`mute-${trackId}`).click();
+  await expect
+    .poll(() => meterLevel(page, masterId), { timeout: 10_000, message: "unmute must reopen it" })
+    .toBeGreaterThan(1);
+  await page.getByRole("button", { name: "Stop" }).click();
+});
+
 test("mute and solo are document toggles with pressed states", async ({ page }) => {
   await openMixer(page);
   const trackId = await firstTrackId(page);
