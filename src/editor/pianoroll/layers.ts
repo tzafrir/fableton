@@ -87,10 +87,15 @@ export function createPianoRollGridLayer(
       const rows = viewport.visibleRows();
       const first = Math.max(rowOfPitch(MAX_PITCH), Math.floor(rows.start));
       const last = Math.min(rowOfPitch(MIN_PITCH), Math.ceil(rows.end));
+      // With device note names in force (a drum machine), "black key" stops
+      // meaning a black key and starts meaning "no pad here" — the grid then
+      // shows at a glance which rows the instrument will actually answer to.
+      const names = ctx.pitchNames;
       for (let row = first; row <= last; row += 1) {
         const pitch = MAX_PITCH - row;
         const y = viewport.yOf(row) + noteTop;
-        c.fillStyle = isBlackKey(pitch) ? theme.rowBlack : theme.rowWhite;
+        const dim = names === null ? isBlackKey(pitch) : !names.has(pitch);
+        c.fillStyle = dim ? theme.rowBlack : theme.rowWhite;
         c.fillRect(0, alignPixel(y), frame.widthPx, Math.ceil(viewport.pxPerRow));
       }
       if (viewport.pxPerRow >= 6) {

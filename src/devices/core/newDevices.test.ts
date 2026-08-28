@@ -274,3 +274,36 @@ describe("the clipping devices", () => {
     expect(Distortion.params.some((param) => param.id === "edge")).toBe(true);
   });
 });
+
+// The kit's LAYOUT, which is a user-facing promise as much as the sound is:
+// the piano roll shows one solid block of pads, and a General MIDI drum part
+// written anywhere else lands on the right ones.
+describe("the drum kit's note map", () => {
+  it("is contiguous from 36 to 46 — no dead rows threaded through the roll", () => {
+    const notes = PADS.map((pad) => pad.note);
+    expect(notes).toEqual([...notes].sort((a, b) => a - b)); // and in order
+    expect(notes[0]).toBe(36);
+    expect(notes[notes.length - 1]).toBe(46);
+    for (let i = 1; i < notes.length; i++) expect(notes[i]! - notes[i - 1]!).toBe(1);
+  });
+
+  it("gives every pad a distinct id and a distinct note", () => {
+    expect(new Set(PADS.map((p) => p.id)).size).toBe(PADS.length);
+    expect(new Set(PADS.map((p) => p.note)).size).toBe(PADS.length);
+  });
+
+  it("publishes those pads as SS7 noteNames, so the roll can label its rows", () => {
+    expect(DrumMachine.noteNames).toEqual(PADS.map((pad) => ({ note: pad.note, label: pad.label })));
+  });
+
+  it("sounds every pad in the map, and stays silent outside it", () => {
+    const { ctx, instance } = rig(DrumMachine as typeof FmSynth);
+    const before = ctx.created.length;
+    for (const pad of PADS) instance.noteOn?.(pad.note, 100, 0);
+    expect(ctx.created.length).toBeGreaterThan(before);
+    const afterPads = ctx.created.length;
+    instance.noteOn?.(35, 100, 0); // below the kit
+    instance.noteOn?.(47, 100, 0); // above it
+    expect(ctx.created.length).toBe(afterPads);
+  });
+});

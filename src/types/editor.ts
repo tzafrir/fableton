@@ -176,11 +176,22 @@ export interface EditorViewOptionsBase {
   grid?: Partial<GridSettings> | undefined;
 }
 
+/**
+ * MIDI note -> what that note IS, for an instrument whose notes are not
+ * pitches (a drum machine's pads). Supplied by the SHELL, which is the only
+ * layer that may look at both the open clip's track and the device registry;
+ * the roll itself stays a generic pitch editor that has been handed a set of
+ * labels. `null` (the usual case) is a chromatic instrument: piano keys and
+ * note names, exactly as before.
+ */
+export type PitchNames = ReadonlyMap<number, string>;
+
 export interface PianoRollOptions extends EditorViewOptionsBase {
   /** The clip being edited; `null` shows the empty state. */
   clipId: ClipId | null;
   audition?: AuditionSink | undefined;
   tool?: ToolMode | undefined;
+  pitchNames?: PitchNames | null | undefined;
 }
 
 export interface PianoRollView extends EditorView {
@@ -188,6 +199,9 @@ export interface PianoRollView extends EditorView {
   readonly clipId: ClipId | null;
   setClip(clipId: ClipId | null): void;
   setTool(tool: ToolMode): void;
+  /** Swap the note-name set (the open clip's track changed instrument, or
+   *  the open clip moved to a different track). Re-frames on the named rows. */
+  setPitchNames(names: PitchNames | null): void;
 }
 
 export type CreatePianoRoll = (options: PianoRollOptions) => PianoRollView;

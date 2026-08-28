@@ -16,6 +16,7 @@ import type {
   CreatePianoRoll,
   PianoRollOptions,
   PianoRollView,
+  PitchNames,
   ToolMode,
 } from "../../types/editor";
 import type { Ticks } from "../../types/time";
@@ -38,7 +39,7 @@ import {
   type PianoRollLayout,
 } from "./layout";
 import { createKeyGutter } from "./keyGutter";
-import { KEY_GUTTER_WIDTH_PX } from "./keyNames";
+import { KEY_GUTTER_WIDTH_PX, NAMED_GUTTER_WIDTH_PX } from "./keyNames";
 import { DEFAULT_PIANO_ROLL_THEME, type PianoRollTheme } from "./theme";
 
 /** Vertical zoom the roll opens at: one semitone per row, 16 px tall. */
@@ -142,7 +143,20 @@ export function createPianoRollView(options: PianoRollOptions): KitPianoRollView
   const root = document.createElement("div");
   root.className = "fbl-pianoroll";
   root.style.display = "grid";
-  root.style.gridTemplateColumns = `${String(KEY_GUTTER_WIDTH_PX)}px minmax(0, 1fr)`;
+  /** The strip is wider when it carries device names than when it carries
+   *  pitch names — see `NAMED_GUTTER_WIDTH_PX`. */
+  // Reads the mutable `context`, NOT the `ctx` const bound further down: the
+  // key gutter draws once during its own construction, which happens before
+  // that const exists, and reaching it there is a temporal-dead-zone throw
+  // that unmounts the whole app.
+  const gutterWidthPx = (): number =>
+    context?.pitchNames == null ? KEY_GUTTER_WIDTH_PX : NAMED_GUTTER_WIDTH_PX;
+  const applyGutterWidth = (): void => {
+    root.style.gridTemplateColumns = `${String(gutterWidthPx())}px minmax(0, 1fr)`;
+  };
+  root.style.gridTemplateColumns = `${String(
+    options.pitchNames == null ? KEY_GUTTER_WIDTH_PX : NAMED_GUTTER_WIDTH_PX,
+  )}px minmax(0, 1fr)`;
   root.style.width = "100%";
   root.style.height = "100%";
   root.style.minHeight = "0";
@@ -187,6 +201,7 @@ export function createPianoRollView(options: PianoRollOptions): KitPianoRollView
     viewport: host.viewport,
     layout,
     theme,
+    pitchNames: () => context?.pitchNames ?? null,
     ...(opts.dpr === undefined ? {} : { dpr: opts.dpr }),
   });
 
@@ -203,6 +218,7 @@ export function createPianoRollView(options: PianoRollOptions): KitPianoRollView
     clipId: options.clipId,
     tool: options.tool ?? "select",
     audition: options.audition ?? null,
+    pitchNames: options.pitchNames ?? null,
     onSeek: options.onSeek,
     invalidateOverlay: () => {
       host.renderer.invalidate("overlay");
@@ -264,7 +280,21 @@ export function createPianoRollView(options: PianoRollOptions): KitPianoRollView
     const notes = ctx.notes();
     let low = DEFAULT_LOW_PITCH;
     let high = DEFAULT_HIGH_PITCH;
-    if (notes.length > 0) {
+    // A drum machine's pads ARE the range, whatever the clip happens to
+    // contain: the pad block is fixed, small, and the thing the user is
+    // aiming at. Framing on the NOTES instead would swing the view around as
+    // a beat is written — add a crash and the kick scrolls off the bottom —
+    // and framing on the chromatic default would show eleven rows of dead
+    // space and none of the pads.
+    const names = ctx.pitchNames;
+    if (names !== null && names.size > 0) {
+      low = MAX_PITCH;
+      high = MIN_PITCH;
+      for (const pitch of names.keys()) {
+        if (pitch < low) low = pitch;
+        if (pitch > high) high = pitch;
+      }
+    } else if (notes.length > 0) {
       low = MAX_PITCH;
       high = MIN_PITCH;
       for (const note of notes) {
@@ -394,6 +424,22 @@ export function createPianoRollView(options: PianoRollOptions): KitPianoRollView
       // the host already invalidates grid + content) when the division
       // actually changes, so this is a pass-through.
       host.grid.setSettings(settings);
+    },
+
+    setPitchNames(names: PitchNames | null): void {
+      if (ctx.pitchNames === names) return;
+      const widthChanged = (ctx.pitchNames === null) !== (names === null);
+      ctx.pitchNames = names;
+      if (widthChanged) {
+        // The strip's column width is part of the layout, so the editor
+        // canvas has to be re-measured before anything is drawn into it.
+        applyGutterWidth();
+        host.measure();
+      }
+      framed = false;
+      frameOnce();
+      keyGutter.draw();
+      host.renderer.invalidateAll();
     },
 
     setTool(tool: ToolMode): void {

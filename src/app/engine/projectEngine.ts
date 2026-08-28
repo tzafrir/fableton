@@ -87,7 +87,26 @@ export interface AppProjectEngine extends ProjectEngine {
    * UI-only, like the meters: polled at rAF, never in the document.
    */
   deviceReadout(deviceId: DeviceInstanceId, readoutId: string): number | undefined;
+  /**
+   * An `AnalyserNode` tapped off a channel's POST-FADER node — the same tap
+   * the SS6 meters read, so a visualiser shows exactly what the strip's meter
+   * is measuring and what the master bus is sending out.
+   *
+   * Created on demand and cached per channel, and re-connected after every
+   * apply (the post-fader node is rebuilt whenever the graph is). `null`
+   * when the channel is not in the graph, or when the context has no
+   * `createAnalyser` (the test fakes) — a visualiser then simply draws
+   * nothing, which is the honest picture of "no audio here".
+   */
+  analyserFor(channelId: ChannelId): AnalyserNode | null;
 }
+
+/**
+ * FFT size for the visualiser taps. 2048 bins at 48 kHz is ~23 Hz per bin —
+ * fine enough to separate the harmonics of a bass note, coarse enough that
+ * one `getByteFrequencyData` per frame is nothing.
+ */
+export const ANALYSER_FFT_SIZE = 2048;
 
 /** The transport's per-track note target — rebuilt per apply, looked up per
  *  tick without allocating (SS12). */
@@ -192,6 +211,9 @@ export function createProjectEngine(
 
   const targetsByChannel = new Map<ChannelId, TrackTarget>();
   const meteredChannels = new Set<ChannelId>();
+  /** Visualiser taps, created lazily by `analyserFor` and re-connected on
+   *  every apply. One per channel anyone is actually looking at. */
+  const analysers = new Map<ChannelId, AnalyserNode>();
   const events = createDocumentNoteEventSource(initialDoc);
 
   const transport: EngineTransport = createEngineTransport({
@@ -255,6 +277,23 @@ export function createProjectEngine(
       if (noteTarget !== undefined) targetsByChannel.set(channelId, { noteTarget });
     }
 
+    // Analyser taps follow the same post-fader nodes the meters do. Only
+    // channels something has actually ASKED to analyse are re-connected: an
+    // AnalyserNode per strip would be an FFT per strip whether or not anyone
+    // is looking (SS2's audio budget), so these are created lazily and kept
+    // only while a visualiser holds one.
+    for (const [channelId, analyser] of analysers) {
+      const tap = reconciler.meterTapFor(channelId);
+      analyser.disconnect();
+      if (tap === undefined) continue;
+      try {
+        tap.connect(analyser);
+      } catch {
+        // A tap that vanished between the lookup and the connect: the next
+        // apply re-runs this, and the visualiser draws a flat line until then.
+      }
+    }
+
     // Meter taps follow the reconciler's post-fader nodes (SS6 meter tap).
     const wantMeters = new Set<ChannelId>();
     for (const channelId of doc.channelOrder) {
@@ -298,6 +337,22 @@ export function createProjectEngine(
       return reconciler.mountedDevice(deviceId)?.instance.readValue?.(readoutId);
     },
 
+    analyserFor(channelId: ChannelId): AnalyserNode | null {
+      const existing = analysers.get(channelId);
+      if (existing !== undefined) return existing;
+      const create = (ctx as { createAnalyser?: () => AnalyserNode }).createAnalyser;
+      if (typeof create !== "function") return null;
+      const analyser = create.call(ctx);
+      analyser.fftSize = ANALYSER_FFT_SIZE;
+      // Slower than the default 0.8: the eye reads a spectrum as a shape, and
+      // an unsmoothed FFT of music is a flickering comb rather than a shape.
+      analyser.smoothingTimeConstant = 0.7;
+      analysers.set(channelId, analyser);
+      const tap = reconciler.meterTapFor(channelId);
+      if (tap !== undefined) tap.connect(analyser);
+      return analyser;
+    },
+
     onApplyError(cb: (error: unknown) => void): Unsub {
       applyErrorListeners.add(cb);
       return () => {
@@ -338,6 +393,8 @@ export function createProjectEngine(
       disposed = true;
       transport.dispose();
       meters.dispose();
+      for (const analyser of analysers.values()) analyser.disconnect();
+      analysers.clear();
       reconciler.dispose();
       host.dispose();
       params.dispose();

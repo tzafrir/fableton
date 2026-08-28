@@ -11,6 +11,7 @@
 // note canvas, so no geometry, hit test or drag handler knows the gutter
 // exists.
 
+import type { PitchNames } from "../../types/editor";
 import type { Viewport } from "../../types/viewport";
 import { alignPixel } from "../kit/renderer";
 import {
@@ -28,6 +29,9 @@ export interface KeyGutterOptions {
   layout: PianoRollLayout;
   theme: PianoRollTheme;
   dpr?: number | undefined;
+  /** Read at draw time (not captured), so the strip follows a live instrument
+   *  swap without being rebuilt. `null` = ordinary piano keys. */
+  pitchNames?: (() => PitchNames | null) | undefined;
 }
 
 export interface KeyGutter {
@@ -84,16 +88,33 @@ export function createKeyGutter(options: KeyGutterOptions): KeyGutter {
     c.textBaseline = "middle";
     c.textAlign = "right";
 
+    // A drum-style instrument names its own notes (SS7 `noteNames`), and the
+    // strip then stops being a piano: a named row is a PAD, an unnamed one is
+    // dead space the device will not answer to, and drawing black/white keys
+    // over that would be describing a keyboard that is not there.
+    const names = options.pitchNames?.() ?? null;
+
     for (let row = first; row <= last; row += 1) {
       const pitch = MAX_PITCH - row;
       const y = viewport.yOf(row) + layout.noteTopPx;
       const h = Math.ceil(viewport.pxPerRow);
-      const black = isBlackKeyPitch(pitch);
+      const name = names?.get(pitch);
+      const black = names === null ? isBlackKeyPitch(pitch) : name === undefined;
       c.fillStyle = black ? theme.keyGutterBlack : theme.keyGutterWhite;
       c.fillRect(0, alignPixel(y), width, h);
       if (viewport.pxPerRow >= 4) {
         c.fillStyle = theme.keyGutterLine;
         c.fillRect(0, alignPixel(y), width, 1);
+      }
+      if (names !== null) {
+        // Named rows only: an unnamed row has nothing true to say, and
+        // labelling it with a pitch would re-introduce exactly the mapping
+        // the names exist to remove.
+        if (name !== undefined && labelEveryRow) {
+          c.fillStyle = theme.keyGutterText;
+          c.fillText(name, width - 4, alignPixel(y) + h / 2);
+        }
+        continue;
       }
       // Zoomed out, only each octave's C is labelled — enough to keep your
       // bearings without stacking unreadable text.

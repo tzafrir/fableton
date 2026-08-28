@@ -184,6 +184,7 @@ export type {
   EditorViewOptionsBase,
   PianoRollOptions,
   PianoRollView,
+  PitchNames,
   SelectionModel,
   ToolMode,
 } from "./editor";
@@ -204,6 +205,7 @@ export type {
   DeviceDefinition,
   DeviceHost,
   DeviceIO,
+  DeviceNoteName,
   DeviceReadoutSpec,
   DeviceInstance,
   DeviceServices,

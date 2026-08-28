@@ -10,7 +10,7 @@ import { createEmptyProject } from "../../state/project";
 import { createDocumentStore } from "../../state/store";
 import { installFakeCanvas2D } from "../kit/testing/fakeCanvas";
 import { createPianoRoll, createPianoRollView, createdNoteIds, redrawScopeOf } from "./pianoRoll";
-import { KEY_GUTTER_WIDTH_PX } from "./keyNames";
+import { KEY_GUTTER_WIDTH_PX, NAMED_GUTTER_WIDTH_PX } from "./keyNames";
 import { DEFAULT_PX_PER_TICK } from "../kit/viewport";
 
 beforeAll(() => {
@@ -150,6 +150,53 @@ describe("mounting", () => {
     view.element.dispatchEvent(pointerEvent("pointerdown", 8, 182));
     view.element.dispatchEvent(pointerEvent("pointerup", 8, 182));
     expect(view.selection.ids()).toEqual(["n1"]);
+    view.dispose();
+  });
+});
+
+describe("device note names (SS7 `noteNames`) turn the strip into a pad list", () => {
+  // Two octaves' worth of pads, deliberately non-contiguous so the framing
+  // and the row shading have something to be right about.
+  const PADS: ReadonlyMap<number, string> = new Map([
+    [36, "Kick"],
+    [38, "Snare"],
+    [42, "Hat"],
+  ]);
+
+  it("widens the key strip and re-frames on the named rows", () => {
+    const { view } = mount();
+    const gutterCell = view.element.parentElement?.previousElementSibling as HTMLElement;
+    const root = view.element.parentElement?.parentElement as HTMLElement;
+    expect(root.style.gridTemplateColumns).toContain(`${String(KEY_GUTTER_WIDTH_PX)}px`);
+
+    view.setPitchNames(PADS);
+    expect(root.style.gridTemplateColumns).toContain(`${String(NAMED_GUTTER_WIDTH_PX)}px`);
+    expect(gutterCell).toBeTruthy();
+
+    // The pads are 36..42; the roll should be looking at them, not at the
+    // chromatic default of "two octaves around C4".
+    const viewport = view.host.viewport;
+    const topPitch = 127 - viewport.scrollRows;
+    expect(topPitch).toBeGreaterThan(42);
+    expect(topPitch - viewport.heightPx / viewport.pxPerRow).toBeLessThan(36);
+    view.dispose();
+  });
+
+  it("goes back to a piano when the names are cleared", () => {
+    const { view } = mount();
+    const root = view.element.parentElement?.parentElement as HTMLElement;
+    view.setPitchNames(PADS);
+    view.setPitchNames(null);
+    expect(root.style.gridTemplateColumns).toContain(`${String(KEY_GUTTER_WIDTH_PX)}px`);
+    view.dispose();
+  });
+
+  it("ignores a set-to-the-same-map, so a re-render does not re-frame", () => {
+    const { view, setZoom } = mount();
+    view.setPitchNames(PADS);
+    setZoom(0.02); // the user zooms out...
+    view.setPitchNames(PADS); // ...and the shell re-renders with the same map
+    expect(view.host.viewport.pxPerTick).toBeCloseTo(0.02, 6);
     view.dispose();
   });
 });

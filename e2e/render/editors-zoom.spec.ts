@@ -48,7 +48,10 @@ test.describe("arrangement view", () => {
     // The starter clip's name label ("Track 1") is drawn as canvas text, not
     // DOM — so "real content" is asserted on pixels below, not accessibility
     // tree text. This assertion is just "the lane header exists".
-    await expect(page.getByText("Track 1")).toBeVisible();
+    // Scoped to the arrangement: "Track 1" is also the channel name the
+    // (hidden) scope panel prints, and an unscoped text match is a strict-mode
+    // violation the moment any other panel names the same channel.
+    await expect(arrangement.getByText("Track 1")).toBeVisible();
 
     // A check that "passes" against a blank canvas is a fail (per the probe
     // brief): assert the clip's fill color is actually present in the

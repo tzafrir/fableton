@@ -13,6 +13,7 @@ import type {
   DocumentStore,
   GridSettings,
   PianoRollView,
+  PitchNames,
   ProjectCommands,
   Ticks,
   ToolMode,
@@ -28,6 +29,11 @@ export interface PianoRollPanelProps {
    *  through `setGrid` rather than being create-time-only. */
   grid?: Partial<GridSettings> | undefined;
   onSeek?: ((tick: Ticks) => void) | undefined;
+  /** SS7 `noteNames` for the instrument this clip plays through — a drum
+   *  machine names its pads, so the roll's key strip stops saying "C1" and
+   *  starts saying "Kick". Like `clipId`/`tool`, it must reach an
+   *  already-mounted view, so it goes through `setPitchNames`. */
+  pitchNames?: PitchNames | null | undefined;
   /** A STABLE sink (the app shell owns one proxy object for the lifetime of
    *  the engine and redirects it as the open clip's track changes) — passed
    *  once at creation, per `PianoRollOptions`. */
@@ -41,6 +47,7 @@ export function PianoRollPanel({
   clipId,
   tool,
   grid,
+  pitchNames,
   onSeek,
   audition,
   viewRef,
@@ -55,6 +62,7 @@ export function PianoRollPanel({
   const initialTool = useRef(tool);
   const initialGrid = useRef(grid);
   const initialAudition = useRef(audition);
+  const initialPitchNames = useRef(pitchNames);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -67,6 +75,7 @@ export function PianoRollPanel({
       tool: initialTool.current,
       grid: initialGrid.current,
       audition: initialAudition.current,
+      pitchNames: initialPitchNames.current,
       onSeek: (tick) => onSeekRef.current?.(tick),
     });
     localViewRef.current = view;
@@ -90,6 +99,10 @@ export function PianoRollPanel({
   useEffect(() => {
     if (grid !== undefined) localViewRef.current?.setGrid(grid);
   }, [grid]);
+
+  useEffect(() => {
+    localViewRef.current?.setPitchNames(pitchNames ?? null);
+  }, [pitchNames]);
 
   return (
     <div

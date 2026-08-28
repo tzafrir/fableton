@@ -14,3 +14,5 @@ export { SongControls, TIME_SIGNATURE_DENOMINATORS } from "./SongControls";
 export type { SongControlsProps } from "./SongControls";
 export { ShortcutsOverlay } from "./ShortcutsOverlay";
 export type { ShortcutsOverlayProps } from "./ShortcutsOverlay";
+export { ScopePanel } from "./ScopePanel";
+export type { ScopePanelProps } from "./ScopePanel";

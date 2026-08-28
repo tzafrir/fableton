@@ -19,7 +19,13 @@
 // character (a kick's pitch sweep, a hat's tone) is baked into the voice at
 // a musically sensible value rather than being another 24 knobs.
 
-import type { DeviceDefinition, DeviceInstance, PanelSpec, Seconds } from "../../types";
+import type {
+  DeviceDefinition,
+  DeviceInstance,
+  DeviceNoteName,
+  PanelSpec,
+  Seconds,
+} from "../../types";
 import { p } from "../../params/descriptors";
 import { deviceInstance, rampOutAndDisconnect } from "../harness/deviceInstance";
 import { clapHit, hatHit, kickHit, midiToHz, rimHit, snareHit } from "./drumVoices";
@@ -42,17 +48,41 @@ export interface PadSpec {
   maxDecayMs: number;
 }
 
-/** The eight pads, in the order they appear in the panel. */
+/**
+ * The pads, in note order — which is also the order they appear in the panel
+ * and, read bottom-up, the order they appear in the piano roll.
+ *
+ * The block is CONTIGUOUS, 36 to 46, and that is the point of the three that
+ * are not obviously distinct engines (electric snare, pedal hat, mid tom).
+ * The kit used to skip 40, 44 and 45, so a drum clip in the roll was eight
+ * live rows with three dead ones threaded through them, and a beat written
+ * anywhere else in GM landed half on silence. Filling the gaps with the
+ * General MIDI voices that belong at those notes makes the roll one solid
+ * block of pads AND makes any GM drum part play correctly.
+ */
 export const PADS: readonly PadSpec[] = [
   { id: "kick", label: "Kick", note: 36, engine: "kick", basePitch: 36, decayMs: 420, maxDecayMs: 2000 },
   { id: "rim", label: "Rim", note: 37, engine: "rim", basePitch: 60, decayMs: 60, maxDecayMs: 400 },
   { id: "snare", label: "Snare", note: 38, engine: "snare", basePitch: 52, decayMs: 220, maxDecayMs: 1200 },
   { id: "clap", label: "Clap", note: 39, engine: "clap", basePitch: 60, decayMs: 240, maxDecayMs: 1200 },
+  // GM 40 "Electric Snare": tighter and higher than the acoustic one above,
+  // so a two-snare pattern reads as two different drums.
+  { id: "snareHi", label: "Snare Hi", note: 40, engine: "snare", basePitch: 60, decayMs: 140, maxDecayMs: 1200 },
   { id: "tomLo", label: "Tom Lo", note: 41, engine: "tom", basePitch: 43, decayMs: 500, maxDecayMs: 2000 },
   { id: "hatClosed", label: "Hat", note: 42, engine: "hat", basePitch: 84, decayMs: 70, maxDecayMs: 600 },
   { id: "tomHi", label: "Tom Hi", note: 43, engine: "tom", basePitch: 50, decayMs: 420, maxDecayMs: 2000 },
+  // GM 44 "Pedal Hi-Hat": the shortest of the three hats — the foot chick.
+  { id: "hatPedal", label: "Pedal Hat", note: 44, engine: "hat", basePitch: 80, decayMs: 40, maxDecayMs: 400 },
+  { id: "tomMid", label: "Tom Mid", note: 45, engine: "tom", basePitch: 47, decayMs: 460, maxDecayMs: 2000 },
   { id: "hatOpen", label: "Open Hat", note: 46, engine: "hat", basePitch: 84, decayMs: 420, maxDecayMs: 2000 },
 ];
+
+/** The pads as SS7 `noteNames`: what the piano roll writes down its key
+ *  strip instead of "C1", "C#1", "D1". */
+export const PAD_NOTE_NAMES: readonly DeviceNoteName[] = PADS.map((pad) => ({
+  note: pad.note,
+  label: pad.label,
+}));
 
 const tuneId = (pad: PadSpec): string => `${pad.id}Tune`;
 const decayId = (pad: PadSpec): string => `${pad.id}Decay`;
@@ -76,7 +106,10 @@ export function padNoteName(note: number): string {
 
 export const DrumMachine: DeviceDefinition = {
   id: "core.drum-machine",
-  version: 1,
+  // v2 added the three General MIDI pads that closed the 36-46 gaps. Every
+  // existing param id is unchanged, so a v1 project loads with its values
+  // intact and the new pads simply take their defaults — no `migrateParams`.
+  version: 2,
   kind: "instrument",
   label: "Drum Machine",
   audioIn: [],
@@ -90,6 +123,7 @@ export const DrumMachine: DeviceDefinition = {
     p.db("gain", "Gain", { min: -60, max: 6, default: -3 }),
   ],
   panel: drumPanel(),
+  noteNames: PAD_NOTE_NAMES,
 
   create(ctx, io): DeviceInstance {
     const outGain = ctx.createGain();

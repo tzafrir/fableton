@@ -42,6 +42,11 @@ export function isBlackKeyPitch(pitch: number): boolean {
 /** Width of the key-name gutter drawn down the left of the note grid. */
 export const KEY_GUTTER_WIDTH_PX = 34;
 
+/** ...and its width when the rows carry DEVICE names instead of pitches
+ *  ("Open Hat" needs more room than "F#3"). The roll swaps between the two
+ *  as the open clip's instrument changes; see `PianoRollView.setPitchNames`. */
+export const NAMED_GUTTER_WIDTH_PX = 78;
+
 /** Below this row height a per-row label cannot be read, so only the C of
  *  each octave is labelled — enough to keep your bearings when zoomed out. */
 export const KEY_LABEL_MIN_ROW_PX = 9;

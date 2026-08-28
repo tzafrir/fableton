@@ -11,7 +11,7 @@
 
 import type { ClipId, NoteId } from "../../types/ids";
 import type { DocumentStore, ProjectCommands } from "../../types/commands";
-import type { AuditionSink, SelectionModel, ToolMode } from "../../types/editor";
+import type { AuditionSink, PitchNames, SelectionModel, ToolMode } from "../../types/editor";
 import type { TickIndex } from "../../types/render";
 import type { Ticks } from "../../types/time";
 import type { Grid, Viewport } from "../../types/viewport";
@@ -34,6 +34,13 @@ export interface PianoRollContext {
   tool: ToolMode;
   /** SS10: "audition on pitch change"; `null` in tests that do not care. */
   audition: AuditionSink | null;
+  /**
+   * MIDI note -> what it is, for a drum-style instrument; `null` for a
+   * chromatic one. Ephemeral like `tool` — it describes the DEVICE the clip
+   * is played through, never the clip, so it is not document data and the
+   * shell pushes it in.
+   */
+  pitchNames: PitchNames | null;
 
   /** The clip's notes, already sorted by `(start, pitch)` (invariant 4). */
   notes(): readonly RONote[];
@@ -76,6 +83,7 @@ export interface PianoRollContextOptions {
   clipId?: ClipId | null | undefined;
   tool?: ToolMode | undefined;
   audition?: AuditionSink | null | undefined;
+  pitchNames?: PitchNames | null | undefined;
   onSeek?: ((tick: Ticks) => void) | undefined;
   invalidateOverlay?: (() => void) | undefined;
   invalidateContent?: (() => void) | undefined;
@@ -107,6 +115,7 @@ export function createPianoRollContext(
     clipId: options.clipId ?? null,
     tool: options.tool ?? "select",
     audition: options.audition ?? null,
+    pitchNames: options.pitchNames ?? null,
 
     notes(): readonly RONote[] {
       const id = ctx.clipId;

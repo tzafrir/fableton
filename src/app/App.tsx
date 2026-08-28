@@ -47,9 +47,19 @@ import { createProjectEngine, type AppProjectEngine } from "./engine";
 import { createUndoRedoHandler, isEditableTarget } from "./keyboard";
 import { createAppShortcutHandler } from "./shortcuts";
 import type { KitArrangementView } from "../editor/arrangement";
-import { ArrangementPanel, AutomationPanel, DeviceChainPanel, MixerPanel, PianoRollPanel, ShortcutsOverlay, Toolbar } from "./panels";
+import {
+  ArrangementPanel,
+  AutomationPanel,
+  DeviceChainPanel,
+  MixerPanel,
+  PianoRollPanel,
+  ScopePanel,
+  ShortcutsOverlay,
+  Toolbar,
+} from "./panels";
 import type { LaneFocusRequest } from "./panels";
 import { bootstrapProject, type BootstrapResult } from "./persistence";
+import { pitchNamesForClip } from "./pitchNames";
 
 export interface AppProps {
   /** Called once the engine is mounted (e2e bridge only — see `src/main.tsx`);
@@ -84,6 +94,7 @@ const BOTTOM_TABS = [
   { id: "pianoroll", label: "Piano Roll" },
   { id: "mixer", label: "Mixer" },
   { id: "automation", label: "Automation" },
+  { id: "scope", label: "Scope" },
 ] as const;
 
 export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
@@ -113,7 +124,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   const [openClipId, setOpenClipId] = useState<ClipId | null>(null);
   const [tool, setTool] = useState<ToolMode>("select");
   // SS18-M2: the bottom pane tabs between the piano roll and the mixer.
-  const [bottomTab, setBottomTab] = useState<"pianoroll" | "mixer" | "automation">("pianoroll");
+  const [bottomTab, setBottomTab] = useState<(typeof BOTTOM_TABS)[number]["id"]>("pianoroll");
   const [selectedChannelId, setSelectedChannelId] = useState<ChannelId | null>(null);
   // SS4 transport pill: lights while any param is overridden (SS11).
   const [hasOverrides, setHasOverrides] = useState(false);
@@ -833,6 +844,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
               commands={projectCommands}
               clipId={openClipId}
               tool={tool}
+              pitchNames={pitchNamesForClip(snapshot, openClipId)}
               grid={gridSettings}
               onSeek={handleSeek}
               audition={auditionProxyRef.current}
@@ -851,6 +863,17 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
               />
             </div>
           )}
+          {/* Kept MOUNTED like the piano roll, and for the same reason: the
+              level history is ten seconds of state that would be thrown away
+              by an unmount. It stops painting when hidden — see `active`. */}
+          <div className="fbl-tab-panel" style={{ display: bottomTab === "scope" ? "block" : "none" }}>
+            <ScopePanel
+              engine={engine}
+              doc={snapshot}
+              channelId={selectedChannelId}
+              active={bottomTab === "scope"}
+            />
+          </div>
           {bottomTab === "mixer" && (
             <div className="fbl-split">
               <div>

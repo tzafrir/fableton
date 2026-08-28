@@ -44,6 +44,7 @@ test("the whole device library is reachable from the menus", async ({ page }) =>
     "FM Synth",
     "Kick",
     "Drum Machine",
+    "Noise",
   ]);
 });
 

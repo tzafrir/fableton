@@ -97,6 +97,14 @@ export interface DeviceReadoutSpec {
   max: number;
 }
 
+/** One named MIDI note of an instrument that is not played chromatically. */
+export interface DeviceNoteName {
+  /** MIDI note number, 0-127. */
+  note: number;
+  /** What it is — `"Kick"`, `"Open Hat"`. Shown in the piano roll's strip. */
+  label: string;
+}
+
 /** SS5: device panels declare rows of `{ paramId, control? }`. */
 export type ControlKind =
   | "knob"
@@ -148,6 +156,16 @@ export interface DeviceDefinition {
   /** Live readouts this device publishes; the panel renders one meter each.
    *  A definition that declares these must implement `readValue`. */
   readouts?: readonly DeviceReadoutSpec[] | undefined;
+  /**
+   * For an instrument whose notes are not PITCHES: what each MIDI note is.
+   *
+   * A drum machine's C1 is not a low C, it is the kick — and a piano roll
+   * that labels it "C1" is asking the user to memorise a mapping the device
+   * already knows. An instrument that declares this gets its own names down
+   * the roll's key strip, and the rows it does not name are drawn as the
+   * dead space they are. Anything that plays chromatically simply omits it.
+   */
+  noteNames?: readonly DeviceNoteName[] | undefined;
   /**
    * One-time async setup per context, awaited by the harness before the
    * first `create` on that context — this is where a worklet-backed device
