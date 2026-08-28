@@ -39,7 +39,7 @@ export type DeviceKind = "instrument" | "audioEffect" | "midiEffect";
  * looks it up by this id, exactly as it looks a `ControlKind` up. The list
  * grows only when a component to match it is written.
  */
-export type DeviceEditorId = "eq8" | "operator";
+export type DeviceEditorId = "eq8" | "operator" | "wavetable";
 
 /**
  * One audio port on a device. `id` is device-local (`'in'`, `'out'`, `'sc'`).

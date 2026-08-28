@@ -50,6 +50,10 @@ export interface KnobProps {
   handle: ParamHandle;
   size?: number | undefined;
   label?: string | undefined;
+  /** Show the VALUE on the line instead of the name, without hovering — for
+   *  a knob whose name is already obvious from where it sits (a matrix cell
+   *  under its own row and column headers) and whose number is not. */
+  labelShowsValue?: boolean | undefined;
   testId?: string | undefined;
   onShowAutomation?: (() => void) | undefined;
   hasAutomation?: boolean | undefined;
@@ -59,6 +63,7 @@ export function Knob({
   handle,
   size = 38,
   label,
+  labelShowsValue,
   testId,
   onShowAutomation,
   hasAutomation,
@@ -82,6 +87,7 @@ export function Knob({
       // click-to-type target, and it swaps to the value on hover, which is
       // the only way a knob ever showed its number without being dragged.
       label={label ?? desc.label}
+      labelShowsValue={labelShowsValue}
       labelMaxWidth={size + 22}
     >
       {(value, _dragging, state) => {

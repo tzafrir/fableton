@@ -41,6 +41,7 @@ import type {
 import { EnumSelect, Knob, ToggleLED, controlKindFor } from "../../ui/controls";
 import { Eq8Editor } from "./devices/Eq8Editor";
 import { OperatorEditor } from "./devices/OperatorEditor";
+import { WavetableEditor } from "./devices/WavetableEditor";
 import { useDispatchHint } from "./useDispatchHint";
 
 export interface DeviceChainPanelProps {
@@ -582,6 +583,16 @@ function DevicePanel({
       )}
 
       {/* Param rows (SS5): registry handles exist only once audio is up. */}
+      {def?.editor === "wavetable" && (
+        <WavetableEditor
+          doc={doc}
+          engine={engine}
+          channelId={channelId}
+          deviceId={deviceId}
+          onShowAutomation={onShowAutomation}
+        />
+      )}
+
       {def?.editor === undefined &&
         panel.rows.map((row, i) => (
           <div key={i} className="fbl-param-row">

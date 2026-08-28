@@ -38,6 +38,32 @@ export { Pluck } from "./pluck";
 export { Reverb } from "./reverb";
 export { Saturator } from "./saturator";
 export { StereoDelay } from "./stereoDelay";
+export { WavetableSynth } from "./wavetable";
+export {
+  WAVETABLES,
+  WAVETABLE_LABELS,
+  FRAME_COUNT,
+  buildWavetable,
+  wavetableAt,
+} from "./wavetable/tables";
+export { framesForDisplay, readFrame, sampleFrames } from "./wavetable/oscillator";
+export { FILTER_TYPES, FILTER_ROUTINGS, filterMagnitude } from "./wavetable/svf";
+export { LFO_SHAPES } from "./wavetable/lfo";
+export {
+  MOD_SOURCES,
+  MOD_TARGETS,
+  MOD_PARAM_IDS,
+  modParamId,
+  modParamLabel,
+} from "./wavetable/matrix";
+export {
+  ENV_NAMES,
+  OSC_NAMES,
+  envParamIds,
+  filterParamIds,
+  lfoParamIds,
+  oscParamIds,
+} from "./wavetable/params";
 
 import { Arpeggiator } from "./arpeggiator";
 import { Compressor } from "./compressor";
@@ -56,6 +82,7 @@ import { Sampler } from "./sampler";
 import { Reverb } from "./reverb";
 import { Saturator } from "./saturator";
 import { StereoDelay } from "./stereoDelay";
+import { WavetableSynth } from "./wavetable";
 
 /** Every `DeviceDefinition` this package ships, in registration order —
  *  M0's two plus the SS18-M4 library (compressor with SC, EQ, delay,
@@ -65,6 +92,7 @@ export const CORE_DEVICES = [
   PolySynth,
   Pluck,
   FmSynth,
+  WavetableSynth,
   Kick,
   DrumMachine,
   Noise,

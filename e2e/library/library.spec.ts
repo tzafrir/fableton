@@ -43,6 +43,7 @@ test("the whole device library is reachable from the menus", async ({ page }) =>
     "Poly Synth",
     "Pluck",
     "Operator",
+    "Wavetable",
     "Kick",
     "Drum Machine",
     "Noise",
@@ -208,7 +209,7 @@ test("Export WAV renders the document offline into a real, non-silent RIFF file"
 // The instruments and effects added for song-writing. Each is driven through
 // the real UI and has to actually MAKE SOUND — a device that registers its
 // params but produces silence would pass every structural check.
-for (const instrument of ["Operator", "Kick", "Drum Machine"]) {
+for (const instrument of ["Operator", "Wavetable", "Kick", "Drum Machine"]) {
   test(`${instrument} plays the arrangement's clip`, async ({ page }) => {
     await bootAndOpenMixer(page);
     const trackId = await firstTrackId(page);
