@@ -1398,6 +1398,22 @@ select.fbl-field--sm {
 .fbl-control:hover .fbl-control-label {
   color: var(--fbl-text-dim);
 }
+/* The line is the click-to-type target, so it says so on approach. */
+.fbl-control-label {
+  cursor: text;
+}
+.fbl-control-label:hover {
+  color: var(--fbl-text);
+  text-decoration: underline dotted var(--fbl-line-strong);
+  text-underline-offset: 2px;
+}
+/* Showing the number rather than the name: mono and tabular, so a value that
+   changes under the pointer does not also change width. */
+.fbl-control-label[data-showing="value"] {
+  font-family: var(--fbl-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--fbl-text);
+}
 
 /* The value follows the knob while you drag it, in the mono face — a number
    that changes should not also change width. */

@@ -23,13 +23,21 @@ export interface FaderProps {
   slim?: boolean | undefined;
   testId?: string | undefined;
   onShowAutomation?: (() => void) | undefined;
+  hasAutomation?: boolean | undefined;
 }
 
 function snapToDetent(value: number): number {
   return Math.abs(value - FADER_DETENT_DB) <= FADER_DETENT_SNAP_DB ? FADER_DETENT_DB : value;
 }
 
-export function Fader({ handle, height = 96, slim = false, testId, onShowAutomation }: FaderProps) {
+export function Fader({
+  handle,
+  height = 96,
+  slim = false,
+  testId,
+  onShowAutomation,
+  hasAutomation,
+}: FaderProps) {
   const desc = handle.desc;
   const capW = slim ? 12 : 20;
   const capH = slim ? 8 : 11;
@@ -43,7 +51,15 @@ export function Fader({ handle, height = 96, slim = false, testId, onShowAutomat
       testId={testId}
       snapDragValue={snapToDetent}
       onShowAutomation={onShowAutomation}
+      hasAutomation={hasAutomation}
       title={desc.label}
+      // A fader's label is its number: "Volume" under the volume fader says
+      // nothing the strip has not already said, and the dB it is sitting at
+      // was previously unreadable without grabbing it. Same line, same
+      // click-to-type — it just never swaps away from the value.
+      label={desc.label}
+      labelShowsValue
+      labelMaxWidth={slim ? 34 : 48}
     >
       {(value, _dragging, state) => {
         const n = toNormalized(desc, value);

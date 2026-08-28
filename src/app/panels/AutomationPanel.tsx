@@ -210,7 +210,7 @@ export function AutomationPanel({
           <span className="fbl-empty" style={{ padding: "18px 6px", height: "auto" }}>
             <strong>No automation lanes</strong>
             <span>
-              Right-click any knob or fader and choose <em>Show automation lane</em>.
+              Right-click any knob or fader and choose <em>Add automation lane</em>.
             </span>
           </span>
         )}

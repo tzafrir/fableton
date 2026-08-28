@@ -309,13 +309,110 @@ describe("right-click menu (SS5)", () => {
     });
     const labels = [...container.querySelectorAll('[role="menuitem"]')].map((n) => n.textContent);
     expect(labels).toEqual(["Type value…", "Reset", "Copy param path"]);
+  });
 
+  // Reaching automation is what a right-click on a param is FOR, so it goes
+  // first — under the pointer the moment the menu opens, rather than third.
+  it("puts the automation lane at the TOP when it is wired", () => {
     const onShowAutomation = vi.fn();
     mount(<Knob handle={handle} testId="ctl" onShowAutomation={onShowAutomation} />);
     act(() => {
       control().dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     });
     const withLane = [...container.querySelectorAll('[role="menuitem"]')].map((n) => n.textContent);
-    expect(withLane).toContain("Show automation lane");
+    expect(withLane[0]).toBe("Add automation lane");
+
+    act(() => {
+      (container.querySelector('[data-testid="ctl-menu-automation"]') as HTMLElement).click();
+    });
+    expect(onShowAutomation).toHaveBeenCalledTimes(1);
+  });
+
+  // "Add" and "Show" are different promises, and a menu that says the wrong
+  // one is worse than a menu that says neither.
+  it("says Show once the lane exists", () => {
+    mount(<Knob handle={handle} testId="ctl" onShowAutomation={vi.fn()} hasAutomation />);
+    act(() => {
+      control().dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    });
+    const labels = [...container.querySelectorAll('[role="menuitem"]')].map((n) => n.textContent);
+    expect(labels[0]).toBe("Show automation lane");
+  });
+});
+
+// The three mouse verbs, each on its own gesture. Double-click used to open
+// the text field, which spent the most reachable gesture on the rarest verb
+// and left "put it back" on an undiscoverable Alt+click.
+describe("the value line and the three verbs", () => {
+  const label = (): HTMLElement =>
+    container.querySelector('[data-testid="ctl-label"]') as HTMLElement;
+
+  it("double-click on the face resets to the default, in ONE commit", () => {
+    act(() => {
+      handle.setLive(80, "user");
+      handle.commit();
+    });
+    commits.length = 0;
+    flushFrames();
+    expect(handle.base()).toBe(80);
+
+    act(() => {
+      control().dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    });
+    flushFrames();
+    expect(handle.base()).toBe(handle.desc.defaultValue);
+    expect(commits).toHaveLength(1);
+    // And it did NOT open the text field on its way past.
+    expect(container.querySelector('[data-testid="ctl-entry"]')).toBeNull();
+  });
+
+  it("a click on the value line opens numeric entry", () => {
+    act(() => {
+      label().dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    const input = container.querySelector<HTMLInputElement>('[data-testid="ctl-entry"]');
+    expect(input).not.toBeNull();
+
+    act(() => {
+      if (input !== null) setInputValue(input, "33");
+    });
+    key("keydown", { key: "Enter" }, input ?? window);
+    expect(handle.base()).toBeCloseTo(33, 10);
+  });
+
+  it("shows the name at rest and the VALUE under the pointer", () => {
+    expect(label().dataset["showing"]).toBe("label");
+    expect(label().textContent).toBe(handle.desc.label);
+
+    // React synthesises onPointerEnter/Leave from pointerover/pointerout, and
+    // jsdom has no `PointerEvent` constructor — a MouseEvent of that type is
+    // what the rest of this file already dispatches.
+    act(() => {
+      control().dispatchEvent(
+        new MouseEvent("pointerover", { bubbles: true, relatedTarget: document.body }),
+      );
+    });
+    expect(label().dataset["showing"]).toBe("value");
+    expect(label().textContent).toBe(handle.desc.toText(handle.live()));
+
+    act(() => {
+      control().dispatchEvent(
+        new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+      );
+    });
+    expect(label().dataset["showing"]).toBe("label");
+  });
+
+  // The line sits ON the drag surface. A press that reached the face would
+  // arm a drag, so every attempt to click the number would nudge the value.
+  it("a press on the line does not start a drag", () => {
+    const before = handle.live();
+    act(() => {
+      label().dispatchEvent(
+        new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, clientY: 200 }),
+      );
+    });
+    pointer("pointermove", { clientY: 120 });
+    expect(handle.live()).toBe(before);
   });
 });

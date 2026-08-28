@@ -69,15 +69,14 @@ test("a PRE-fader send keeps feeding the return with the channel fader at -inf",
   await expect(page.getByTestId("audio-status")).toHaveText(/^ready/, { timeout: 10_000 });
 
   await page.getByTestId(`add-send-${trackId}-${returnId}`).click();
-  // Open the send fully (its default is silence) via the knob's text entry.
-  const sendKnob = page.getByTestId(`send-${trackId}-${returnId}`);
-  await sendKnob.dblclick();
+  // Open the send fully (its default is silence) via the knob's text entry —
+  // reached by clicking the VALUE LINE under it (double-click is reset).
+  await page.getByTestId(`send-${trackId}-${returnId}-label`).click();
   await page.getByTestId(`send-${trackId}-${returnId}-entry`).fill("0 dB");
   await page.getByTestId(`send-${trackId}-${returnId}-entry`).press("Enter");
 
   // Pull the channel fader to silence.
-  const vol = page.getByTestId(`vol-${trackId}`);
-  await vol.dblclick();
+  await page.getByTestId(`vol-${trackId}-label`).click();
   await page.getByTestId(`vol-${trackId}-entry`).fill("-60 dB");
   await page.getByTestId(`vol-${trackId}-entry`).press("Enter");
 
@@ -118,7 +117,7 @@ test("Phase 0: a device may key its own channel from preFx, but not from a downs
     (await page.locator('[data-testid^="strip-"][data-role="track"]').first().getAttribute("data-testid")) ?? ""
   ).replace("strip-", "");
 
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   await page.getByTestId("add-effect-select").selectOption({ label: "Compressor" });
 
   const scSource = page.locator('[data-testid^="sc-source-"]');
@@ -143,7 +142,9 @@ test("Phase 0: a device may key its own channel from preFx, but not from a downs
   // A cross-channel key gets the full set. It has to be a SIBLING track:
   // keying from the master would be a real cycle (this track feeds it), and
   // the SS6 check rightly rejects that — which is the rule Phase 0 narrowed,
-  // not removed.
+  // not removed. The mixer is where tracks are added, and it is a separate
+  // tab from the device chain now.
+  await page.getByTestId("tab-mixer").click();
   await page.getByTestId("add-track-button").click();
   const sibling = (
     (await page
@@ -153,7 +154,7 @@ test("Phase 0: a device may key its own channel from preFx, but not from a downs
   ).replace("strip-", "");
   expect(sibling).not.toBe(trackId);
 
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   await page.locator('[data-testid^="sc-source-"]').selectOption(sibling);
   await expect(page.locator('[data-testid^="sc-tap-"]').locator('option[value="postFader"]')).toBeEnabled();
 });

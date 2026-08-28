@@ -410,7 +410,7 @@ describe("App (SS18-M1 app shell)", () => {
   // SS5's control context menu row, end to end: it is the only path from a
   // knob to "automate THIS", and until the shell handed the controls an
   // `onShowAutomation` it did not render at all.
-  it("'Show automation lane' on a mixer fader creates the lane and reveals it (SS5/SS11)", async () => {
+  it("'Add automation lane' on a mixer fader creates the lane and reveals it (SS5/SS11)", async () => {
     let store: DocumentStore | undefined;
     await act(async () => {
       root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
@@ -443,7 +443,7 @@ describe("App (SS18-M1 app shell)", () => {
       fader.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
     });
     const row = [...container.querySelectorAll("button")].find(
-      (b) => b.textContent === "Show automation lane",
+      (b) => b.textContent === "Add automation lane",
     );
     expect(row, "SS5's context menu must offer the automation row").toBeDefined();
 

@@ -52,9 +52,17 @@ export interface KnobProps {
   label?: string | undefined;
   testId?: string | undefined;
   onShowAutomation?: (() => void) | undefined;
+  hasAutomation?: boolean | undefined;
 }
 
-export function Knob({ handle, size = 38, label, testId, onShowAutomation }: KnobProps) {
+export function Knob({
+  handle,
+  size = 38,
+  label,
+  testId,
+  onShowAutomation,
+  hasAutomation,
+}: KnobProps) {
   const desc = handle.desc;
   const cx = size / 2;
   const cy = size / 2;
@@ -64,7 +72,18 @@ export function Knob({ handle, size = 38, label, testId, onShowAutomation }: Kno
   const capR = r - 4.5;
 
   return (
-    <ParamControl handle={handle} testId={testId} onShowAutomation={onShowAutomation} title={desc.label}>
+    <ParamControl
+      handle={handle}
+      testId={testId}
+      onShowAutomation={onShowAutomation}
+      hasAutomation={hasAutomation}
+      title={desc.label}
+      // The line under the knob is `ParamControl`'s now: it is the
+      // click-to-type target, and it swaps to the value on hover, which is
+      // the only way a knob ever showed its number without being dragged.
+      label={label ?? desc.label}
+      labelMaxWidth={size + 22}
+    >
       {(value, _dragging, state) => {
         const overridden = state === "overridden";
         const n = toNormalized(desc, value);
@@ -128,9 +147,6 @@ export function Knob({ handle, size = 38, label, testId, onShowAutomation }: Kno
               />
               {showGhost && <circle cx={ghost.x} cy={ghost.y} r={2} fill={GHOST_COLOR} />}
             </svg>
-            <span className="fbl-control-label" style={{ maxWidth: size + 22 }}>
-              {label ?? desc.label}
-            </span>
           </>
         );
       }}

@@ -1,10 +1,23 @@
 // SS5 — the shared DOM shell every control renders inside.
 //
 // One component owns the ENTIRE gesture surface (pointer capture, cursor
-// hiding, the floating readout, double-click text entry, wheel, keyboard,
-// Alt-click reset, Esc revert, the right-click menu), delegating the value
-// math to ./gesture.ts. Knob/Fader/etc. only draw — which is exactly how
-// "the little things become a conformance table instead of folklore".
+// hiding, the floating readout, the value line, wheel, keyboard, reset, Esc
+// revert, the right-click menu), delegating the value math to ./gesture.ts.
+// Knob/Fader/etc. only draw — which is exactly how "the little things become
+// a conformance table instead of folklore".
+//
+// The three mouse verbs are one each, and none of them overlaps another:
+//
+//   double-click on the face   ->  reset to default
+//   click the value line       ->  type a value
+//   right-click                ->  menu, automation lane first
+//
+// Text entry used to live on the double-click, which made "put this back"
+// the awkward one (Alt+click, undiscoverable) and spent the most obvious
+// gesture on the rarest verb. The value line pays for itself twice over: it
+// is the type-a-number target AND it is where a knob finally shows its value
+// without being dragged — hover any control and the label swaps to the
+// number, which is how every DAW mixer reads.
 //
 // Controls are DOM/SVG, not canvas (SS5: "a few dozen live controls don't
 // need canvas"). Accessibility per the spec: tabbable, `role="slider"`,
@@ -36,9 +49,21 @@ export interface ParamControlProps {
   /** Extra class for styling hooks. */
   className?: string | undefined;
   testId?: string | undefined;
+  /** Text for the line under the control — omit it and no line is drawn.
+   *  Whatever it says, the line is the click-to-type target, and it swaps to
+   *  the formatted value while the pointer is over the control. */
+  label?: string | undefined;
+  /** Show the VALUE on that line at all times, not only on hover. What a
+   *  mixer fader wants: the number IS the label there. */
+  labelShowsValue?: boolean | undefined;
+  labelMaxWidth?: number | undefined;
   /** SS5 context-menu "Show/create automation lane" — wired by M3; the menu
-   *  entry renders whenever this is present. */
+   *  entry renders whenever this is present, and it is the FIRST entry
+   *  because reaching automation is what a right-click on a param is for. */
   onShowAutomation?: (() => void) | undefined;
+  /** Whether the lane already exists, so the menu can say `Show` rather than
+   *  `Add`. Unknown (undefined) reads as "not yet". */
+  hasAutomation?: boolean | undefined;
   title?: string | undefined;
 }
 
@@ -95,7 +120,11 @@ export function ParamControl({
   snapDragValue,
   className,
   testId,
+  label,
+  labelShowsValue,
+  labelMaxWidth,
   onShowAutomation,
+  hasAutomation,
   title,
 }: ParamControlProps) {
   const { value, state } = useParamDisplay(handle);
@@ -104,6 +133,7 @@ export function ParamControl({
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [hovered, setHovered] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -168,11 +198,22 @@ export function ParamControl({
     setDragging(false);
   }, [gesture]);
 
-  const onDoubleClick = useCallback((): void => {
-    // SS5: inline numeric entry parsed by `fromText`.
+  /** Open the inline numeric entry, parsed back by `fromText`. Reached from
+   *  the value line, from `Enter`, and from the menu — never from a gesture
+   *  on the face, which now belongs to reset. */
+  const beginEdit = useCallback((): void => {
     setEditText(handle.desc.toText(handle.live()));
     setEditing(true);
   }, [handle]);
+
+  // Double-click on the face resets to the default. It is the gesture people
+  // TRY first (it is what a fader does in every DAW, and what the app's own
+  // splitter does), and until now it opened a text field instead — so the
+  // one thing a mis-dragged knob needs was the one thing hidden behind a
+  // modifier. Alt+click still resets too; nothing was taken away.
+  const onDoubleClick = useCallback((): void => {
+    gesture.reset();
+  }, [gesture]);
 
   // SS5 says "wheel events consumed only while hovering the control proper".
   // Hover alone turned out to be too generous a claim on the wheel: a device
@@ -238,7 +279,7 @@ export function ParamControl({
           gesture.reset();
           break;
         case "Enter":
-          onDoubleClick();
+          beginEdit();
           break;
         default:
           return;
@@ -246,7 +287,7 @@ export function ParamControl({
       e.preventDefault();
       e.stopPropagation();
     },
-    [editing, gesture, onDoubleClick],
+    [beginEdit, editing, gesture],
   );
 
   const onContextMenu = useCallback((e: React.MouseEvent): void => {
@@ -284,11 +325,42 @@ export function ParamControl({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
       onDoubleClick={onDoubleClick}
       onKeyDown={onKeyDown}
       onContextMenu={onContextMenu}
     >
       {children(value, dragging, state)}
+
+      {label !== undefined && (
+        // The value line. Not a <button>: this sits inside `role="slider"`,
+        // where a second focusable child would be announced as its own
+        // control and would steal the Tab stop the slider needs. The verbs it
+        // carries are all reachable from the keyboard on the slider itself
+        // (`Enter` types, `Delete` resets), so it is chrome for the mouse.
+        <span
+          className="fbl-control-label"
+          data-testid={testId !== undefined ? `${testId}-label` : undefined}
+          data-showing={labelShowsValue === true || hovered || dragging ? "value" : "label"}
+          aria-hidden="true"
+          title="Click to type a value"
+          style={labelMaxWidth === undefined ? undefined : { maxWidth: labelMaxWidth }}
+          // The face below is a drag surface; a press on the line must not
+          // start one, or every attempt to click it would nudge the value.
+          onPointerDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            rootRef.current?.focus();
+            beginEdit();
+          }}
+        >
+          {labelShowsValue === true || hovered || dragging
+            ? handle.desc.toText(value)
+            : label}
+        </span>
+      )}
 
       {dragging && (
         // SS5: floating readout follows the control showing toText(live()).
@@ -333,11 +405,21 @@ export function ParamControl({
             role="menu"
             style={{ left: menu.x, top: menu.y }}
           >
+            {onShowAutomation !== undefined && (
+              <MenuItem
+                label={hasAutomation === true ? "Show automation lane" : "Add automation lane"}
+                testId={testId !== undefined ? `${testId}-menu-automation` : undefined}
+                onPick={() => {
+                  setMenu(null);
+                  onShowAutomation();
+                }}
+              />
+            )}
             <MenuItem
               label="Type value…"
               onPick={() => {
                 setMenu(null);
-                onDoubleClick();
+                beginEdit();
               }}
             />
             <MenuItem
@@ -347,15 +429,6 @@ export function ParamControl({
                 gesture.reset();
               }}
             />
-            {onShowAutomation !== undefined && (
-              <MenuItem
-                label="Show automation lane"
-                onPick={() => {
-                  setMenu(null);
-                  onShowAutomation();
-                }}
-              />
-            )}
             <MenuItem label="Copy param path" onPick={copyParamPath} />
           </div>
         </>
@@ -364,12 +437,21 @@ export function ParamControl({
   );
 }
 
-function MenuItem({ label, onPick }: { label: string; onPick: () => void }) {
+function MenuItem({
+  label,
+  onPick,
+  testId,
+}: {
+  label: string;
+  onPick: () => void;
+  testId?: string | undefined;
+}) {
   return (
     <button
       type="button"
       role="menuitem"
       className="fbl-menu-item"
+      data-testid={testId}
       onClick={onPick}
     >
       {label}
