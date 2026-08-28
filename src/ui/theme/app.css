@@ -584,19 +584,6 @@ select.fbl-field--sm {
   min-height: 0;
 }
 
-.fbl-split {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-.fbl-split > * {
-  flex: 1;
-  min-width: 0;
-}
-.fbl-split > * + * {
-  border-left: 1px solid var(--fbl-line);
-}
-
 /* A panel's own header strip: verbs on the left, hint on the right. */
 .fbl-pane-head {
   display: flex;
@@ -849,13 +836,77 @@ select.fbl-field--sm {
 
 /* --- device chain ----------------------------------------------------- */
 
+/* The Devices view: a channel bar that stays put, and the chain scrolling
+   under it. Its own column because the chain scrolls in BOTH axes now that
+   it has the whole window width and devices bring their own editors. */
+.fbl-devices-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--fbl-panel);
+}
+
+.fbl-channel-bar {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.fbl-channel-chip {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fbl-text-dim);
+  background: var(--fbl-well);
+  border: 1px solid var(--fbl-line);
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fbl-channel-chip:hover {
+  color: var(--fbl-text);
+  border-color: var(--fbl-line-strong);
+}
+.fbl-channel-chip[aria-pressed="true"] {
+  color: #05070b;
+  background: var(--fbl-aqua);
+  border-color: var(--fbl-aqua);
+}
+.fbl-channel-chip[data-role="master"] {
+  font-weight: 600;
+}
+
+/* The strip's link to its chain — a readout AND a button, so a mixer strip
+   says how much is on it before you go looking. */
+.fbl-strip-devices {
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--fbl-text-dim);
+  background: var(--fbl-well);
+  border: 1px solid var(--fbl-line);
+  border-radius: var(--fbl-r1);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fbl-strip-devices:hover {
+  color: var(--fbl-text);
+  border-color: var(--fbl-aqua-dim);
+}
+.fbl-strip-devices[data-empty="true"] {
+  color: var(--fbl-text-faint);
+}
+
 .fbl-device-chain {
   display: flex;
   gap: 10px;
   padding: 10px;
-  overflow-x: auto;
+  overflow: auto;
   align-items: flex-start;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   box-sizing: border-box;
   background:
     radial-gradient(120% 100% at 0% 0%, rgba(53, 208, 200, 0.045) 0%, transparent 55%),

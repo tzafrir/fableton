@@ -196,7 +196,7 @@ test("disabling the lane frees the param; deleting the device keeps the lane gre
   // Swap the instrument away and back off the mixer's chain panel: the lane
   // survives (SS7 "kept, greyed, re-bindable"), shown greyed with a re-bind
   // select once its param id no longer matches a live handle.
-  await page.getByTestId("tab-mixer").click();
+  await page.getByTestId("tab-devices").click();
   const instrument = page.getByTestId("instrument-select");
   await expect(instrument).toBeVisible();
   // The only instrument definition is the poly synth; swapping to ITSELF

@@ -10,11 +10,14 @@
 
 import { expect, test, type Page } from "@playwright/test";
 
+/** Select the first track AND open its chain. The mixer and the Devices view
+ *  are separate full-width tabs; the strip's device button crosses between
+ *  them, which is the path a user actually takes. */
 async function selectTrack(page: Page): Promise<string> {
   await page.getByTestId("tab-mixer").click();
   const strip = page.locator('[data-testid^="strip-"][data-role="track"]').first();
   const trackId = ((await strip.getAttribute("data-testid")) ?? "").replace("strip-", "");
-  await strip.click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   return trackId;
 }
 

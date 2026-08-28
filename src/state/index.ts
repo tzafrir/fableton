@@ -45,6 +45,7 @@ export { createIdFactory, createSequentialIdFactory, defaultIdFactory } from "./
 export type { IdFactoryOptions } from "./ids";
 
 export {
+  automatedParamIds,
   channelAtRow,
   channelsInOrder,
   clipsForEngine,

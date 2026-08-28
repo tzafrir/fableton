@@ -28,7 +28,9 @@ test.describe("@design", () => {
     await page.getByTestId("mixer-panel").screenshot({ path: ".playwright/design/03b-mixer-only.png" });
 
     // A channel with a real chain: instrument + three effects + a rack.
-    await page.getByTestId("strip-name-" + (await firstTrackId(page))).click();
+    // The Devices view is its own full-width tab now; the strip's device
+    // button is the bridge across.
+    await page.getByTestId("strip-devices-" + (await firstTrackId(page))).click();
     for (const id of ["core.filter", "core.stereo-delay", "core.reverb"]) {
       await page.getByTestId("add-effect-select").selectOption(id);
     }

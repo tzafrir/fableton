@@ -125,7 +125,7 @@ test("device chain: add the Filter, tweak nothing, disable it, remove it", async
   await openMixer(page);
   await bootAudio(page);
   const trackId = await firstTrackId(page);
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
 
   await page.getByTestId("add-effect-select").selectOption({ label: "Filter" });
   const device = page.locator('[data-testid^="device-device"], [data-testid^="device-"][data-testid*="dev"]').last();

@@ -96,9 +96,19 @@ function defaultBottomHeight(): number {
   return Math.max(240, Math.min(520, Math.round(viewport / 3)));
 }
 
+// Mixer and Devices are SEPARATE tabs, not two halves of one.
+//
+// They used to share the bottom pane down a vertical split, which gave each
+// of them half a window that was already only a third of the screen. Neither
+// wants that shape: a mixer is as wide as the song has channels, and a device
+// chain is as wide as its devices — and once devices started bringing their
+// own editors (the EQ's curve, the FM synth's operator matrix) half a pane
+// stopped being enough to draw one card, let alone a chain of them. Full
+// width each, with the strip's device button as the bridge between them.
 const BOTTOM_TABS = [
   { id: "pianoroll", label: "Piano Roll" },
   { id: "mixer", label: "Mixer" },
+  { id: "devices", label: "Devices" },
   { id: "automation", label: "Automation" },
   { id: "scope", label: "Scope" },
 ] as const;
@@ -228,6 +238,12 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     octave: DEFAULT_OCTAVE,
     velocity: DEFAULT_VELOCITY,
   });
+  /** A mixer strip's device button: select the channel and show its chain. */
+  const openDevices = useCallback((channelId: ChannelId) => {
+    setSelectedChannelId(channelId);
+    setBottomTab("devices");
+  }, []);
+
   const handleShowAutomation = useCallback((paramId: ParamId) => {
     const store = docStateRef.current?.store;
     if (store === undefined) return;
@@ -1051,28 +1067,33 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
               active={bottomTab === "scope"}
             />
           </div>
-          {bottomTab === "mixer" && (
-            <div className="fbl-split">
-              <div>
-                <MixerPanel
-                  store={store}
-                  commands={projectCommands}
-                  engine={engine}
-                  selectedChannelId={selectedChannelId}
-                  onSelectChannel={setSelectedChannelId}
-                  onShowAutomation={handleShowAutomation}
-                />
-              </div>
-              <div style={{ overflow: "auto" }}>
-                <DeviceChainPanel
-                  store={store}
-                  commands={projectCommands}
-                  engine={engine}
-                  channelId={selectedChannelId}
-                  onShowAutomation={handleShowAutomation}
-                  onImportSample={engine === null ? undefined : handleImportSample}
-                />
-              </div>
+          {/* Kept MOUNTED like the piano roll and the scope: the strips carry
+              live meters, and a meter that is unmounted while you work on a
+              device is a meter that has to re-find its level when you come
+              back — and, more to the point, a mixer that cannot tell you
+              whether the effect you are editing is passing signal. */}
+          <div className="fbl-tab-panel" style={{ display: bottomTab === "mixer" ? "block" : "none" }}>
+            <MixerPanel
+              store={store}
+              commands={projectCommands}
+              engine={engine}
+              selectedChannelId={selectedChannelId}
+              onSelectChannel={setSelectedChannelId}
+              onShowAutomation={handleShowAutomation}
+              onOpenDevices={openDevices}
+            />
+          </div>
+          {bottomTab === "devices" && (
+            <div className="fbl-tab-panel" style={{ overflow: "auto" }}>
+              <DeviceChainPanel
+                store={store}
+                commands={projectCommands}
+                engine={engine}
+                channelId={selectedChannelId}
+                onSelectChannel={setSelectedChannelId}
+                onShowAutomation={handleShowAutomation}
+                onImportSample={engine === null ? undefined : handleImportSample}
+              />
             </div>
           )}
         </div>

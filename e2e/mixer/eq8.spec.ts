@@ -29,7 +29,7 @@ async function addEq(page: Page): Promise<{ trackId: string; deviceId: string }>
       .first()
       .getAttribute("data-testid")) ?? ""
   ).replace("strip-", "");
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   await page.getByTestId("add-effect-select").selectOption({ label: "EQ Eight" });
   const card = page.locator('.fbl-device[data-editor="eq8"]');
   await expect(card).toBeVisible();

@@ -136,4 +136,63 @@ describe("MixerPanel", () => {
     expect(select.value).toBe(before);
     params.dispose();
   });
+
+  // The mixer and the device chain are separate full-width views now, so the
+  // strip carries the bridge between them — and, because it has to say
+  // something, it says how much is mounted on the channel.
+  describe("the strip's device button", () => {
+    it("counts what is on the channel and opens it", () => {
+      const { store, commands, track } = project();
+      const opened: string[] = [];
+      const rendered = (): void => {
+        act(() => {
+          root.render(
+            <MixerPanel
+              store={store}
+              commands={commands}
+              engine={null}
+              selectedChannelId={track}
+              onSelectChannel={() => undefined}
+              onOpenDevices={(id) => opened.push(id)}
+            />,
+          );
+        });
+      };
+      rendered();
+
+      const button = (): HTMLButtonElement =>
+        container.querySelector<HTMLButtonElement>(`[data-testid="strip-devices-${track}"]`)!;
+      // A fresh track has its instrument and nothing else.
+      expect(button().textContent).toBe("1 device");
+
+      act(() => {
+        store.dispatch(
+          commands.addEffect(track, { definitionId: "core.filter", version: 1 }),
+        );
+      });
+      rendered();
+      expect(button().textContent).toBe("2 devices");
+
+      act(() => {
+        button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      expect(opened).toEqual([track]);
+    });
+
+    it("is absent where there is no chain view to open", () => {
+      const { store, commands, track } = project();
+      act(() => {
+        root.render(
+          <MixerPanel
+            store={store}
+            commands={commands}
+            engine={null}
+            selectedChannelId={track}
+            onSelectChannel={() => undefined}
+          />,
+        );
+      });
+      expect(container.querySelector(`[data-testid="strip-devices-${track}"]`)).toBeNull();
+    });
+  });
 });

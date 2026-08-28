@@ -19,12 +19,13 @@ async function fullChain(page: Page): Promise<void> {
   await page.goto("/");
   await page.getByRole("button", { name: "New", exact: true }).click();
   await page.getByTestId("tab-mixer").click();
-  // Returns widen the strips too, so the mixer half is at its most cramped.
+  // Four returns, because every strip then carries four send knobs — the
+  // widest a strip gets, and the case the geometry probe below cares about.
   for (let i = 0; i < 4; i++) await page.getByTestId("add-return-button").click();
   const trackId = (
     (await page.locator('[data-testid^="strip-"][data-role="track"]').first().getAttribute("data-testid")) ?? ""
   ).replace("strip-", "");
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   for (const label of CHAIN) await page.getByTestId("add-effect-select").selectOption({ label });
 }
 

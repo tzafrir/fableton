@@ -22,7 +22,7 @@ async function firstTrackId(page: Page): Promise<string> {
 test("the whole device library is reachable from the menus", async ({ page }) => {
   await bootAndOpenMixer(page);
   const trackId = await firstTrackId(page);
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
 
   const effectOptions = page.getByTestId("add-effect-select").locator("option:not([disabled])");
   await expect(effectOptions).toHaveText([
@@ -57,7 +57,7 @@ test("the whole device library is reachable from the menus", async ({ page }) =>
 test("SS7 swap: Poly Synth -> Pluck keeps the clips and still makes sound", async ({ page }) => {
   await bootAndOpenMixer(page);
   const trackId = await firstTrackId(page);
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
 
   await page.getByTestId("instrument-select").selectOption({ label: "Pluck" });
   await expect(page.getByTestId("instrument-select")).toHaveValue("core.pluck");
@@ -104,7 +104,7 @@ test("SS6 Audio From: the compressor's sidechain picker writes a real edge", asy
   ).replace("strip-", "");
   expect(kickId).not.toBe(trackId);
 
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   await page.getByTestId("add-effect-select").selectOption({ label: "Compressor" });
 
   const scSource = page.locator('[data-testid^="sc-source-"]');
@@ -134,7 +134,7 @@ test("presets: a factory preset applies as ONE undo entry; saving offers the cur
 }) => {
   await bootAndOpenMixer(page);
   const trackId = await firstTrackId(page);
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   await page.getByTestId("add-effect-select").selectOption({ label: "Reverb" });
 
   const preset = page.locator('[data-testid^="preset-select-"]').last();
@@ -212,7 +212,7 @@ for (const instrument of ["FM Synth", "Kick", "Drum Machine"]) {
   test(`${instrument} plays the arrangement's clip`, async ({ page }) => {
     await bootAndOpenMixer(page);
     const trackId = await firstTrackId(page);
-    await page.getByTestId(`strip-${trackId}`).click();
+    await page.getByTestId(`strip-devices-${trackId}`).click();
     await page.getByTestId("instrument-select").selectOption({ label: instrument });
 
     // The starter clip is a melodic phrase around C3-C4. The drum machine
@@ -254,7 +254,7 @@ for (const effect of ["Overdrive", "Distortion"]) {
   test(`${effect} passes audio and its controls are live`, async ({ page }) => {
     await bootAndOpenMixer(page);
     const trackId = await firstTrackId(page);
-    await page.getByTestId(`strip-${trackId}`).click();
+    await page.getByTestId(`strip-devices-${trackId}`).click();
     await page.getByTestId("add-effect-select").selectOption({ label: effect });
 
     const device = page.locator(".fbl-device-chain > .fbl-device").first();

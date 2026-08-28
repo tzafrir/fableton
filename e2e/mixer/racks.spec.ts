@@ -10,7 +10,7 @@ async function trackWithRack(page: Page): Promise<{ trackId: string; rackId: str
   const trackId = (
     (await page.locator('[data-testid^="strip-"][data-role="track"]').first().getAttribute("data-testid")) ?? ""
   ).replace("strip-", "");
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   await page.getByTestId("add-rack-button").click();
   const rackId = ((await page.locator('[data-testid^="rack-"].fbl-rack').getAttribute("data-testid")) ?? "").replace(
     "rack-",
@@ -71,7 +71,7 @@ test("grouping an existing effect keeps the same device, and ungroup puts it bac
   const trackId = (
     (await page.locator('[data-testid^="strip-"][data-role="track"]').first().getAttribute("data-testid")) ?? ""
   ).replace("strip-", "");
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   await page.getByTestId("add-effect-select").selectOption({ label: "Reverb" });
 
   const deviceId = (
@@ -98,7 +98,7 @@ test("audio flows through a rack, and a muted chain stops contributing", async (
   const trackId = (
     (await page.locator('[data-testid^="strip-"][data-role="track"]').first().getAttribute("data-testid")) ?? ""
   ).replace("strip-", "");
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   await page.getByTestId("add-rack-button").click();
   const rackId = ((await page.locator(".fbl-rack").getAttribute("data-testid")) ?? "").replace("rack-", "");
   const chainId = (
@@ -136,7 +136,7 @@ test("a macro knob drives a device param inside the rack", async ({ page }) => {
   const trackId = (
     (await page.locator('[data-testid^="strip-"][data-role="track"]').first().getAttribute("data-testid")) ?? ""
   ).replace("strip-", "");
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   await page.getByTestId("add-effect-select").selectOption({ label: "Filter" });
 
   const deviceId = (

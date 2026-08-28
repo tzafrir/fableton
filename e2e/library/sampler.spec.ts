@@ -34,7 +34,7 @@ async function bootAndSelectSampler(page: Page): Promise<string> {
   await page.goto("/");
   await page.getByRole("button", { name: "Boot audio" }).click();
   await expect(page.getByTestId("audio-status")).toHaveText(/^ready/, { timeout: 10_000 });
-  await page.getByTestId("tab-mixer").click();
+  await page.getByTestId("tab-devices").click();
   await page.getByTestId("instrument-select").selectOption({ label: "Sampler" });
   const deviceId = await page
     .getByTestId(/^sample-select-/)
@@ -85,7 +85,7 @@ test("the sample survives a reload — bytes in storage, reference in the projec
   await page.reload();
   await page.getByRole("button", { name: "Boot audio" }).click();
   await expect(page.getByTestId("audio-status")).toHaveText(/^ready/, { timeout: 10_000 });
-  await page.getByTestId("tab-mixer").click();
+  await page.getByTestId("tab-devices").click();
 
   const slot = page.getByTestId(`sample-select-${deviceId}`);
   await expect(slot.locator("option")).toHaveText(["No sample", "kept.wav"]);

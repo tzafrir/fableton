@@ -111,4 +111,72 @@ describe("DeviceChainPanel", () => {
     expect(options()).toContain(PRESET_NAME);
     params.dispose();
   });
+
+  // The Devices view is a full-width tab of its own now, so it owes the user
+  // a way to change channels: without the bar, selecting a channel and seeing
+  // its devices were in two different places with no path between them.
+  describe("the channel bar", () => {
+    it("is absent when nothing can act on a channel change", () => {
+      const { store, commands, track } = project();
+      act(() => {
+        root.render(
+          <DeviceChainPanel store={store} commands={commands} engine={null} channelId={track} />,
+        );
+      });
+      expect(container.querySelector('[data-testid="device-channel-bar"]')).toBeNull();
+    });
+
+    it("lists every channel and reports the one that was picked", () => {
+      const { store, commands, track } = project();
+      const doc = store.getState();
+      const master = doc.channelOrder.find((id) => doc.channels[id]?.role === "master")!;
+      const picked: string[] = [];
+      act(() => {
+        root.render(
+          <DeviceChainPanel
+            store={store}
+            commands={commands}
+            engine={null}
+            channelId={track}
+            onSelectChannel={(id) => picked.push(id)}
+          />,
+        );
+      });
+
+      const chips = container.querySelectorAll('[data-testid^="device-channel-"]');
+      // One per channel, plus the bar itself matching the prefix.
+      expect(chips.length).toBe(doc.channelOrder.length + 1);
+      const trackChip = container.querySelector(`[data-testid="device-channel-${track}"]`);
+      expect(trackChip?.getAttribute("aria-pressed")).toBe("true");
+
+      act(() => {
+        container
+          .querySelector<HTMLButtonElement>(`[data-testid="device-channel-${master}"]`)!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      expect(picked).toEqual([master]);
+    });
+
+    it("still offers the bar when no channel is selected at all", () => {
+      const { store, commands } = project();
+      act(() => {
+        root.render(
+          <DeviceChainPanel
+            store={store}
+            commands={commands}
+            engine={null}
+            channelId={null}
+            onSelectChannel={() => undefined}
+          />,
+        );
+      });
+      // The empty state is exactly where a channel picker is most needed —
+      // "pick a track in the mixer" is not an instruction the Devices tab
+      // can carry out on its own.
+      expect(container.querySelector('[data-testid="device-channel-bar"]')).not.toBeNull();
+      expect(container.querySelector('[data-testid="device-chain-panel"]')?.textContent).toContain(
+        "No channel selected",
+      );
+    });
+  });
 });

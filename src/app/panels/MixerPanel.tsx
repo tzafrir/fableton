@@ -22,6 +22,7 @@ import type {
   ProjectSnapshot,
 } from "../../types";
 import type { Immutable, Channel } from "../../types";
+import { automatedParamIds } from "../../state";
 import { Fader, Knob } from "../../ui/controls";
 import { SIGNAL } from "../../ui/theme";
 import { useDispatchHint } from "./useDispatchHint";
@@ -36,6 +37,9 @@ export interface MixerPanelProps {
    *  creates (or re-enables) the lane for that param and reveals it — this
    *  is what makes the menu row more than decoration. */
   onShowAutomation?: ((paramId: ParamId) => void) | undefined;
+  /** Reveal a channel's device chain. The mixer and the chain are separate
+   *  full-width views, so this is the bridge between them. */
+  onOpenDevices?: ((channelId: ChannelId) => void) | undefined;
 }
 
 type RChannel = Immutable<Channel>;
@@ -118,6 +122,7 @@ function Strip({
   selected,
   onSelect,
   onShowAutomation,
+  onOpenDevices,
 }: {
   doc: ProjectSnapshot;
   channel: RChannel;
@@ -129,10 +134,15 @@ function Strip({
   selected: boolean;
   onSelect: (id: ChannelId) => void;
   onShowAutomation?: ((paramId: ParamId) => void) | undefined;
+  /** Jump to this channel's device chain. Absent while the mixer is shown
+   *  somewhere there is no chain view to jump to. */
+  onOpenDevices?: ((id: ChannelId) => void) | undefined;
 }) {
   /** SS5 menu row -> the shell's lane reveal, or absent (row hidden). */
   const showAutomation = (paramId: ParamId): (() => void) | undefined =>
     onShowAutomation === undefined ? undefined : () => onShowAutomation(paramId);
+  /** Whether that row should say `Show` or `Add`. */
+  const automated = automatedParamIds(doc);
   const volume = engine?.params.get(channel.volume);
   const pan = engine?.params.get(channel.pan);
   const returns = returnsOf(doc);
@@ -141,6 +151,11 @@ function Strip({
   // nothing when clicked.
   const sendTargets = returns.filter((ret) => ret.id !== channel.id);
   const targets = outputTargets(doc, channel);
+
+  /** Everything mounted on the channel, in all three chains — the number the
+   *  strip's device button shows. */
+  const deviceCount =
+    (channel.source === null ? 0 : 1) + channel.chain.length + (channel.midiChain?.length ?? 0);
 
   const [renaming, setRenaming] = useState(false);
   // Unmounting the input fires `blur`, so Escape would otherwise commit the
@@ -216,6 +231,27 @@ function Strip({
         </span>
       )}
 
+      {/* The strip's link to its chain. The mixer and the device view are
+          separate full-width tabs now, so each strip has to say what is ON
+          it and offer the one click that goes there — otherwise selecting a
+          channel here and finding its devices are two unrelated motions. */}
+      {onOpenDevices !== undefined && (
+        <button
+          type="button"
+          className="fbl-strip-devices"
+          data-testid={`strip-devices-${channel.id}`}
+          data-empty={deviceCount === 0}
+          title={`Open ${channel.name}'s devices`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect(channel.id);
+            onOpenDevices(channel.id);
+          }}
+        >
+          {deviceCount === 0 ? "no devices" : `${String(deviceCount)} device${deviceCount === 1 ? "" : "s"}`}
+        </button>
+      )}
+
       {/* sends — one slim knob per return (SS6) */}
       {channel.role !== "master" && sendTargets.length > 0 && (
         <div className="fbl-strip-sends" data-testid={`sends-${channel.id}`}>
@@ -231,6 +267,7 @@ function Strip({
                     label={ret.name.replace("Return ", "")}
                     testId={`send-${channel.id}-${ret.id}`}
                     onShowAutomation={showAutomation(send.amount)}
+                    hasAutomation={automated.has(send.amount)}
                   />
                   {/* SS6: "send taps at pre-fader (post-chain) or post-fader".
                       The tap has been in the document and honoured by the
@@ -290,6 +327,7 @@ function Strip({
             handle={volume}
             testId={`vol-${channel.id}`}
             onShowAutomation={showAutomation(channel.volume)}
+            hasAutomation={automated.has(channel.volume)}
           />
         ) : (
           <div className="fbl-fader-placeholder">—</div>
@@ -304,6 +342,7 @@ function Strip({
           label="Pan"
           testId={`pan-${channel.id}`}
           onShowAutomation={showAutomation(channel.pan)}
+          hasAutomation={automated.has(channel.pan)}
         />
       ) : (
         <div style={{ height: 40 }} />
@@ -376,6 +415,7 @@ export function MixerPanel({
   selectedChannelId,
   onSelectChannel,
   onShowAutomation,
+  onOpenDevices,
 }: MixerPanelProps) {
   const doc = store.getState();
   const [, force] = useState(0);
@@ -466,6 +506,7 @@ export function MixerPanel({
               selected={selectedChannelId === id}
               onSelect={onSelectChannel}
               onShowAutomation={onShowAutomation}
+              onOpenDevices={onOpenDevices}
             />
           );
         })}

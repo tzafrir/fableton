@@ -16,7 +16,7 @@ test("the Gated Reverb preset builds the whole patch, keyed pre-FX", async ({ pa
   const trackId = (
     (await page.locator('[data-testid^="strip-"][data-role="track"]').first().getAttribute("data-testid")) ?? ""
   ).replace("strip-", "");
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   await page.getByTestId("add-factory-rack").selectOption("Gated Reverb");
 
   // Two chains: the dry signal, and the one the gate cuts.
@@ -62,7 +62,7 @@ test("a gated channel still passes its dry signal", async ({ page }) => {
   const trackId = (
     (await page.locator('[data-testid^="strip-"][data-role="track"]').first().getAttribute("data-testid")) ?? ""
   ).replace("strip-", "");
-  await page.getByTestId(`strip-${trackId}`).click();
+  await page.getByTestId(`strip-devices-${trackId}`).click();
   await page.getByTestId("add-factory-rack").selectOption("Gated Reverb");
 
   const meter = page.locator(`[data-testid="meter-${trackId}"] > div`).first();

@@ -14,6 +14,7 @@ import type {
   MidiClip,
   Note,
   NotesOfClip,
+  ParamId,
   ProjectSnapshot,
 } from "../types";
 
@@ -85,4 +86,31 @@ export function clipsForEngine(doc: ProjectSnapshot): MidiClip[] {
   }
   out.sort((a, b) => a.start - b.start || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return out;
+}
+
+/**
+ * Every param that already has an automation lane.
+ *
+ * Asked once per control render (the right-click menu has to know whether it
+ * is offering to ADD a lane or to SHOW one), which is why it is a set built
+ * once rather than a scan per param: a device panel can hold forty controls
+ * and a project any number of lanes, and the product of the two is a
+ * per-frame cost for a menu that is almost never open.
+ *
+ * Keyed on the `lanes` record itself, so it is rebuilt only when a lane is
+ * actually added or removed — every other edit hands back the same object,
+ * structural sharing being the whole point of the snapshot.
+ */
+const laneParamCache = new WeakMap<object, ReadonlySet<ParamId>>();
+
+export function automatedParamIds(doc: ProjectSnapshot): ReadonlySet<ParamId> {
+  const lanes = doc.lanes;
+  const cached = laneParamCache.get(lanes);
+  if (cached !== undefined) return cached;
+  const ids = new Set<ParamId>();
+  for (const lane of Object.values(lanes)) {
+    if (lane !== undefined) ids.add(lane.paramId);
+  }
+  laneParamCache.set(lanes, ids);
+  return ids;
 }

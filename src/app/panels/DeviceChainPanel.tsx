@@ -18,6 +18,7 @@ import { CORE_DEVICES } from "../../devices/core";
 import { FACTORY_RACKS } from "../../presets/factoryRacks";
 import { presetStore } from "../../presets/store";
 import { deviceParamId } from "../../params";
+import { automatedParamIds } from "../../state";
 import type { AppProjectEngine } from "../engine";
 import type {
   ChannelId,
@@ -49,6 +50,10 @@ export interface DeviceChainPanelProps {
   /** SS5's control context menu: "Show/create automation lane" — the shell
    *  creates (or re-enables) that param's lane and reveals it. */
   onShowAutomation?: ((paramId: ParamId) => void) | undefined;
+  /** Switch which channel's chain is shown. Present when the panel is the
+   *  whole view and therefore owes the user a way to change channels;
+   *  omitted where something alongside already does that. */
+  onSelectChannel?: ((channelId: ChannelId) => void) | undefined;
   /** Imports an audio file and returns its new `AssetId` (or `null` when it
    *  was rejected). Absent until audio is booted — decoding needs a context. */
   onImportSample?: ((file: File) => Promise<string | null>) | undefined;
@@ -101,9 +106,11 @@ function defaultPanel(def: DeviceDefinition): PanelSpec {
 function ParamControlFor({
   handle,
   onShowAutomation,
+  hasAutomation,
 }: {
   handle: ParamHandle;
   onShowAutomation?: ((paramId: ParamId) => void) | undefined;
+  hasAutomation?: boolean | undefined;
 }) {
   const kind = controlKindFor(handle.desc);
   if (kind === "toggle") {
@@ -124,6 +131,7 @@ function ParamControlFor({
       onShowAutomation={
         onShowAutomation === undefined ? undefined : () => onShowAutomation(handle.desc.id)
       }
+      hasAutomation={hasAutomation}
     />
   );
 }
@@ -584,6 +592,7 @@ function DevicePanel({
                   key={spec.paramId}
                   handle={handle}
                   onShowAutomation={onShowAutomation}
+                  hasAutomation={automatedParamIds(doc).has(handle.desc.id)}
                 />
               );
             })}
@@ -970,11 +979,48 @@ function RackPanel({
   );
 }
 
+/** The channel picker above the chain — the Devices view's own half of the
+ *  selection the mixer used to sit next to. Without it, changing which
+ *  channel you are editing meant leaving the view entirely. */
+function ChannelBar({
+  doc,
+  channelId,
+  onSelectChannel,
+}: {
+  doc: ProjectSnapshot;
+  channelId: ChannelId | null;
+  onSelectChannel: (id: ChannelId) => void;
+}) {
+  return (
+    <div className="fbl-pane-head fbl-channel-bar" data-testid="device-channel-bar">
+      <span className="fbl-tb-label">Devices</span>
+      {doc.channelOrder.map((id) => {
+        const channel = doc.channels[id];
+        if (channel === undefined) return null;
+        return (
+          <button
+            key={id}
+            type="button"
+            className="fbl-channel-chip"
+            data-testid={`device-channel-${id}`}
+            data-role={channel.role}
+            aria-pressed={id === channelId}
+            onClick={() => onSelectChannel(id)}
+          >
+            {channel.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function DeviceChainPanel({
   store,
   commands,
   engine,
   channelId,
+  onSelectChannel,
   onShowAutomation,
   onImportSample,
 }: DeviceChainPanelProps) {
@@ -994,11 +1040,20 @@ export function DeviceChainPanel({
   const doc = store.getState();
   const channel = channelId !== null ? doc.channels[channelId] : undefined;
 
+  const bar =
+    onSelectChannel === undefined ? null : (
+      <ChannelBar doc={doc} channelId={channelId} onSelectChannel={onSelectChannel} />
+    );
+
   if (channel === undefined) {
     return (
-      <div className="fbl-empty" data-testid="device-chain-panel">
-        <strong>No channel selected</strong>
-        Pick a track in the mixer or the arrangement to see its instrument and effects.
+      <div className="fbl-devices-view">
+        {bar}
+        <div className="fbl-empty" data-testid="device-chain-panel">
+          <strong>No channel selected</strong>
+          Pick a channel above, or a track in the mixer or the arrangement, to see its
+          instrument and effects.
+        </div>
       </div>
     );
   }
@@ -1007,10 +1062,9 @@ export function DeviceChainPanel({
   const sourceDef = sourceDevice !== undefined ? definitionsById.get(sourceDevice.definitionId) : undefined;
 
   return (
-    <div
-      className="fbl-device-chain"
-      data-testid="device-chain-panel"
-    >
+    <div className="fbl-devices-view">
+      {bar}
+      <div className="fbl-device-chain" data-testid="device-chain-panel">
       {/* Note effects (SS7 `midiEffect`), tracks only — drawn BEFORE the
           instrument because that is the order the notes travel in. */}
       {channel.role === "track" && (
@@ -1203,6 +1257,7 @@ export function DeviceChainPanel({
           {hint}
         </span>
       )}
+      </div>
     </div>
   );
 }
