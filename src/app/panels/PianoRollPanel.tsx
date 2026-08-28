@@ -34,6 +34,10 @@ export interface PianoRollPanelProps {
    *  starts saying "Kick". Like `clipId`/`tool`, it must reach an
    *  already-mounted view, so it goes through `setPitchNames`. */
   pitchNames?: PitchNames | null | undefined;
+  /** How many notes are selected. The shell enables its selection-scoped
+   *  verbs off this (Arpeggiate), the same way `ArrangementPanel` reports
+   *  its clip selection for "Loop Clip". */
+  onSelectionChange?: ((count: number) => void) | undefined;
   /** A STABLE sink (the app shell owns one proxy object for the lifetime of
    *  the engine and redirects it as the open clip's track changes) — passed
    *  once at creation, per `PianoRollOptions`. */
@@ -48,6 +52,7 @@ export function PianoRollPanel({
   tool,
   grid,
   pitchNames,
+  onSelectionChange,
   onSeek,
   audition,
   viewRef,
@@ -57,6 +62,8 @@ export function PianoRollPanel({
 
   const onSeekRef = useRef(onSeek);
   onSeekRef.current = onSeek;
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
   // Read once, at creation — see the prop doc comment above.
   const initialClipId = useRef(clipId);
   const initialTool = useRef(tool);
@@ -80,7 +87,11 @@ export function PianoRollPanel({
     });
     localViewRef.current = view;
     if (viewRef !== undefined) viewRef.current = view;
+    const unsubscribeSelection = view.selection.onChange((ids) => {
+      onSelectionChangeRef.current?.(ids.length);
+    });
     return () => {
+      unsubscribeSelection();
       localViewRef.current = null;
       if (viewRef !== undefined) viewRef.current = null;
       view.dispose();

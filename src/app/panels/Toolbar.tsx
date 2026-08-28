@@ -72,6 +72,9 @@ export interface ToolbarProps {
    *  was a shortcut you had to already know about. */
   canLoopClip: boolean;
   onLoopClip: () => void;
+  /** Enabled while the piano roll has a note selection to act on. */
+  canArpeggiate: boolean;
+  onShowArpeggiator: () => void;
 
   /** Surfaced import/decode errors and load warnings — a one-line status
    *  string, or `null` when there is nothing to report. */
@@ -174,6 +177,8 @@ export function Toolbar({
   onGridChange,
   canLoopClip,
   onLoopClip,
+  canArpeggiate,
+  onShowArpeggiator,
   autosaveState,
   autosaveError,
   autosaveAvailable = true,
@@ -393,6 +398,20 @@ export function Toolbar({
           }
         >
           Loop Clip
+        </button>
+        <button
+          type="button"
+          className="fbl-btn"
+          data-testid="arpeggiate-button"
+          onClick={onShowArpeggiator}
+          disabled={!canArpeggiate}
+          title={
+            canArpeggiate
+              ? "Rewrite the selected notes as an arpeggio"
+              : "Select notes in the piano roll to arpeggiate them"
+          }
+        >
+          Arpeggiate…
         </button>
       </Group>
 

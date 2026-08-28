@@ -218,6 +218,25 @@ export interface IdFactory {
 
 // --- command payload shapes -------------------------------------------------
 
+/** Arpeggiator pattern order. `asPlayed` visits the chord in the order its
+ *  notes START, which is only different from `up` for a rolled chord. */
+export type ArpMode = "up" | "down" | "upDown" | "downUp" | "asPlayed" | "random";
+
+/** What `arpeggiateNotes` is asked for. See src/state/arpeggio.ts. */
+export interface ArpOptions {
+  /** One step, in ticks (a 1/16 note = 240 at PPQ 960). */
+  readonly step: Ticks;
+  readonly mode: ArpMode;
+  /** Octaves the pattern spans; 1 = the chord as played. */
+  readonly octaves: number;
+  /** Note length as a percentage of the step. Over 100 the notes overlap,
+   *  which is a real arpeggiator sound, so it is allowed. */
+  readonly gate: number;
+  /** Deterministic randomness for `random` mode, so a test can pin the
+   *  output; defaults to `Math.random`. */
+  readonly random?: (() => number) | undefined;
+}
+
 /** A note as an editor proposes it; `id` is filled in by the factory. */
 export interface NoteInit {
   id?: NoteId | undefined;
@@ -450,6 +469,23 @@ export interface ProjectCommands {
    *  have nothing to play, which is recoverable; silently rewriting their
    *  settings would not be. */
   removeAsset(assetId: AssetId): Command;
+
+  /**
+   * Replace `noteIds` with an arpeggio over the same span (see
+   * `src/state/arpeggio.ts` for the model, and for why this is a transform
+   * rather than a live note effect). One command, one undo entry: the
+   * original notes come back whole.
+   *
+   * `newIds` pins the generated notes' ids (SS13: ids are minted by the
+   * caller, never inside `run`). Omitted, ids are derived from the clip id
+   * and the step index — deterministic, which is what redo needs.
+   */
+  arpeggiateNotes(
+    clipId: ClipId,
+    noteIds: readonly NoteId[],
+    options: ArpOptions,
+    newIds?: readonly NoteId[] | undefined,
+  ): Command;
 
   /** Insert an effect into a channel's chain (`index` omitted = append). */
   addEffect(channelId: ChannelId, init: DeviceInit, index?: number | undefined): Command;

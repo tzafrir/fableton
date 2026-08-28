@@ -1542,6 +1542,53 @@ select.fbl-field--sm {
   overflow-y: auto;
 }
 
+/* The arpeggiator dialog: four decisions, one button. Narrower than the
+   keyboard reference, and its body is a single column of labelled rows
+   rather than the reference's two columns of groups. */
+.fbl-modal--narrow {
+  width: min(420px, 100%);
+}
+
+.fbl-arp-body {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.fbl-arp-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.fbl-arp-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fbl-text-faint);
+}
+
+.fbl-arp-unit {
+  font-size: 10px;
+  color: var(--fbl-text-faint);
+}
+
+.fbl-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px 14px;
+  border-top: 1px solid var(--fbl-line);
+  background: var(--fbl-panel);
+}
+
+.fbl-arp-count {
+  font-size: 11px;
+  color: var(--fbl-text-dim);
+}
+
 .fbl-key-group--wide {
   grid-column: 1 / -1;
 }

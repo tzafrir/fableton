@@ -163,3 +163,78 @@ describe("note commands", () => {
     }
   });
 });
+
+describe("arpeggiateNotes", () => {
+  const STEP = 240;
+  const options = { step: STEP, mode: "up" as const, octaves: 1, gate: 90 };
+
+  /** A C-major triad held for a bar, as the only content of the clip. */
+  function chordFixture() {
+    const f = makeFixture();
+    f.store.dispatch(
+      f.commands.addNotes(f.clipId, [
+        { id: "c", start: 0, dur: BAR, pitch: 60, vel: 100 },
+        { id: "e", start: 0, dur: BAR, pitch: 64, vel: 100 },
+        { id: "g", start: 0, dur: BAR, pitch: 67, vel: 100 },
+      ]),
+    );
+    return f;
+  }
+
+  const notesOf = (f: ReturnType<typeof makeFixture>) =>
+    f.store.getState().clips[f.clipId]?.notes ?? [];
+
+  it("replaces the chord with the arpeggio, in one undo entry", () => {
+    const f = chordFixture();
+    f.store.dispatch(f.commands.arpeggiateNotes(f.clipId, ["c", "e", "g"], options));
+    const notes = notesOf(f);
+    expect(notes).toHaveLength(BAR / STEP);
+    expect(notes.slice(0, 3).map((n) => n.pitch)).toEqual([60, 64, 67]);
+    expect(f.store.undoLabel()).toBe("Arpeggiate");
+
+    f.store.undo();
+    expect(notesOf(f).map((n) => n.id)).toEqual(["c", "e", "g"]);
+  });
+
+  it("leaves notes it was not given alone", () => {
+    const f = chordFixture();
+    f.store.dispatch(
+      f.commands.addNotes(f.clipId, [{ id: "bass", start: 0, dur: BAR, pitch: 36, vel: 100 }]),
+    );
+    f.store.dispatch(f.commands.arpeggiateNotes(f.clipId, ["c", "e", "g"], options));
+    expect(notesOf(f).some((n) => n.id === "bass")).toBe(true);
+  });
+
+  it("mints ids that do not collide with the notes it kept", () => {
+    const f = chordFixture();
+    f.store.dispatch(
+      f.commands.addNotes(f.clipId, [
+        { id: `${f.clipId}-arp-0`, start: BAR, dur: 240, pitch: 36, vel: 100 },
+      ]),
+    );
+    f.store.dispatch(f.commands.arpeggiateNotes(f.clipId, ["c", "e", "g"], options));
+    const ids = notesOf(f).map((n) => n.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("takes pinned ids when the caller supplies them", () => {
+    const f = chordFixture();
+    const pinned = Array.from({ length: BAR / STEP }, (_, i) => `arp-${String(i)}`);
+    f.store.dispatch(f.commands.arpeggiateNotes(f.clipId, ["c", "e", "g"], options, pinned));
+    expect(notesOf(f).map((n) => n.id)).toEqual(pinned);
+  });
+
+  it("does nothing for an empty selection or an unknown clip", () => {
+    const f = chordFixture();
+    const before = notesOf(f).length;
+    f.store.dispatch(f.commands.arpeggiateNotes(f.clipId, [], options));
+    f.store.dispatch(f.commands.arpeggiateNotes("nope", ["c"], options));
+    expect(notesOf(f)).toHaveLength(before);
+  });
+
+  it("leaves the clip's notes sorted (document invariant 4)", () => {
+    const f = chordFixture();
+    f.store.dispatch(f.commands.arpeggiateNotes(f.clipId, ["c", "e", "g"], options));
+    expectLegalProject(f.store.getState());
+  });
+});

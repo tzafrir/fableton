@@ -19,6 +19,7 @@ import { connectParamRegistry, createEmptyProject, defaultIdFactory, projectComm
 import { ticksPerBar } from "../time";
 import { parseParamId } from "../params";
 import type {
+  ArpOptions,
   AuditionSink,
   AutosaveState,
   ChannelId,
@@ -48,6 +49,7 @@ import { createUndoRedoHandler, isEditableTarget } from "./keyboard";
 import { createAppShortcutHandler } from "./shortcuts";
 import type { KitArrangementView } from "../editor/arrangement";
 import {
+  ArpeggiatorDialog,
   ArrangementPanel,
   AutomationPanel,
   DeviceChainPanel,
@@ -60,6 +62,7 @@ import {
 import type { LaneFocusRequest } from "./panels";
 import { bootstrapProject, type BootstrapResult } from "./persistence";
 import { pitchNamesForClip } from "./pitchNames";
+import { DEFAULT_ARP_OPTIONS } from "../state/arpeggio";
 import { importSample, loadProjectSamples } from "./samples";
 import { createAssetStore } from "../persist/assets";
 
@@ -185,6 +188,21 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   }, []);
   const pianoRollViewRef = useRef<PianoRollView | null>(null);
 
+  /** Runs the arpeggiator over the roll's selection (src/state/arpeggio.ts).
+   *  One command, one undo entry, and the generated notes become the new
+   *  selection so the next verb — nudge, quantize, arpeggiate again — acts
+   *  on what was just made. */
+  const applyArpeggio = useCallback((options: ArpOptions) => {
+    const bootstrap = docStateRef.current;
+    const view = pianoRollViewRef.current;
+    const clipId = view?.clipId ?? null;
+    if (bootstrap === null || view === null || clipId === null) return;
+    const noteIds = view.selection.ids();
+    if (noteIds.length === 0) return;
+    bootstrap.store.dispatch(projectCommands.arpeggiateNotes(clipId, noteIds, options));
+    setArpOpen(false);
+  }, []);
+
   // Refs the audition proxy below reads at call time — see `resolveAudition`.
   const docStateRef = useRef<BootstrapResult | null>(null);
   docStateRef.current = docState;
@@ -196,6 +214,12 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   const [laneFocus, setLaneFocus] = useState<LaneFocusRequest | null>(null);
   /** How many clips the arrangement has selected — enables "Loop Clip". */
   const [clipSelectionCount, setClipSelectionCount] = useState(0);
+  /** How many notes the piano roll has selected — enables "Arpeggiate". */
+  const [noteSelectionCount, setNoteSelectionCount] = useState(0);
+  const [arpOpen, setArpOpen] = useState(false);
+  /** Kept for the session: the second thing anyone does with an arpeggiator
+   *  is run it again on the next chord with the same rate. */
+  const [arpOptions, setArpOptions] = useState<ArpOptions>(DEFAULT_ARP_OPTIONS);
   /** SS10/SS12 keyboard performance: the computer keyboard plays the selected
    *  track's instrument, and `Rec` captures what is played into a clip. */
   const [recording, setRecording] = useState(false);
@@ -822,6 +846,8 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
         onGridChange={handleGridChange}
         canLoopClip={clipSelectionCount > 0}
         onLoopClip={handleLoopClip}
+        canArpeggiate={noteSelectionCount > 0}
+        onShowArpeggiator={() => setArpOpen(true)}
         autosaveState={autosaveState}
         autosaveError={autosaveError}
         autosaveAvailable={docState.storage.available}
@@ -894,6 +920,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
               clipId={openClipId}
               tool={tool}
               pitchNames={pitchNamesForClip(snapshot, openClipId)}
+              onSelectionChange={setNoteSelectionCount}
               grid={gridSettings}
               onSeek={handleSeek}
               audition={auditionProxyRef.current}
@@ -959,6 +986,14 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
       {/* Every key the app answers to. `?` opens it, Esc closes it — and the
           panel renders the same table the handler matches against, so it
           cannot describe a binding the app does not have. */}
+      <ArpeggiatorDialog
+        open={arpOpen}
+        onClose={() => setArpOpen(false)}
+        options={arpOptions}
+        onChange={setArpOptions}
+        onApply={() => applyArpeggio(arpOptions)}
+        selectionCount={noteSelectionCount}
+      />
       <ShortcutsOverlay
         open={helpOpen}
         onClose={() => setHelpOpen(false)}

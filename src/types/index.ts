@@ -93,6 +93,8 @@ export type {
   IdFactory,
   Immutable,
   NoteDelta,
+  ArpMode,
+  ArpOptions,
   NoteInit,
   NoteSpan,
   NoteVelocityEdit,

@@ -11,11 +11,13 @@ import type {
   NoteId,
   NoteInit,
   NoteSpan,
+  ArpOptions,
   NoteVelocityEdit,
   ProjectCommands,
   Ticks,
 } from "../../types";
 import { MIN_NOTE_TICKS } from "../../types";
+import { arpeggiate } from "../arpeggio";
 import {
   MIN_NOTE_DUR_TICKS,
   clampNoteDelta,
@@ -41,6 +43,7 @@ export type NoteCommands = Pick<
   | "setNotesMuted"
   | "duplicateNotes"
   | "quantizeNoteStarts"
+  | "arpeggiateNotes"
 >;
 
 /** A `NoteInit` normalized into a document-legal `Note` (invariant 5). */
@@ -173,6 +176,49 @@ export function createNoteCommands(ids: IdFactory): NoteCommands {
           copy.pitch += clamped.pitch;
           clip.notes.push(copy);
         }
+        sortNotesIfNeeded(clip.notes);
+      });
+    },
+
+    arpeggiateNotes(
+      clipId: ClipId,
+      noteIds: readonly NoteId[],
+      options: ArpOptions,
+      newIds?: readonly NoteId[] | undefined,
+    ): Command {
+      // Ids are minted EAGERLY (types/commands `Command`): redo replays
+      // recorded patches rather than re-running `run`, so an id created
+      // inside would differ between the first apply and every replay. The
+      // count cannot be known without the document, so enough are minted for
+      // the worst case — one step per tick of the widest possible span is
+      // absurd, so the bound is one per step over the notes the caller named,
+      // computed by the caller when it knows better (`newIds`).
+      const pinned = newIds === undefined ? null : [...newIds];
+      return makeCommand("Arpeggiate", (doc) => {
+        const clip = clipOf(doc, clipId);
+        if (clip === undefined) return;
+        const targets = notesByIds(clip, noteIds);
+        if (targets.length === 0) return;
+        const generated = arpeggiate(targets, options);
+        if (generated.length === 0) return;
+
+        const taken = new Set(clip.notes.map((note) => note.id));
+        for (const note of targets) taken.delete(note.id);
+        const doomed = new Set(targets.map((note) => note.id));
+        for (let i = clip.notes.length - 1; i >= 0; i--) {
+          const note = clip.notes[i];
+          if (note !== undefined && doomed.has(note.id)) clip.notes.splice(i, 1);
+        }
+
+        generated.forEach((init, index) => {
+          // A pinned id that is somehow already in use falls through to a
+          // derived one rather than colliding: two notes with one id is the
+          // kind of document corruption every later verb would inherit.
+          let id = pinned?.[index] ?? `${clipId}-arp-${String(index)}`;
+          while (taken.has(id)) id = `${id}b`;
+          taken.add(id);
+          clip.notes.push(noteFromInit(init, id));
+        });
         sortNotesIfNeeded(clip.notes);
       });
     },

@@ -263,6 +263,8 @@ describe("Toolbar autosave status", () => {
     keyboardOctave: 3,
     keyboardVelocity: 100,
     canLoopClip: false,
+    canArpeggiate: false,
+    onShowArpeggiator: () => {},
     onLoopClip: () => undefined,
     autosaveState: "idle",
     autosaveError: null,

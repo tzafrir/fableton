@@ -16,3 +16,5 @@ export { ShortcutsOverlay } from "./ShortcutsOverlay";
 export type { ShortcutsOverlayProps } from "./ShortcutsOverlay";
 export { ScopePanel } from "./ScopePanel";
 export type { ScopePanelProps } from "./ScopePanel";
+export { ArpeggiatorDialog } from "./ArpeggiatorDialog";
+export type { ArpeggiatorDialogProps } from "./ArpeggiatorDialog";
