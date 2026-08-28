@@ -19,7 +19,7 @@ import type {
   ParamId,
   ProjectCommands,
 } from "../../types";
-import { rejectionHintStyle, useDispatchHint } from "./useDispatchHint";
+import { useDispatchHint } from "./useDispatchHint";
 
 /** One "show me this param's lane" request from SS5's control context menu.
  *  A fresh object per request (never a bare id), so asking twice for the same
@@ -170,20 +170,10 @@ export function AutomationPanel({
     <div
       className="fbl-automation"
       data-testid="automation-panel"
-      style={{ display: "flex", height: "100%", minHeight: 0 }}
     >
-      <div
-        style={{
-          width: 230,
-          borderRight: "1px solid #292929",
-          display: "flex",
-          flexDirection: "column",
-          gap: 4,
-          padding: 6,
-          overflowY: "auto",
-        }}
-      >
+      <div className="fbl-lane-list">
         <select
+          className="fbl-field"
           data-testid="add-lane-select"
           aria-label="Add automation lane"
           value=""
@@ -193,7 +183,6 @@ export function AutomationPanel({
               dispatch(commands.addLane(channelId, e.target.value));
             }
           }}
-          style={{ fontSize: 11, background: "#181818", color: "#bbb" }}
         >
           <option value="" disabled>
             {engine === null
@@ -212,13 +201,18 @@ export function AutomationPanel({
         {/* SS6's inline hint: `dispatch` reports any rejected lane edit here
             rather than letting it look like nothing happened. */}
         {hint !== null && (
-          <span data-testid="automation-hint" role="status" style={rejectionHintStyle}>
+          <span className="fbl-hint" data-testid="automation-hint" role="status">
             {hint}
           </span>
         )}
 
         {lanes.length === 0 && (
-          <span style={{ fontSize: 11, color: "#555" }}>No automation lanes yet.</span>
+          <span className="fbl-empty" style={{ padding: "18px 6px", height: "auto" }}>
+            <strong>No automation lanes</strong>
+            <span>
+              Right-click any knob or fader and choose <em>Show automation lane</em>.
+            </span>
+          </span>
         )}
         {lanes.map((lane) => {
           const live = engine?.params.get(lane.paramId) !== undefined;
@@ -226,33 +220,29 @@ export function AutomationPanel({
           return (
             <div
               key={lane.id}
+              className="fbl-lane-row"
               data-testid={`lane-row-${lane.id}`}
+              data-selected={selected}
+              // SS7: a lane without a live param is kept, greyed.
+              data-live={live}
               onClick={() => setSelectedLaneId(lane.id)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 4,
-                padding: "3px 4px",
-                borderRadius: 3,
-                background: selected ? "#20242c" : "transparent",
-                // SS7: a lane without a live param is kept, greyed.
-                opacity: live ? 1 : 0.45,
-                cursor: "pointer",
-              }}
             >
               <input
                 type="checkbox"
+                className="fbl-check"
                 data-testid={`lane-enabled-${lane.id}`}
                 aria-label="Lane enabled"
                 checked={lane.enabled}
                 onChange={(e) => dispatch(commands.setLaneEnabled(lane.id, e.target.checked))}
                 onClick={(e) => e.stopPropagation()}
               />
-              <span style={{ fontSize: 10, color: "#ccc", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={lane.paramId}>
+              <span className="fbl-lane-name" title={lane.paramId}>
                 {lane.paramId.split("/").slice(1).join("/")}
               </span>
               {!live && engine !== null && (
                 <select
+                  className="fbl-field fbl-field--sm"
+                  style={{ maxWidth: 62 }}
                   data-testid={`lane-rebind-${lane.id}`}
                   aria-label="Re-bind lane"
                   value=""
@@ -260,7 +250,6 @@ export function AutomationPanel({
                   onChange={(e) => {
                     if (e.target.value !== "") dispatch(commands.rebindLane(lane.id, e.target.value));
                   }}
-                  style={{ fontSize: 9, maxWidth: 60, background: "#181818", color: "#bbb" }}
                 >
                   <option value="">re-bind…</option>
                   {registryParams.map((handle) => (
@@ -272,13 +261,13 @@ export function AutomationPanel({
               )}
               <button
                 type="button"
+                className="fbl-btn fbl-btn--tiny fbl-btn--ghost"
                 data-testid={`lane-delete-${lane.id}`}
                 title="Delete lane"
                 onClick={(e) => {
                   e.stopPropagation();
                   dispatch(commands.deleteLanes([lane.id]));
                 }}
-                style={{ fontSize: 10, background: "none", border: "none", color: "#777", cursor: "pointer" }}
               >
                 ✕
               </button>
@@ -287,7 +276,7 @@ export function AutomationPanel({
         })}
       </div>
 
-      <div ref={containerRef} data-testid="automation-lane-editor" style={{ flex: 1, minWidth: 0, position: "relative" }} />
+      <div ref={containerRef} className="fbl-lane-editor" data-testid="automation-lane-editor" />
     </div>
   );
 }

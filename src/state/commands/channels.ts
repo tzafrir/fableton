@@ -22,6 +22,7 @@ import {
   makeChannel,
   makeInstrumentDevice,
 } from "../project";
+import { trackColorAt } from "../../ui/theme";
 import { clampInt, makeCommand, repointSurvivingOutputs, type DraftProject } from "./util";
 
 export type ChannelCommands = Pick<
@@ -52,6 +53,16 @@ function nextTrackName(doc: DraftProject): string {
   return `Track ${tracks + 1}`;
 }
 
+/** How many tracks the document already has — the index the next track's
+ *  default colour is taken from. */
+function countTracks(doc: DraftProject): number {
+  let n = 0;
+  for (const id of doc.channelOrder) {
+    if (doc.channels[id]?.role === "track") n += 1;
+  }
+  return n;
+}
+
 /** Every device instance a channel owns: its source slot plus its chain. */
 function devicesOfChannel(doc: DraftProject, channelId: ChannelId): DeviceInstanceId[] {
   const channel = doc.channels[channelId];
@@ -70,7 +81,7 @@ export function createChannelCommands(ids: IdFactory): ChannelCommands {
       const deviceId = instrument === null ? null : (instrument.deviceId ?? ids.device());
       const index = init?.index;
       const name = init?.name;
-      const color = init?.color ?? null;
+      const color = init?.color;
       return makeCommand(
         "Add Track",
         (doc) => {
@@ -79,7 +90,13 @@ export function createChannelCommands(ids: IdFactory): ChannelCommands {
             id: channelId,
             role: "track",
             name: name ?? nextTrackName(doc),
-            color,
+            // A track with no colour of its own takes the next hue off the
+            // design system's ribbon (`TRACK_COLORS`). The arrangement and
+            // the mixer both key their clip/strip colour off this field, so
+            // giving it a value here is what stops an eight-part song
+            // rendering as one blue wall. Deterministic in the document, so
+            // undo/redo and reload all agree.
+            color: color ?? trackColorAt(countTracks(doc)),
             output,
           });
           if (instrument !== null && deviceId !== null) {

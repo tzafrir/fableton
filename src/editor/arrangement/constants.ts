@@ -6,6 +6,8 @@
 // this package never re-declares a frozen number. What is genuinely local to
 // this skin — lane chrome sizes and colours — lives below.
 
+import { INK, SIGNAL, TEXT, TRACK_COLORS, alpha } from "../../ui/theme";
+
 export {
   EDGE_ZONE_FRACTION,
   EDGE_ZONE_PX,
@@ -91,39 +93,44 @@ export interface ArrangementTheme {
 }
 
 export const DEFAULT_THEME: ArrangementTheme = {
-  background: "#16181c",
-  laneEven: "#1c1f24",
-  laneOdd: "#191c20",
-  laneNonTrack: "#141619",
-  laneBorder: "#0f1113",
-  barLine: "#3a4048",
-  beatLine: "#262b31",
-  gridLine: "#1f2429",
-  clipFill: "#4f7bd6",
-  clipBorder: "#0d1013",
-  clipText: "#f2f5fa",
-  clipNote: "#0d1013",
-  clipLoopBrace: "#f2c14e",
-  clipRepeatLine: "#1a2029",
+  background: INK.app,
+  // Lanes alternate by a hair — enough to track a row across a wide
+  // arrangement, not enough to read as stripes.
+  laneEven: "#12151d",
+  laneOdd: "#0f1219",
+  laneNonTrack: "#0c0f15",
+  laneBorder: "#0a0c11",
+  barLine: "#394152",
+  beatLine: "#232936",
+  gridLine: "#171c26",
+  // The DEFAULT clip colour only shows on a channel with no colour of its
+  // own; new tracks take a hue from `TRACK_COLORS`, so a full arrangement
+  // reads as parts rather than as one blue wall.
+  clipFill: TRACK_COLORS[0],
+  clipBorder: "#080a0e",
+  clipText: "#f4f7ff",
+  clipNote: "#0a0d13",
+  clipLoopBrace: SIGNAL.amber,
+  clipRepeatLine: alpha("#000000", 0.34),
   selectionOutline: "#ffffff",
-  hoverOutline: "#b9c7e2",
-  ghostFill: "rgba(255,255,255,0.22)",
+  hoverOutline: "#c3cee6",
+  ghostFill: alpha("#ffffff", 0.22),
   ghostOutline: "#ffffff",
-  marqueeFill: "rgba(120,160,255,0.16)",
-  marqueeOutline: "#7ba0ff",
-  rulerBackground: "#101216",
-  rulerText: "#9aa5b1",
-  rulerLine: "#333a42",
+  marqueeFill: alpha(SIGNAL.aqua, 0.14),
+  marqueeOutline: SIGNAL.aqua,
+  rulerBackground: "#0d1017",
+  rulerText: TEXT.dim,
+  rulerLine: "#2b3244",
   // Bright when the transport will actually loop, greyed when the brace is
   // set but switched off — the same region either way, so dragging it never
   // has to mean "and also turn looping on".
-  loopBrace: "#2d7ff0",
-  loopBraceOff: "#3a424e",
-  loopHandle: "#cfe6ff",
-  playhead: "#ff5f56",
-  headerBackground: "#15171b",
-  headerText: "#d7dde5",
-  headerBorder: "#0f1113",
+  loopBrace: SIGNAL.blue,
+  loopBraceOff: "#333b4c",
+  loopHandle: "#d5e4ff",
+  playhead: SIGNAL.coral,
+  headerBackground: INK.panel,
+  headerText: TEXT.primary,
+  headerBorder: "#1b2028",
 };
 
 export function resolveTheme(overrides?: Partial<ArrangementTheme> | undefined): ArrangementTheme {

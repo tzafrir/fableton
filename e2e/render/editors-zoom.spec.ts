@@ -25,8 +25,8 @@ import { bootAudio, collectPageErrors, countMatchingPixels, longestVerticalRun }
 const HEADER_WIDTH_PX = 132; // src/editor/arrangement/constants.ts
 const RULER_HEIGHT_PX = 26; // ditto
 const LANE_HEIGHT_PX = 56; // ditto, DEFAULT_LANE_HEIGHT_PX
-const CLIP_FILL = { r: 79, g: 123, b: 214 }; // DEFAULT_THEME.clipFill #4f7bd6
-const ROW_WHITE = { r: 30, g: 33, b: 40 }; // DEFAULT_PIANO_ROLL_THEME.rowWhite #1e2128
+const CLIP_FILL = { r: 91, g: 141, b: 238 }; // DEFAULT_THEME.clipFill = TRACK_COLORS[0] #5b8dee
+const ROW_WHITE = { r: 22, g: 26, b: 35 }; // DEFAULT_PIANO_ROLL_THEME.rowWhite #161a23
 // src/editor/pianoroll/layout.ts — the roll's ruler and velocity lane share
 // the note rows' canvas stack, and both are uniform blocks taller than a row
 // band, so a row-band measurement has to exclude them.

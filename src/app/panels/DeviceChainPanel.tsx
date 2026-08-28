@@ -34,7 +34,7 @@ import type {
   SidechainEdge,
 } from "../../types";
 import { EnumSelect, Knob, ToggleLED, controlKindFor } from "../../ui/controls";
-import { rejectionHintStyle, useDispatchHint } from "./useDispatchHint";
+import { useDispatchHint } from "./useDispatchHint";
 
 export interface DeviceChainPanelProps {
   store: DocumentStore;
@@ -95,7 +95,16 @@ function ParamControlFor({
   onShowAutomation?: ((paramId: ParamId) => void) | undefined;
 }) {
   const kind = controlKindFor(handle.desc);
-  if (kind === "toggle") return <ToggleLED handle={handle} testId={`ctl-${handle.desc.id}`} />;
+  if (kind === "toggle") {
+    // The LED alone is anonymous in a row of labelled knobs, so it carries
+    // the same caption they do.
+    return (
+      <span className="fbl-toggle">
+        <ToggleLED handle={handle} testId={`ctl-${handle.desc.id}`} />
+        <span className="fbl-control-label">{handle.desc.label}</span>
+      </span>
+    );
+  }
   if (kind === "enumSelect") return <EnumSelect handle={handle} testId={`ctl-${handle.desc.id}`} />;
   return (
     <Knob
@@ -166,73 +175,40 @@ function DevicePanel({
   };
 
   return (
-    <div
-      className="fbl-device"
-      data-testid={`device-${deviceId}`}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        border: "1px solid #333",
-        borderRadius: 4,
-        padding: 6,
-        // The chain scrolls horizontally, so a device keeps its size rather
-        // than being squeezed by the ones after it — a shrunk panel pushes
-        // its own controls outside its border.
-        minWidth: 150,
-        maxWidth: 240,
-        flex: "0 0 auto",
-        opacity: device.enabled ? 1 : 0.5,
-      }}
-    >
+    // The chain scrolls horizontally, so a card keeps its size rather than
+    // being squeezed by the ones after it (`.fbl-device` fixes min/max width
+    // and `flex: 0 0 auto`) — a shrunk panel pushes its own controls outside
+    // its own border, which is the overflow bug this layout exists to fix.
+    <div className="fbl-device" data-testid={`device-${deviceId}`} data-enabled={device.enabled}>
       {/* Header, in TWO rows on purpose. As one row it packed the enable
           dot, the title, the preset picker, save, and ◀ ▶ ✕ into a box whose
           `minWidth` is 150 — the row needs ~224px, so with a few effects in
           the chain the trailing buttons overflowed the panel's own border and
           landed on top of the NEXT device's title. Splitting the row keeps
           every control inside the box it belongs to. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div className="fbl-device-head">
         <button
           type="button"
+          className="fbl-led"
           data-testid={`device-enable-${deviceId}`}
+          data-on={device.enabled}
           role="switch"
           aria-checked={device.enabled}
           title={device.enabled ? "Disable" : "Enable"}
           onClick={() => dispatch(commands.setDeviceEnabled(deviceId, !device.enabled))}
-          style={{
-            width: 12,
-            height: 12,
-            flex: "0 0 auto",
-            borderRadius: "50%",
-            border: "1px solid #555",
-            background: device.enabled ? "#7ad67a" : "#222",
-            cursor: "pointer",
-            padding: 0,
-          }}
         />
-        {/* `minWidth: 0` is what lets the name ellipsize instead of forcing
-            the row wider than the panel. */}
-        <span
-          title={label}
-          style={{
-            fontSize: 12,
-            color: "#ddd",
-            flex: 1,
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
+        {/* `.fbl-device-title` sets `min-width: 0`, which is what lets the
+            name ellipsize instead of forcing the row wider than the card. */}
+        <span className="fbl-device-title" title={label}>
           {label}
         </span>
         {inChain && (
           <button
             type="button"
+            className="fbl-btn fbl-btn--tiny fbl-btn--ghost"
             data-testid={`device-remove-${deviceId}`}
             title="Remove device"
             onClick={() => dispatch(commands.removeDevices([deviceId]))}
-            style={tinyButton}
           >
             ✕
           </button>
@@ -240,10 +216,12 @@ function DevicePanel({
       </div>
 
       {(def !== undefined || inChain) && (
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <div className="fbl-device-row">
           {def !== undefined && (
             <>
               <select
+                className="fbl-field fbl-field--sm"
+                style={{ flex: 1, minWidth: 0 }}
                 data-testid={`preset-select-${deviceId}`}
                 aria-label="Preset"
                 value=""
@@ -260,7 +238,6 @@ function DevicePanel({
                   }
                   dispatch(commands.setParamValues(values));
                 }}
-                style={{ fontSize: 10, flex: 1, minWidth: 0, background: "#181818", color: "#bbb" }}
               >
                 <option value="">presets…</option>
                 {presets.map((preset) => (
@@ -284,21 +261,21 @@ function DevicePanel({
                   presetStore.save(def.id, name, values);
                   setPresetRevision((n) => n + 1);
                 }}
-                style={tinyButton}
+                className="fbl-btn fbl-btn--tiny"
               >
                 ⭳
               </button>
             </>
           )}
           {inChain && (
-            <span style={{ display: "inline-flex", gap: 4, marginLeft: "auto" }}>
+            <span style={{ display: "inline-flex", gap: 3, marginLeft: "auto" }}>
               {container.kind === "channel" && (
                 <button
                   type="button"
                   data-testid={`device-group-${deviceId}`}
                   title="Group into a rack (parallel chains)"
                   onClick={() => dispatch(commands.groupIntoRack(channelId, [deviceId]))}
-                  style={tinyButton}
+                  className="fbl-btn fbl-btn--tiny"
                 >
                   ⧉
                 </button>
@@ -309,7 +286,7 @@ function DevicePanel({
                 title="Move earlier in the chain"
                 disabled={index <= 0}
                 onClick={() => moveTo(index - 1)}
-                style={tinyButton}
+                className="fbl-btn fbl-btn--tiny"
               >
                 ◀
               </button>
@@ -319,7 +296,7 @@ function DevicePanel({
                 title="Move later in the chain"
                 disabled={index < 0 || index >= siblings.length - 1}
                 onClick={() => moveTo(index + 1)}
-                style={tinyButton}
+                className="fbl-btn fbl-btn--tiny"
               >
                 ▶
               </button>
@@ -330,9 +307,11 @@ function DevicePanel({
 
       {/* SS6 "Audio From" — the sidechain picker, exactly like Ableton's. */}
       {hasScPort && (
-        <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#888", flex: "0 0 auto" }}>Audio From</span>
+        <div className="fbl-sc">
+          <span className="fbl-sc-label">Audio From</span>
           <select
+            className="fbl-field fbl-field--sm"
+            style={{ flex: 1, maxWidth: 138 }}
             data-testid={`sc-source-${deviceId}`}
             value={scEdge?.from.channel ?? ""}
             onChange={(e) => {
@@ -353,7 +332,6 @@ function DevicePanel({
               };
               dispatch(commands.setSidechain(edge));
             }}
-            style={{ fontSize: 10, minWidth: 0, maxWidth: 138, background: "#181818", color: "#bbb" }}
           >
             <option value="">None</option>
             {doc.channelOrder.map((id) => (
@@ -366,6 +344,8 @@ function DevicePanel({
           </select>
           {scEdge !== undefined && (
             <select
+              className="fbl-field fbl-field--sm"
+              style={{ flex: 1, maxWidth: 138 }}
               data-testid={`sc-tap-${deviceId}`}
               value={scEdge.from.tap}
               onChange={(e) =>
@@ -376,7 +356,6 @@ function DevicePanel({
                   }),
                 )
               }
-              style={{ fontSize: 10, minWidth: 0, maxWidth: 138, background: "#181818", color: "#bbb" }}
             >
               <option value="preFx">Pre FX</option>
               <option value="postFx" disabled={scEdge.from.channel === channelId}>
@@ -392,18 +371,18 @@ function DevicePanel({
 
       {/* Param rows (SS5): registry handles exist only once audio is up. */}
       {panel.rows.map((row, i) => (
-        <div key={i} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <div key={i} className="fbl-param-row">
           {/* SS5 panel rows may name themselves — the drum machine's do, one
               row per pad, and without this the eight pads' 24 knobs were an
               undifferentiated grid. */}
           {row.label !== undefined && (
-            <span style={{ fontSize: 10, color: "#8a8f99", minWidth: 74 }}>{row.label}</span>
+            <span className="fbl-param-row-label">{row.label}</span>
           )}
           {row.controls.map((spec) => {
             const handle = engine?.params.get(deviceParamId(channelId, deviceId, spec.paramId));
             if (handle === undefined) {
               return (
-                <span key={spec.paramId} style={{ fontSize: 10, color: "#444" }}>
+                <span key={spec.paramId} className="fbl-param-pending">
                   {spec.paramId}
                 </span>
               );
@@ -486,74 +465,46 @@ function RackPanel({
   if (rack === undefined) return null;
 
   return (
-    <div
-      className="fbl-rack"
-      data-testid={`rack-${rackId}`}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        border: "1px solid #4a4a55",
-        borderRadius: 4,
-        padding: 6,
-        background: "#1b1b20",
-        flex: "0 0 auto",
-        opacity: rack.enabled ? 1 : 0.5,
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+    // Three levels of nesting (rack > chain > device) inside a strip that is
+    // already dense: `.fbl-rack` carries the depth with an accent rail and a
+    // darker ground rather than another border at every level.
+    <div className="fbl-rack" data-testid={`rack-${rackId}`} data-enabled={rack.enabled}>
+      <div className="fbl-device-head">
         <button
           type="button"
+          className="fbl-led"
           data-testid={`rack-enable-${rackId}`}
+          data-on={rack.enabled}
           role="switch"
           aria-checked={rack.enabled}
           title={rack.enabled ? "Disable rack" : "Enable rack"}
           onClick={() => dispatch(commands.setRackEnabled(rackId, !rack.enabled))}
-          style={{
-            width: 12,
-            height: 12,
-            flex: "0 0 auto",
-            borderRadius: "50%",
-            border: "1px solid #555",
-            background: rack.enabled ? "#7ad67a" : "#222",
-            cursor: "pointer",
-            padding: 0,
-          }}
         />
         <input
+          className="fbl-rack-name"
           data-testid={`rack-name-${rackId}`}
           aria-label="Rack name"
           value={rack.name}
           onChange={(e) => dispatch(commands.renameRack(rackId, e.target.value))}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            fontSize: 12,
-            background: "transparent",
-            color: "#dde",
-            border: "1px solid transparent",
-            borderRadius: 2,
-            padding: "1px 2px",
-          }}
         />
         <button
           type="button"
+          className="fbl-btn fbl-btn--tiny fbl-btn--ghost"
           data-testid={`rack-remove-${rackId}`}
           title="Remove rack and everything in it"
           onClick={() => dispatch(commands.removeDevices([rackId]))}
-          style={tinyButton}
         >
           ✕
         </button>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <div className="fbl-device-row">
         <button
           type="button"
           data-testid={`rack-add-macro-${rackId}`}
           title="Add a macro knob"
           onClick={() => dispatch(commands.addMacro(rackId))}
-          style={tinyButton}
+          className="fbl-btn fbl-btn--tiny"
         >
           + Macro
         </button>
@@ -562,7 +513,7 @@ function RackPanel({
           data-testid={`rack-add-chain-${rackId}`}
           title="Add a parallel chain"
           onClick={() => dispatch(commands.addRackChain(rackId))}
-          style={tinyButton}
+          className="fbl-btn fbl-btn--tiny"
         >
           + Chain
         </button>
@@ -571,28 +522,28 @@ function RackPanel({
           data-testid={`rack-ungroup-${rackId}`}
           title="Dissolve the rack back into the channel chain"
           onClick={() => dispatch(commands.ungroupRack(rackId))}
-          style={tinyButton}
+          className="fbl-btn fbl-btn--tiny"
         >
           Ungroup
         </button>
-        <span style={{ display: "inline-flex", gap: 4, marginLeft: "auto" }}>
+        <span style={{ display: "inline-flex", gap: 3, marginLeft: "auto" }}>
           <button
             type="button"
+            className="fbl-btn fbl-btn--tiny"
             data-testid={`rack-left-${rackId}`}
             title="Move earlier in the chain"
             disabled={index <= 0}
             onClick={() => dispatch(commands.moveDevice(channelId, rackId, index - 1))}
-            style={tinyButton}
           >
             ◀
           </button>
           <button
             type="button"
+            className="fbl-btn fbl-btn--tiny"
             data-testid={`rack-right-${rackId}`}
             title="Move later in the chain"
             disabled={index < 0 || index >= slots.length - 1}
             onClick={() => dispatch(commands.moveDevice(channelId, rackId, index + 1))}
-            style={tinyButton}
           >
             ▶
           </button>
@@ -603,26 +554,17 @@ function RackPanel({
           target menu lists exactly the rack's own device params — a bounded,
           meaningful list, unlike "every param in the project". */}
       {rack.macros.length > 0 && (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div className="fbl-macros">
           {rack.macros.map((macro) => {
             const handle = engine?.params.get(macro.param);
             return (
               <div
                 key={macro.id}
+                className="fbl-macro"
                 data-testid={`macro-${rackId}-${macro.id}`}
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: 2,
-                  border: "1px solid #333",
-                  borderRadius: 3,
-                  padding: 3,
-                  minWidth: 74,
-                }}
               >
                 {handle === undefined ? (
-                  <span style={{ fontSize: 10, color: "#444" }}>{macro.name}</span>
+                  <span className="fbl-param-pending">{macro.name}</span>
                 ) : (
                   <Knob
                     handle={handle}
@@ -651,7 +593,8 @@ function RackPanel({
                       }),
                     );
                   }}
-                  style={{ fontSize: 9, maxWidth: 70, background: "#181818", color: "#bbb" }}
+                  className="fbl-field fbl-field--sm"
+                  style={{ maxWidth: 70, height: 16, fontSize: 9 }}
                 >
                   <option value="" disabled>
                     map…
@@ -669,7 +612,7 @@ function RackPanel({
                     data-testid={`macro-unmap-${rackId}-${macro.id}`}
                     title={`Unmap ${target.paramId}`}
                     onClick={() => dispatch(commands.unmapMacro(rackId, macro.id, target.paramId))}
-                    style={{ ...tinyButton, fontSize: 8, maxWidth: 70, overflow: "hidden" }}
+                    className="fbl-macro-target"
                   >
                     {labelForParam(doc, target.paramId)} ✕
                   </button>
@@ -688,33 +631,15 @@ function RackPanel({
             key={chain.id}
             className="fbl-rack-chain"
             data-testid={`chain-${rackId}-${chain.id}`}
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 4,
-              border: "1px solid #333",
-              borderRadius: 3,
-              padding: 4,
-              background: "#17171b",
-              opacity: chain.mute && !chain.solo ? 0.55 : 1,
-            }}
+            data-audible={!chain.mute || chain.solo}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <div className="fbl-device-row">
               <input
+                className="fbl-chain-name"
                 data-testid={`chain-name-${rackId}-${chain.id}`}
                 aria-label="Chain name"
                 value={chain.name}
                 onChange={(e) => dispatch(commands.renameRackChain(rackId, chain.id, e.target.value))}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  fontSize: 10,
-                  background: "transparent",
-                  color: "#bbb",
-                  border: "1px solid transparent",
-                  borderRadius: 2,
-                  padding: "1px 2px",
-                }}
               />
               <button
                 type="button"
@@ -722,7 +647,9 @@ function RackPanel({
                 aria-pressed={chain.mute}
                 title="Mute this chain"
                 onClick={() => dispatch(commands.setChainMuted(rackId, chain.id, !chain.mute))}
-                style={{ ...tinyButton, background: chain.mute ? "#c58f00" : "#222", color: chain.mute ? "#000" : "#999" }}
+                className="fbl-btn fbl-btn--tiny"
+                data-on={chain.mute}
+                data-tone="amber"
               >
                 M
               </button>
@@ -732,7 +659,9 @@ function RackPanel({
                 aria-pressed={chain.solo}
                 title="Solo this chain (inside this rack only)"
                 onClick={() => dispatch(commands.setChainSolo(rackId, chain.id, !chain.solo))}
-                style={{ ...tinyButton, background: chain.solo ? "#2d7ff0" : "#222", color: chain.solo ? "#fff" : "#999" }}
+                className="fbl-btn fbl-btn--tiny"
+                data-on={chain.solo}
+                data-tone="blue"
               >
                 S
               </button>
@@ -741,15 +670,15 @@ function RackPanel({
                 data-testid={`chain-remove-${rackId}-${chain.id}`}
                 title="Remove this chain and its devices"
                 onClick={() => dispatch(commands.removeRackChain(rackId, chain.id))}
-                style={tinyButton}
+                className="fbl-btn fbl-btn--tiny fbl-btn--ghost"
               >
                 ✕
               </button>
             </div>
 
-            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <div className="fbl-param-row">
               {gain === undefined ? (
-                <span style={{ fontSize: 10, color: "#444" }}>gain</span>
+                <span className="fbl-param-pending">gain</span>
               ) : (
                 <Knob
                   handle={gain}
@@ -760,7 +689,7 @@ function RackPanel({
                 />
               )}
               {pan === undefined ? (
-                <span style={{ fontSize: 10, color: "#444" }}>pan</span>
+                <span className="fbl-param-pending">pan</span>
               ) : (
                 <Knob
                   handle={pan}
@@ -772,7 +701,7 @@ function RackPanel({
               )}
             </div>
 
-            <div style={{ display: "flex", gap: 6, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div className="fbl-chain-devices">
               {chain.devices.map((deviceId) => (
                 <DevicePanel
                   key={deviceId}
@@ -800,7 +729,8 @@ function RackPanel({
                     }),
                   );
                 }}
-                style={{ fontSize: 10, background: "#181818", color: "#bbb", alignSelf: "center" }}
+                className="fbl-field fbl-field--sm"
+                style={{ alignSelf: "center" }}
               >
                 <option value="" disabled>
                   + Effect…
@@ -844,8 +774,9 @@ export function DeviceChainPanel({
 
   if (channel === undefined) {
     return (
-      <div data-testid="device-chain-panel" style={{ padding: 12, color: "#666", fontSize: 12 }}>
-        Select a channel to see its devices.
+      <div className="fbl-empty" data-testid="device-chain-panel">
+        <strong>No channel selected</strong>
+        Pick a track in the mixer or the arrangement to see its instrument and effects.
       </div>
     );
   }
@@ -857,12 +788,12 @@ export function DeviceChainPanel({
     <div
       className="fbl-device-chain"
       data-testid="device-chain-panel"
-      style={{ display: "flex", gap: 8, padding: 8, overflowX: "auto", alignItems: "flex-start" }}
     >
       {/* Instrument slot (tracks only, SS7) */}
       {channel.role === "track" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: "0 0 auto" }}>
+        <div className="fbl-slot">
           <select
+            className="fbl-field"
             data-testid="instrument-select"
             aria-label="Instrument"
             value={sourceDevice?.definitionId ?? ""}
@@ -880,7 +811,6 @@ export function DeviceChainPanel({
                 commands.setInstrument(channel.id, { definitionId: def.id, version: def.version }, carry),
               );
             }}
-            style={{ fontSize: 11, background: "#181818", color: "#bbb" }}
           >
             <option value="" disabled>
               (no instrument)
@@ -936,6 +866,8 @@ export function DeviceChainPanel({
 
       {/* Add-effect caret (SS7: "into a chain at a drop caret") */}
       <select
+        className="fbl-field"
+        style={{ alignSelf: "flex-start", marginTop: 4, flex: "0 0 auto" }}
         data-testid="add-effect-select"
         aria-label="Add effect"
         value=""
@@ -945,7 +877,6 @@ export function DeviceChainPanel({
             dispatch(commands.addEffect(channel.id, { definitionId: def.id, version: def.version }));
           }
         }}
-        style={{ fontSize: 11, background: "#181818", color: "#bbb", alignSelf: "center", flex: "0 0 auto" }}
       >
         <option value="" disabled>
           + Add effect…
@@ -960,6 +891,8 @@ export function DeviceChainPanel({
       {/* Factory racks: a whole patch (chains, devices, routing) as one
           undoable command. `Gated Reverb` is the one the racks plan aimed at. */}
       <select
+        className="fbl-field"
+        style={{ alignSelf: "flex-start", marginTop: 4, flex: "0 0 auto" }}
         data-testid="add-factory-rack"
         aria-label="Add a factory rack"
         value=""
@@ -967,7 +900,6 @@ export function DeviceChainPanel({
           const preset = FACTORY_RACKS.find((rack) => rack.name === e.target.value);
           if (preset !== undefined) dispatch(commands.addRackPreset(channel.id, preset));
         }}
-        style={{ fontSize: 11, background: "#181818", color: "#bbb", alignSelf: "center" }}
       >
         <option value="" disabled>
           + Rack preset…
@@ -984,7 +916,8 @@ export function DeviceChainPanel({
         data-testid="add-rack-button"
         title="Add an empty rack (parallel chains)"
         onClick={() => dispatch(commands.addRack(channel.id))}
-        style={{ ...tinyButton, alignSelf: "center", fontSize: 11, padding: "2px 6px" }}
+        className="fbl-btn"
+        style={{ alignSelf: "flex-start", marginTop: 4, flex: "0 0 auto" }}
       >
         + Rack
       </button>
@@ -992,21 +925,10 @@ export function DeviceChainPanel({
       {/* SS6: a rejected edit (a sidechain that would close a cycle) says so
           inline instead of looking like nothing happened. */}
       {hint !== null && (
-        <span data-testid="device-chain-hint" role="status" style={{ ...rejectionHintStyle, alignSelf: "center" }}>
+        <span className="fbl-hint" data-testid="device-chain-hint" role="status" style={{ alignSelf: "flex-start", marginTop: 8 }}>
           {hint}
         </span>
       )}
     </div>
   );
 }
-
-const tinyButton: React.CSSProperties = {
-  fontSize: 10,
-  flex: "0 0 auto",
-  background: "#222",
-  color: "#999",
-  border: "1px solid #444",
-  borderRadius: 3,
-  cursor: "pointer",
-  padding: "0 4px",
-};

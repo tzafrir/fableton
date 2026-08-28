@@ -1,0 +1,1367 @@
+/* Fableton chrome — the DOM half of the design system in ./tokens.ts.
+ *
+ * Every value under `--fbl-*` mirrors a constant in that file; the canvas
+ * editors import the constants directly, so the two halves cannot drift.
+ *
+ * The app commits to ONE visual world (a dark console), so there is no
+ * light-theme block — but nothing here inherits a colour either: every
+ * surface, border and glyph is painted from a token, so the page holds its
+ * own look regardless of what the browser's default scheme is. */
+
+:root {
+  /* --- ground and surfaces -------------------------------------------- */
+  --fbl-app: #0b0d12;
+  --fbl-panel: #11141b;
+  --fbl-raised: #171b24;
+  --fbl-raised-high: #1e2431;
+  --fbl-well: #080a0e;
+  --fbl-line: #232936;
+  --fbl-line-strong: #333b4c;
+
+  /* --- type ------------------------------------------------------------ */
+  --fbl-text: #e6eaf3;
+  --fbl-text-dim: #8d96aa;
+  --fbl-text-faint: #5a6375;
+  --fbl-on-accent: #04161a;
+
+  /* --- the three signal hues ------------------------------------------ */
+  --fbl-aqua: #35d0c8;
+  --fbl-aqua-dim: #1f7d79;
+  --fbl-amber: #f5b544;
+  --fbl-amber-dim: #8a6420;
+  --fbl-coral: #ff5d5d;
+  --fbl-blue: #5b8dee;
+  --fbl-warn: #f2915c;
+  --fbl-green: #4fc98a;
+
+  /* --- geometry -------------------------------------------------------- */
+  --fbl-r1: 4px;
+  --fbl-r2: 6px;
+  --fbl-r3: 10px;
+  --fbl-ctl-h: 22px;
+
+  --fbl-font: "Inter var", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --fbl-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Roboto Mono", Menlo, monospace;
+
+  /* A card's lift: a hairline of light along the top edge, a soft drop
+     below. Two shadows, used everywhere something is "on" the panel. */
+  --fbl-lift: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 1px 3px rgba(0, 0, 0, 0.45);
+  --fbl-focus: 0 0 0 2px rgba(53, 208, 200, 0.45);
+
+  color-scheme: dark;
+}
+
+/* --- base ------------------------------------------------------------- */
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--fbl-app);
+  color: var(--fbl-text);
+  font-family: var(--fbl-font);
+  font-size: 12px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior: none;
+}
+
+/* Digits must not reflow while the transport runs. */
+.fbl-num,
+[data-testid$="-readout"],
+.fbl-readout {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: rgba(53, 208, 200, 0.3);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--fbl-focus);
+  border-radius: var(--fbl-r1);
+}
+
+/* Thin, unobtrusive scrollbars — the chrome is dense enough already. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2b3242 transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #2b3242;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 6px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #3a4356;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* --- shell ------------------------------------------------------------ */
+
+.fbl-app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  background: var(--fbl-app);
+}
+
+.fbl-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px 0 2px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fbl-text);
+  white-space: nowrap;
+}
+
+/* The mark: a monitor lamp. Two rings, aqua, lit. */
+.fbl-brand::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--fbl-aqua);
+  box-shadow: 0 0 0 2px rgba(53, 208, 200, 0.18), 0 0 10px rgba(53, 208, 200, 0.55);
+}
+
+/* --- toolbar ---------------------------------------------------------- */
+
+.fbl-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 7px 10px;
+  background: linear-gradient(180deg, #151922 0%, var(--fbl-panel) 100%);
+  border-bottom: 1px solid var(--fbl-line);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.5);
+}
+
+/* Controls that belong to one another sit in one group; groups are told
+   apart by a hairline, never by a box — boxes inside a 40 px strip read as
+   clutter at this density. */
+.fbl-tb-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fbl-tb-sep {
+  width: 1px;
+  align-self: stretch;
+  min-height: 20px;
+  margin: 0 6px;
+  background: var(--fbl-line);
+}
+
+.fbl-tb-spacer {
+  flex: 1 1 auto;
+  min-width: 8px;
+}
+
+.fbl-tb-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fbl-text-faint);
+  white-space: nowrap;
+}
+
+/* --- buttons ---------------------------------------------------------- */
+
+.fbl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: var(--fbl-ctl-h);
+  padding: 0 9px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fbl-text-dim);
+  background: linear-gradient(180deg, #1c2130 0%, #161a23 100%);
+  border: 1px solid var(--fbl-line-strong);
+  border-radius: var(--fbl-r1);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 90ms ease, color 90ms ease, border-color 90ms ease;
+}
+
+.fbl-btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, #242b3c 0%, #1c2130 100%);
+  color: var(--fbl-text);
+  border-color: #3f4859;
+}
+
+.fbl-btn:active:not(:disabled) {
+  background: #12161e;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.fbl-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+/* Square, for a glyph. Sized so ◀ ▶ ✕ are real hit targets. */
+.fbl-btn--icon {
+  width: var(--fbl-ctl-h);
+  padding: 0;
+  font-size: 11px;
+}
+
+/* Smaller still — the per-device row, where six of these share 150 px. */
+.fbl-btn--tiny {
+  height: 17px;
+  min-width: 17px;
+  padding: 0 5px;
+  font-size: 10px;
+  border-radius: 3px;
+}
+
+/* No chrome until you point at it: for dense rows of secondary verbs. */
+.fbl-btn--ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.fbl-btn--ghost:hover:not(:disabled) {
+  background: var(--fbl-raised-high);
+  border-color: var(--fbl-line);
+}
+
+/* A pressed toggle carries its meaning in colour: aqua = engaged. */
+.fbl-btn[data-on="true"] {
+  color: var(--fbl-on-accent);
+  background: linear-gradient(180deg, #45e0d7 0%, var(--fbl-aqua) 100%);
+  border-color: #2ba9a3;
+  font-weight: 600;
+}
+.fbl-btn[data-on="true"]:hover:not(:disabled) {
+  background: linear-gradient(180deg, #55e9e0 0%, #3ad9d1 100%);
+  color: var(--fbl-on-accent);
+}
+
+/* Tone overrides for the toggles that mean something other than "engaged".
+   Mute is amber, solo/loop blue, record coral — the same language the
+   canvas editors use for the same states. */
+.fbl-btn[data-on="true"][data-tone="amber"] {
+  background: linear-gradient(180deg, #ffc65c 0%, var(--fbl-amber) 100%);
+  border-color: #b4801f;
+  color: #1a1200;
+}
+.fbl-btn[data-on="true"][data-tone="blue"] {
+  background: linear-gradient(180deg, #6d9bf5 0%, var(--fbl-blue) 100%);
+  border-color: #3c66b8;
+  color: #04101f;
+}
+.fbl-btn[data-on="true"][data-tone="coral"] {
+  background: linear-gradient(180deg, #ff7373 0%, #ef4444 100%);
+  border-color: #b93131;
+  color: #fff;
+}
+
+/* Record, armed: it pulses, because a take running unnoticed is the one
+   state in this app that quietly ruins work. */
+.fbl-btn[data-on="true"][data-tone="coral"] {
+  animation: fbl-rec 1.6s ease-in-out infinite;
+}
+@keyframes fbl-rec {
+  50% {
+    box-shadow: 0 0 0 3px rgba(255, 93, 93, 0.22);
+  }
+}
+
+/* The transport's three: bigger, because they are aimed at constantly. */
+.fbl-btn--transport {
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  font-size: 12px;
+  color: var(--fbl-text);
+}
+.fbl-btn--transport[data-role="play"]:not(:disabled) {
+  color: var(--fbl-green);
+}
+.fbl-btn--transport[data-role="rec"]:not(:disabled) {
+  color: var(--fbl-coral);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fbl-btn,
+  .fbl-btn[data-on="true"][data-tone="coral"] {
+    transition: none;
+    animation: none;
+  }
+}
+
+/* --- fields ----------------------------------------------------------- */
+
+.fbl-field {
+  height: var(--fbl-ctl-h);
+  padding: 0 7px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fbl-text);
+  background: var(--fbl-well);
+  border: 1px solid var(--fbl-line-strong);
+  border-radius: var(--fbl-r1);
+  min-width: 0;
+}
+
+.fbl-field:hover:not(:disabled) {
+  border-color: #3f4859;
+}
+
+.fbl-field:focus {
+  outline: none;
+  border-color: var(--fbl-aqua-dim);
+  box-shadow: var(--fbl-focus);
+}
+
+.fbl-field:disabled {
+  opacity: 0.45;
+}
+
+.fbl-field--num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* A select is a button that opens a list — give it the chevron to say so. */
+select.fbl-field {
+  appearance: none;
+  padding-right: 20px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--fbl-text-faint) 50%),
+    linear-gradient(135deg, var(--fbl-text-faint) 50%, transparent 50%);
+  background-position: calc(100% - 11px) calc(50% + 1px), calc(100% - 7px) calc(50% + 1px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+select.fbl-field:hover:not(:disabled) {
+  background-image: linear-gradient(45deg, transparent 50%, var(--fbl-text-dim) 50%),
+    linear-gradient(135deg, var(--fbl-text-dim) 50%, transparent 50%);
+}
+select.fbl-field option {
+  background: var(--fbl-raised);
+  color: var(--fbl-text);
+}
+
+/* The compact variant, for a device card's 150 px of width. */
+.fbl-field--sm {
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+select.fbl-field--sm {
+  padding-right: 17px;
+  background-position: calc(100% - 10px) calc(50% + 1px), calc(100% - 6px) calc(50% + 1px);
+}
+
+/* A checkbox that matches everything around it. */
+.fbl-check {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  background: var(--fbl-well);
+  border: 1px solid var(--fbl-line-strong);
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+}
+.fbl-check::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border: 1.5px solid var(--fbl-on-accent);
+  border-top: 0;
+  border-right: 0;
+  transform: rotate(-45deg) translate(0.5px, -1px);
+  opacity: 0;
+}
+.fbl-check:checked {
+  background: var(--fbl-aqua);
+  border-color: #2ba9a3;
+}
+.fbl-check:checked::after {
+  opacity: 1;
+}
+
+.fbl-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--fbl-text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* An inline unit suffix ("BPM", "/") reads as part of its field. */
+.fbl-unit {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--fbl-text-faint);
+}
+
+/* --- status ----------------------------------------------------------- */
+
+.fbl-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--fbl-ctl-h);
+  padding: 0 8px;
+  font-size: 10px;
+  color: var(--fbl-text-dim);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--fbl-line);
+  border-radius: 999px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.fbl-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fbl-text-faint);
+  flex: 0 0 auto;
+}
+.fbl-status[data-tone="ok"]::before {
+  background: var(--fbl-green);
+}
+.fbl-status[data-tone="busy"]::before {
+  background: var(--fbl-amber);
+}
+.fbl-status[data-tone="error"]::before {
+  background: var(--fbl-coral);
+}
+.fbl-status[data-tone="live"]::before {
+  background: var(--fbl-aqua);
+  box-shadow: 0 0 7px rgba(53, 208, 200, 0.8);
+}
+.fbl-status--plain::before {
+  display: none;
+}
+
+.fbl-status-message {
+  font-size: 11px;
+  color: var(--fbl-warn);
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- panes and tabs --------------------------------------------------- */
+
+.fbl-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fbl-pane-arrangement {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--fbl-app);
+}
+
+/* The drag handle between the two panes. Three px of hit target is not
+   enough for a real grab, so the bar is 6 px with a centred hairline: it
+   reads as a seam and behaves as a handle. */
+.fbl-splitter {
+  flex: 0 0 auto;
+  height: 7px;
+  background: var(--fbl-app);
+  border-top: 1px solid var(--fbl-line);
+  border-bottom: 1px solid var(--fbl-line);
+  cursor: row-resize;
+  position: relative;
+  touch-action: none;
+}
+.fbl-splitter::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 2px;
+  width: 42px;
+  height: 1px;
+  margin-left: -21px;
+  border-radius: 1px;
+  background: var(--fbl-line-strong);
+  transition: background 100ms ease;
+}
+.fbl-splitter:hover::after {
+  background: var(--fbl-aqua);
+}
+
+.fbl-pane-bottom {
+  flex: 0 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--fbl-panel);
+}
+
+.fbl-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--fbl-panel);
+  border-bottom: 1px solid var(--fbl-line);
+}
+
+/* A tab is named by an underline, not a box: the pane below is the surface,
+   and a bordered tab would draw a second edge right next to the pane's. */
+.fbl-tab {
+  position: relative;
+  height: 27px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--fbl-text-faint);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: color 90ms ease;
+}
+.fbl-tab:hover {
+  color: var(--fbl-text-dim);
+}
+.fbl-tab[aria-selected="true"] {
+  color: var(--fbl-text);
+}
+.fbl-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--fbl-aqua);
+}
+
+.fbl-tab-panel {
+  flex: 1;
+  min-height: 0;
+}
+
+.fbl-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.fbl-split > * {
+  flex: 1;
+  min-width: 0;
+}
+.fbl-split > * + * {
+  border-left: 1px solid var(--fbl-line);
+}
+
+/* A panel's own header strip: verbs on the left, hint on the right. */
+.fbl-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--fbl-panel);
+  border-bottom: 1px solid var(--fbl-line);
+  flex: 0 0 auto;
+}
+
+.fbl-empty {
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--fbl-text-faint);
+}
+.fbl-empty strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fbl-text-dim);
+}
+
+.fbl-hint {
+  font-size: 10px;
+  color: var(--fbl-warn);
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- mixer ------------------------------------------------------------ */
+
+.fbl-mixer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--fbl-panel);
+}
+
+.fbl-mixer-strips {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  /* Both axes: a strip is ~300 px of controls and the pane can be dragged
+     shorter than that, at which point the strip must scroll rather than
+     silently lose its routing picker off the bottom. */
+  overflow: auto;
+}
+
+/* One strip = one channel. The role colour is a 2 px rule under the name;
+   the selection is a full-height wash plus a lit top edge, so which channel
+   the device chain is showing is readable from across the room. */
+.fbl-strip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 6px 8px;
+  min-width: 92px;
+  flex: 0 0 auto;
+  border-right: 1px solid var(--fbl-line);
+  background: transparent;
+  transition: background 100ms ease;
+}
+.fbl-strip:hover {
+  background: rgba(255, 255, 255, 0.017);
+}
+.fbl-strip[data-selected="true"] {
+  background: linear-gradient(180deg, rgba(53, 208, 200, 0.09) 0%, rgba(53, 208, 200, 0.02) 46%, transparent 100%);
+}
+.fbl-strip[data-selected="true"]::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--fbl-aqua);
+}
+
+/* A column flex item shrinks below its content by default, which is how a
+   short pane turned a strip's NAME into a 5 px sliver of clipped text (the
+   same failure mode as a device header's buttons spilling out of their own
+   card). Nothing in a strip may shrink: the strip keeps its full height and
+   the mixer scrolls instead. */
+.fbl-strip > *,
+.fbl-device > *,
+.fbl-rack > *,
+.fbl-rack-chain > * {
+  flex: 0 0 auto;
+}
+
+.fbl-strip {
+  min-height: min-content;
+}
+
+.fbl-strip-name {
+  max-width: 80px;
+  padding-bottom: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fbl-text);
+  border-bottom: 2px solid var(--fbl-line-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+
+.fbl-strip-role {
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fbl-text-faint);
+}
+
+.fbl-strip-sends {
+  display: flex;
+  gap: 4px;
+  padding: 4px 5px 3px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--fbl-line);
+  border-radius: var(--fbl-r1);
+}
+
+.fbl-send {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Pre/post tap: a two-state micro-chip, not a button that looks clickable
+   enough to be mistaken for the send itself. */
+.fbl-tap {
+  font: inherit;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 14px;
+  height: 14px;
+  padding: 0 4px;
+  color: var(--fbl-text-faint);
+  background: var(--fbl-well);
+  border: 1px solid var(--fbl-line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.fbl-tap[data-on="true"] {
+  color: #cfe6ff;
+  background: rgba(91, 141, 238, 0.22);
+  border-color: rgba(91, 141, 238, 0.5);
+}
+
+/* A send that exists but has no live handle yet, and the "add" stub. */
+.fbl-send-stub {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  font-size: 10px;
+  color: var(--fbl-text-faint);
+  background: transparent;
+  border: 1px dashed var(--fbl-line-strong);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.fbl-send-stub:hover {
+  color: var(--fbl-aqua);
+  border-color: var(--fbl-aqua-dim);
+  border-style: solid;
+}
+.fbl-send-stub[data-pending="true"] {
+  border-style: solid;
+  cursor: default;
+}
+
+.fbl-fader-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 4px 6px 2px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--fbl-line);
+  border-radius: var(--fbl-r2);
+}
+
+.fbl-fader-placeholder {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 106px;
+  font-size: 10px;
+  color: var(--fbl-text-faint);
+}
+
+.fbl-meter {
+  position: relative;
+  width: 7px;
+  height: 96px;
+  background: var(--fbl-well);
+  border-radius: 2px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+/* M and S read as one control, split in two. */
+/* M and S are one control split in two, so they share an edge. */
+.fbl-ms {
+  display: inline-flex;
+}
+.fbl-ms .fbl-btn + .fbl-btn {
+  margin-left: -1px;
+}
+.fbl-ms .fbl-btn {
+  width: 24px;
+  height: 19px;
+  padding: 0;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 0;
+}
+.fbl-ms .fbl-btn:first-child {
+  border-radius: var(--fbl-r1) 0 0 var(--fbl-r1);
+}
+.fbl-ms .fbl-btn:last-child {
+  border-radius: 0 var(--fbl-r1) var(--fbl-r1) 0;
+}
+
+.fbl-strip-out {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: auto;
+  padding-top: 4px;
+  width: 100%;
+  justify-content: center;
+}
+.fbl-strip-out .fbl-field {
+  max-width: 72px;
+}
+
+/* --- device chain ----------------------------------------------------- */
+
+.fbl-device-chain {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  overflow-x: auto;
+  align-items: flex-start;
+  height: 100%;
+  box-sizing: border-box;
+  background:
+    radial-gradient(120% 100% at 0% 0%, rgba(53, 208, 200, 0.045) 0%, transparent 55%),
+    var(--fbl-panel);
+}
+
+.fbl-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+/* A device is a card: its own surface, a header rail, and a lift. The chain
+   scrolls sideways, so a card never shrinks — a squeezed card pushes its own
+   controls past its border, which is exactly the bug this layout fixes. */
+.fbl-device {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 158px;
+  max-width: 250px;
+  flex: 0 0 auto;
+  padding: 7px;
+  background: linear-gradient(180deg, var(--fbl-raised-high) 0%, var(--fbl-raised) 34px);
+  border: 1px solid var(--fbl-line-strong);
+  border-radius: var(--fbl-r2);
+  box-shadow: var(--fbl-lift);
+  transition: opacity 120ms ease, border-color 120ms ease;
+}
+.fbl-device[data-enabled="false"] {
+  opacity: 0.45;
+}
+
+.fbl-device-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fbl-device-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--fbl-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fbl-device-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The enable LED, shared by devices and racks. Lit means audible. */
+.fbl-led {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid #3a4152;
+  background: #0c0f15;
+  cursor: pointer;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+.fbl-led[data-on="true"] {
+  background: var(--fbl-aqua);
+  border-color: #2ba9a3;
+  box-shadow: 0 0 7px rgba(53, 208, 200, 0.65);
+}
+
+.fbl-param-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.fbl-param-row-label {
+  min-width: 68px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fbl-text-faint);
+}
+
+/* A control whose handle does not exist yet (audio not booted). */
+.fbl-param-pending {
+  font-size: 10px;
+  color: var(--fbl-text-faint);
+  opacity: 0.6;
+}
+
+.fbl-sc {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 4px 5px;
+  background: rgba(0, 0, 0, 0.24);
+  border-radius: var(--fbl-r1);
+}
+.fbl-sc-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fbl-text-faint);
+  flex: 0 0 auto;
+}
+
+/* --- racks ------------------------------------------------------------ */
+
+/* A rack contains chains that contain devices — three levels deep in a strip
+   that is already dense. The nesting is carried by an accent rail down the
+   left edge and by ground getting DARKER as it goes inward, so depth reads
+   without another border at every level. */
+.fbl-rack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 7px 7px 7px 9px;
+  background: linear-gradient(180deg, #1b2130 0%, #141821 100%);
+  border: 1px solid var(--fbl-line-strong);
+  border-left: 2px solid var(--fbl-blue);
+  border-radius: var(--fbl-r2);
+  box-shadow: var(--fbl-lift);
+}
+.fbl-rack[data-enabled="false"] {
+  opacity: 0.45;
+  border-left-color: var(--fbl-line-strong);
+}
+
+.fbl-rack-name {
+  flex: 1;
+  min-width: 0;
+  height: 19px;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fbl-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+}
+.fbl-rack-name:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.fbl-rack-name:focus {
+  outline: none;
+  background: var(--fbl-well);
+  border-color: var(--fbl-aqua-dim);
+}
+
+.fbl-macros {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  padding: 6px;
+  background: rgba(0, 0, 0, 0.26);
+  border-radius: var(--fbl-r1);
+}
+
+.fbl-macro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 76px;
+  padding: 4px;
+  background: var(--fbl-raised);
+  border: 1px solid var(--fbl-line);
+  border-radius: var(--fbl-r1);
+}
+
+/* One mapped target, removable. Reads as a chip, not a button. */
+.fbl-macro-target {
+  max-width: 70px;
+  padding: 1px 5px;
+  font: inherit;
+  font-size: 8px;
+  color: var(--fbl-text-dim);
+  background: rgba(91, 141, 238, 0.16);
+  border: 1px solid rgba(91, 141, 238, 0.32);
+  border-radius: 999px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.fbl-macro-target:hover {
+  color: var(--fbl-coral);
+  border-color: rgba(255, 93, 93, 0.5);
+  background: rgba(255, 93, 93, 0.14);
+}
+
+.fbl-rack-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--fbl-line);
+  border-radius: var(--fbl-r1);
+  transition: opacity 120ms ease;
+}
+.fbl-rack-chain[data-audible="false"] {
+  opacity: 0.5;
+}
+
+.fbl-chain-name {
+  flex: 1;
+  min-width: 0;
+  height: 17px;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--fbl-text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+}
+.fbl-chain-name:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.fbl-chain-name:focus {
+  outline: none;
+  background: var(--fbl-well);
+  border-color: var(--fbl-aqua-dim);
+  color: var(--fbl-text);
+}
+
+.fbl-chain-devices {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+/* --- automation ------------------------------------------------------- */
+
+.fbl-automation {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  background: var(--fbl-panel);
+}
+
+.fbl-lane-list {
+  width: 236px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px;
+  overflow-y: auto;
+  border-right: 1px solid var(--fbl-line);
+  background: var(--fbl-panel);
+}
+
+.fbl-lane-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 5px;
+  border-radius: var(--fbl-r1);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 90ms ease;
+}
+.fbl-lane-row:hover {
+  background: var(--fbl-raised);
+}
+.fbl-lane-row[data-selected="true"] {
+  background: rgba(53, 208, 200, 0.1);
+  border-color: rgba(53, 208, 200, 0.28);
+}
+.fbl-lane-row[data-live="false"] {
+  opacity: 0.45;
+}
+
+.fbl-lane-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--fbl-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fbl-lane-row[data-selected="true"] .fbl-lane-name {
+  color: var(--fbl-text);
+}
+
+.fbl-lane-editor {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+/* --- SS5 control kit -------------------------------------------------- */
+
+.fbl-control {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  touch-action: none;
+  user-select: none;
+  cursor: ns-resize;
+  border-radius: var(--fbl-r1);
+  outline: none;
+}
+.fbl-control[data-dragging="true"] {
+  cursor: none;
+}
+.fbl-control:focus-visible {
+  box-shadow: var(--fbl-focus);
+}
+
+.fbl-control-label {
+  max-width: 60px;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  color: var(--fbl-text-faint);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fbl-control:hover .fbl-control-label {
+  color: var(--fbl-text-dim);
+}
+
+/* The value follows the knob while you drag it, in the mono face — a number
+   that changes should not also change width. */
+.fbl-control-readout {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 3px;
+  padding: 3px 7px;
+  font-family: var(--fbl-font-mono);
+  font-size: 11px;
+  color: var(--fbl-text);
+  background: #05070b;
+  border: 1px solid var(--fbl-aqua-dim);
+  border-radius: var(--fbl-r1);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.fbl-control-entry {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 66px;
+  height: 20px;
+  padding: 0 5px;
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--fbl-text);
+  background: var(--fbl-well);
+  border: 1px solid var(--fbl-aqua);
+  border-radius: 3px;
+  z-index: 41;
+}
+.fbl-control-entry:focus {
+  outline: none;
+}
+
+.fbl-control-menu {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-width: 172px;
+  padding: 4px;
+  background: var(--fbl-raised);
+  border: 1px solid var(--fbl-line-strong);
+  border-radius: var(--fbl-r2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.62);
+  font-size: 11px;
+  color: var(--fbl-text-dim);
+}
+
+.fbl-menu-item {
+  padding: 5px 8px;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: var(--fbl-r1);
+  cursor: pointer;
+}
+.fbl-menu-item:hover {
+  background: rgba(53, 208, 200, 0.14);
+  color: var(--fbl-text);
+}
+
+/* Segmented enum (<=4 choices) — one control, N cells. */
+.fbl-enum-segmented {
+  display: inline-flex;
+  padding: 1px;
+  background: var(--fbl-well);
+  border: 1px solid var(--fbl-line-strong);
+  border-radius: var(--fbl-r1);
+}
+.fbl-enum-cell {
+  padding: 1px 7px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--fbl-text-faint);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 90ms ease, color 90ms ease;
+}
+.fbl-enum-cell:hover {
+  color: var(--fbl-text-dim);
+}
+.fbl-enum-cell[aria-checked="true"] {
+  color: var(--fbl-on-accent);
+  background: var(--fbl-aqua);
+  font-weight: 600;
+}
+
+.fbl-toggle-led {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid #3a4152;
+  background: #0c0f15;
+  cursor: pointer;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+.fbl-toggle-led[aria-checked="true"] {
+  background: var(--fbl-aqua);
+  border-color: #2ba9a3;
+  box-shadow: 0 0 7px rgba(53, 208, 200, 0.65);
+}
+
+/* A toggle needs its name as much as a knob does — an unlabelled LED in a
+   row of labelled knobs is the one control you have to hover to identify. */
+.fbl-toggle {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding-top: 4px;
+}
+
+/* --- editors ---------------------------------------------------------- */
+
+/* The canvas editors paint themselves from ./tokens.ts; what is left here is
+   the DOM chrome they build — lane headers, the ruler readout, rename inputs
+   — plus the surface they sit on. */
+.fbl-arrangement,
+.fbl-pianoroll {
+  font-family: var(--fbl-font);
+}
+
+.fbl-arr-header {
+  transition: background 90ms ease;
+}
+.fbl-arr-header:hover {
+  background: rgba(255, 255, 255, 0.03) !important;
+}
+.fbl-arr-header-name {
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.fbl-arr-readout {
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The lane header's own buttons are built imperatively by the arrangement
+   editor (it owns that DOM), so they cannot wear `.fbl-btn`; this is the
+   ghost-button treatment for them. */
+.fbl-lane-btn:hover {
+  background: rgba(255, 255, 255, 0.07) !important;
+  color: var(--fbl-text) !important;
+  border-color: var(--fbl-line-strong) !important;
+}

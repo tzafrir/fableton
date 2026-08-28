@@ -11,6 +11,7 @@
 import type { DocumentStore, ProjectCommands } from "../../types/commands";
 import type { ChannelId } from "../../types/ids";
 import type { Viewport } from "../../types/viewport";
+import { FONT, INK, SIGNAL } from "../../ui/theme";
 import type { ArrangementTheme } from "./constants";
 import { HEADER_WIDTH_PX } from "./constants";
 import type { ArrangementScene } from "./scene";
@@ -47,14 +48,19 @@ function button(label: string, title: string, theme: ArrangementTheme): HTMLButt
   el.type = "button";
   el.textContent = label;
   el.title = title;
-  el.style.font = "10px system-ui, sans-serif";
+  // The lane header's M/S/etc. Kept deliberately quiet — a lane header is
+  // read far more often than it is clicked, so these only gain an edge on
+  // hover (see `.fbl-btn--ghost` in the stylesheet, which this mirrors for
+  // the imperatively-built DOM the editors own).
+  el.className = "fbl-lane-btn";
+  el.style.font = `10px ${FONT.ui}`;
   el.style.width = "18px";
   el.style.height = "16px";
   el.style.padding = "0";
   el.style.cursor = "pointer";
-  el.style.color = theme.headerText;
+  el.style.color = theme.rulerText;
   el.style.background = "transparent";
-  el.style.border = `1px solid ${theme.headerBorder}`;
+  el.style.border = `1px solid ${INK.line}`;
   el.style.borderRadius = "3px";
   return el;
 }
@@ -103,7 +109,7 @@ export function createLaneHeaders(options: HeadersOptions): LaneHeadersView {
       box.style.boxSizing = "border-box";
       box.style.borderBottom = `1px solid ${theme.headerBorder}`;
       box.style.padding = "4px 6px";
-      box.style.font = "12px system-ui, sans-serif";
+      box.style.font = `12px ${FONT.ui}`;
       box.style.cursor = "pointer";
       box.style.overflow = "hidden";
 
@@ -114,8 +120,10 @@ export function createLaneHeaders(options: HeadersOptions): LaneHeadersView {
       title.style.whiteSpace = "nowrap";
       title.style.textOverflow = "ellipsis";
       title.style.overflow = "hidden";
-      if (lane.channel.color !== null) title.style.borderLeft = `3px solid ${lane.channel.color}`;
-      if (lane.channel.color !== null) title.style.paddingLeft = "5px";
+      // The channel's colour, as a rule down the left of its name — the same
+      // hue its clips are drawn in, so a lane and its clips are one object.
+      title.style.borderLeft = `3px solid ${lane.channel.color ?? INK.lineStrong}`;
+      title.style.paddingLeft = "6px";
 
       // Double-click the name to rename in place. The input replaces the
       // label rather than overlaying it, so the row's height never changes
@@ -131,7 +139,7 @@ export function createLaneHeaders(options: HeadersOptions): LaneHeadersView {
         input.style.font = "inherit";
         input.style.color = theme.headerText;
         input.style.background = theme.headerBackground;
-        input.style.border = `1px solid ${theme.marqueeOutline}`;
+        input.style.border = `1px solid ${SIGNAL.aqua}`;
         input.style.borderRadius = "2px";
         input.style.padding = "0 2px";
         // Removing a focused input fires `blur`, so Enter/Escape would both

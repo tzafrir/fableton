@@ -9,9 +9,24 @@
 import type { ParamHandle } from "../../types";
 import { toNormalized } from "../../params/taper";
 import { ARC_ACCENT, ARC_OVERRIDDEN, ParamControl } from "./ParamControl";
+import { INK, SIGNAL, TEXT } from "../theme";
+
+/** The unfilled part of the sweep — a scale, not a value, so it stays
+ *  neutral; a coloured track competes with the value arc drawn over it. */
+const TRACK_COLOR = INK.lineStrong;
+const CAP_EDGE = "#0a0d13";
+const POINTER_COLOR = TEXT.primary;
+/** Where automation WOULD have this param, when a user's hand has taken it
+ *  over (SS4 `overridden`). */
+const GHOST_COLOR = SIGNAL.amber;
 
 const SWEEP_DEG = 270;
-const START_DEG = 135; // arc runs 135° -> 405° (i.e. through the top)
+// `polar` measures degrees clockwise from twelve o'clock, so the sweep runs
+// 225° -> 495°: minimum at lower-LEFT, twelve o'clock at the midpoint,
+// maximum at lower-right, with the dead zone at the bottom where every
+// hardware knob puts it. (It used to start at 135°, which put the dead zone
+// on the right-hand side and left a centred bipolar knob pointing sideways.)
+const START_DEG = 225;
 
 function angleOf(n: number): number {
   return START_DEG + n * SWEEP_DEG;
@@ -39,11 +54,14 @@ export interface KnobProps {
   onShowAutomation?: (() => void) | undefined;
 }
 
-export function Knob({ handle, size = 36, label, testId, onShowAutomation }: KnobProps) {
+export function Knob({ handle, size = 38, label, testId, onShowAutomation }: KnobProps) {
   const desc = handle.desc;
   const cx = size / 2;
   const cy = size / 2;
-  const r = size / 2 - 4;
+  // The arc rides just inside the edge; the cap fills the rest, so the knob
+  // reads as a physical thing with a scale around it rather than as a ring.
+  const r = size / 2 - 3.5;
+  const capR = r - 4.5;
 
   return (
     <ParamControl handle={handle} testId={testId} onShowAutomation={onShowAutomation} title={desc.label}>
@@ -53,23 +71,41 @@ export function Knob({ handle, size = 36, label, testId, onShowAutomation }: Kno
         const nBase = toNormalized(desc, handle.base());
         const zero = desc.bipolar === true ? 0.5 : 0;
         const valueArc = arcPath(cx, cy, r, angleOf(Math.min(zero, n)), angleOf(Math.max(zero, n)));
-        const tip = polar(cx, cy, r - 3, angleOf(n));
-        const ghost = polar(cx, cy, r + 1, angleOf(nBase));
+        const pointerFrom = polar(cx, cy, capR * 0.25, angleOf(n));
+        const pointerTo = polar(cx, cy, r - 3, angleOf(n));
+        const ghost = polar(cx, cy, r + 1.5, angleOf(nBase));
         const showGhost = Math.abs(nBase - n) > 0.01; // automation drift only
+        const arcColor = overridden ? ARC_OVERRIDDEN : ARC_ACCENT;
         return (
           <>
-            <svg width={size} height={size} aria-hidden="true">
-              <path d={arcPath(cx, cy, r, START_DEG, START_DEG + SWEEP_DEG)} stroke="#333" strokeWidth={3} fill="none" />
+            <svg width={size} height={size} aria-hidden="true" style={{ display: "block", overflow: "visible" }}>
+              <defs>
+                {/* The cap: lit from above, like every knob on every desk. */}
+                <linearGradient id={`fbl-cap-${String(size)}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#2a3140" />
+                  <stop offset="100%" stopColor="#161a23" />
+                </linearGradient>
+              </defs>
+              <path
+                d={arcPath(cx, cy, r, START_DEG, START_DEG + SWEEP_DEG)}
+                stroke={TRACK_COLOR}
+                strokeWidth={3}
+                strokeLinecap="round"
+                fill="none"
+              />
               {valueArc !== "" && (
                 <path
                   d={valueArc}
-                  stroke={overridden ? ARC_OVERRIDDEN : ARC_ACCENT}
+                  stroke={arcColor}
                   strokeWidth={3}
+                  strokeLinecap="round"
                   fill="none"
                   data-param-arc={overridden ? "overridden" : "live"}
+                  style={overridden ? undefined : { filter: `drop-shadow(0 0 3px ${arcColor}88)` }}
                 >
                   {/* SMIL rather than a CSS keyframe: the control kit ships no
-                      stylesheet, and a per-instance <style> would be worse. */}
+                      stylesheet of its own, and a per-instance <style> would
+                      be worse. */}
                   {overridden && (
                     <animate
                       attributeName="opacity"
@@ -80,10 +116,19 @@ export function Knob({ handle, size = 36, label, testId, onShowAutomation }: Kno
                   )}
                 </path>
               )}
-              <line x1={cx} y1={cy} x2={tip.x} y2={tip.y} stroke="#ddd" strokeWidth={2} strokeLinecap="round" />
-              {showGhost && <circle cx={ghost.x} cy={ghost.y} r={2} fill="#f2c14e" />}
+              <circle cx={cx} cy={cy} r={capR} fill={`url(#fbl-cap-${String(size)})`} stroke={CAP_EDGE} />
+              <line
+                x1={pointerFrom.x}
+                y1={pointerFrom.y}
+                x2={pointerTo.x}
+                y2={pointerTo.y}
+                stroke={POINTER_COLOR}
+                strokeWidth={1.75}
+                strokeLinecap="round"
+              />
+              {showGhost && <circle cx={ghost.x} cy={ghost.y} r={2} fill={GHOST_COLOR} />}
             </svg>
-            <span style={{ fontSize: 10, color: "#999", lineHeight: 1.1, maxWidth: size + 16, textAlign: "center" }}>
+            <span className="fbl-control-label" style={{ maxWidth: size + 22 }}>
               {label ?? desc.label}
             </span>
           </>

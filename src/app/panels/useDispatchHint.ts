@@ -9,7 +9,7 @@
 // render inline, and its own state update IS the re-render that snaps the
 // control back to the document.
 
-import { useCallback, useState, type CSSProperties } from "react";
+import { useCallback, useState } from "react";
 import type { Command, CommandResult, DocumentStore } from "../../types";
 
 export interface DispatchHint {
@@ -40,12 +40,7 @@ export function useDispatchHint(store: DocumentStore): DispatchHint {
   return { hint: state.reason, dispatch };
 }
 
-/** Shared style for the inline hint every panel renders (SS6). */
-export const rejectionHintStyle: CSSProperties = {
-  fontSize: 10,
-  color: "#e08a5a",
-  padding: "0 6px",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-};
+/** The class every panel's inline hint wears (SS6). The rule lives in the
+ *  stylesheet with the rest of the design system; this constant is here so
+ *  the panels still have one name for it. */
+export const HINT_CLASS = "fbl-hint";

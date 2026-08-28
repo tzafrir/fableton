@@ -23,7 +23,8 @@ import type {
 } from "../../types";
 import type { Immutable, Channel } from "../../types";
 import { Fader, Knob } from "../../ui/controls";
-import { rejectionHintStyle, useDispatchHint } from "./useDispatchHint";
+import { SIGNAL } from "../../ui/theme";
+import { useDispatchHint } from "./useDispatchHint";
 
 export interface MixerPanelProps {
   store: DocumentStore;
@@ -78,20 +79,11 @@ function MeterBar({ engine, channelId }: { engine: AppProjectEngine | null; chan
     return () => cancelAnimationFrame(raf);
   }, [engine, channelId]);
 
+  // Structure is load-bearing: the FIRST child is the rms bar (its inline
+  // height is the level), the LAST is the peak line. Both are written from
+  // the rAF loop above, so neither can be a styled pseudo-element.
   return (
-    <div
-      ref={canvasRef}
-      className="fbl-meter"
-      data-testid={`meter-${channelId}`}
-      style={{
-        position: "relative",
-        width: 6,
-        height: 96,
-        background: "#191919",
-        borderRadius: 2,
-        overflow: "hidden",
-      }}
-    >
+    <div ref={canvasRef} className="fbl-meter" data-testid={`meter-${channelId}`}>
       <div
         style={{
           position: "absolute",
@@ -99,7 +91,7 @@ function MeterBar({ engine, channelId }: { engine: AppProjectEngine | null; chan
           left: 0,
           right: 0,
           height: "0%",
-          background: "linear-gradient(to top, #4caf50, #ffc107 85%, #f44336)",
+          background: `linear-gradient(to top, ${SIGNAL.green} 0%, ${SIGNAL.green} 62%, ${SIGNAL.amber} 86%, ${SIGNAL.coral} 100%)`,
         }}
       />
       <div
@@ -109,7 +101,8 @@ function MeterBar({ engine, channelId }: { engine: AppProjectEngine | null; chan
           left: 0,
           right: 0,
           height: 1,
-          background: "#fff",
+          background: "#ffffff",
+          boxShadow: "0 0 4px rgba(255,255,255,0.6)",
         }}
       />
     </div>
@@ -167,25 +160,26 @@ function Strip({
     }
   };
 
+  // A strip's own colour if it has one, else the role's. The rule under the
+  // name is the only place a channel's identity is stated in the mixer, so
+  // it always says something.
   const roleColor =
-    channel.role === "master" ? "#7a5" : channel.role === "group" ? "#a97" : channel.role === "return" ? "#79a" : "#888";
+    channel.color ??
+    (channel.role === "master"
+      ? SIGNAL.green
+      : channel.role === "group"
+        ? SIGNAL.amber
+        : channel.role === "return"
+          ? SIGNAL.blue
+          : "#4b5468");
 
   return (
     <div
       className="fbl-strip"
       data-testid={`strip-${channel.id}`}
       data-role={channel.role}
+      data-selected={selected}
       onPointerDown={() => onSelect(channel.id)}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: 4,
-        padding: "6px 4px",
-        minWidth: 84,
-        borderRight: "1px solid #292929",
-        background: selected ? "#20242c" : "transparent",
-      }}
     >
       {/* Double-click to rename, the same gesture the arrangement header
           uses. Renaming existed only there, which is the wrong half of the
@@ -207,29 +201,15 @@ function Strip({
               (e.target as HTMLInputElement).blur();
             }
           }}
-          style={{
-            fontSize: 11,
-            width: 78,
-            background: "#181818",
-            color: "#ddd",
-            border: "1px solid #555",
-            borderRadius: 2,
-          }}
+          className="fbl-field fbl-field--sm"
+          style={{ width: 80, textAlign: "center" }}
         />
       ) : (
         <span
+          className="fbl-strip-name"
           data-testid={`strip-name-${channel.id}`}
           onDoubleClick={() => setRenaming(true)}
-          style={{
-            fontSize: 11,
-            color: channel.color ?? "#ddd",
-            borderBottom: `2px solid ${roleColor}`,
-            maxWidth: 80,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            cursor: "text",
-          }}
+          style={{ borderBottomColor: roleColor }}
           title={`${channel.name} (${channel.role}) — double-click to rename`}
         >
           {channel.name}
@@ -238,13 +218,13 @@ function Strip({
 
       {/* sends — one slim knob per return (SS6) */}
       {channel.role !== "master" && sendTargets.length > 0 && (
-        <div style={{ display: "flex", gap: 2 }} data-testid={`sends-${channel.id}`}>
+        <div className="fbl-strip-sends" data-testid={`sends-${channel.id}`}>
           {sendTargets.map((ret) => {
             const send = channel.sends.find((s) => s.to === ret.id);
             const handle = send !== undefined ? engine?.params.get(send.amount) : undefined;
             if (send !== undefined && handle !== undefined) {
               return (
-                <span key={ret.id} style={{ display: "inline-flex", flexDirection: "column", alignItems: "center" }}>
+                <span key={ret.id} className="fbl-send">
                   <Knob
                     handle={handle}
                     size={26}
@@ -265,17 +245,8 @@ function Strip({
                         : "Post-fader: the send follows this channel's fader"
                     }
                     onClick={() => dispatch(commands.setSend(channel.id, ret.id, send.tap === "pre" ? "post" : "pre"))}
-                    style={{
-                      marginTop: 1,
-                      fontSize: 8,
-                      lineHeight: 1.4,
-                      padding: "0 4px",
-                      background: send.tap === "pre" ? "#3a5a7a" : "#222",
-                      color: send.tap === "pre" ? "#cfe6ff" : "#888",
-                      border: "1px solid #444",
-                      borderRadius: 2,
-                      cursor: "pointer",
-                    }}
+                    className="fbl-tap"
+                    data-on={send.tap === "pre"}
                   >
                     {send.tap === "pre" ? "PRE" : "POST"}
                   </button>
@@ -290,16 +261,8 @@ function Strip({
                   key={ret.id}
                   data-testid={`send-pending-${channel.id}-${ret.id}`}
                   title={`Send to ${ret.name} (boot audio to adjust)`}
-                  style={{
-                    width: 26,
-                    height: 26,
-                    borderRadius: "50%",
-                    border: "1px solid #444",
-                    display: "grid",
-                    placeItems: "center",
-                    color: "#666",
-                    fontSize: 10,
-                  }}
+                  className="fbl-send-stub"
+                  data-pending="true"
                 >
                   {ret.name.replace("Return ", "")}
                 </div>
@@ -312,16 +275,7 @@ function Strip({
                 data-testid={`add-send-${channel.id}-${ret.id}`}
                 title={`Send to ${ret.name}`}
                 onClick={() => dispatch(commands.setSend(channel.id, ret.id))}
-                style={{
-                  width: 26,
-                  height: 26,
-                  borderRadius: "50%",
-                  border: "1px dashed #444",
-                  background: "none",
-                  color: "#555",
-                  fontSize: 10,
-                  cursor: "pointer",
-                }}
+                className="fbl-send-stub"
               >
                 {ret.name.replace("Return ", "")}
               </button>
@@ -330,7 +284,7 @@ function Strip({
         </div>
       )}
 
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 4 }}>
+      <div className="fbl-fader-row">
         {volume !== undefined ? (
           <Fader
             handle={volume}
@@ -338,9 +292,7 @@ function Strip({
             onShowAutomation={showAutomation(channel.volume)}
           />
         ) : (
-          <div style={{ width: 28, height: 106, display: "grid", placeItems: "center", color: "#444", fontSize: 10 }}>
-            —
-          </div>
+          <div className="fbl-fader-placeholder">—</div>
         )}
         <MeterBar engine={engine} channelId={channel.id} />
       </div>
@@ -357,7 +309,7 @@ function Strip({
         <div style={{ height: 40 }} />
       )}
 
-      <div style={{ display: "flex", gap: 3 }}>
+      <div className="fbl-ms">
         {channel.role !== "master" && (
           <>
             <button
@@ -366,15 +318,9 @@ function Strip({
               aria-pressed={channel.mute}
               title="Mute"
               onClick={() => dispatch(commands.setChannelMuted(channel.id, !channel.mute))}
-              style={{
-                width: 22,
-                fontSize: 10,
-                background: channel.mute ? "#c58f00" : "#222",
-                color: channel.mute ? "#000" : "#aaa",
-                border: "1px solid #444",
-                borderRadius: 3,
-                cursor: "pointer",
-              }}
+              className="fbl-btn"
+              data-on={channel.mute}
+              data-tone="amber"
             >
               M
             </button>
@@ -384,15 +330,9 @@ function Strip({
               aria-pressed={channel.solo}
               title="Solo (in place)"
               onClick={() => dispatch(commands.setChannelSolo(channel.id, !channel.solo))}
-              style={{
-                width: 22,
-                fontSize: 10,
-                background: channel.solo ? "#2d7ff0" : "#222",
-                color: channel.solo ? "#fff" : "#aaa",
-                border: "1px solid #444",
-                borderRadius: 3,
-                cursor: "pointer",
-              }}
+              className="fbl-btn"
+              data-on={channel.solo}
+              data-tone="blue"
             >
               S
             </button>
@@ -401,20 +341,29 @@ function Strip({
       </div>
 
       {/* Audio To (SS6: moving a track into a group is a one-field edit) */}
-      {channel.role !== "master" && (
-        <select
-          data-testid={`output-${channel.id}`}
-          aria-label={`${channel.name} output`}
-          value={channel.output ?? ""}
-          onChange={(e) => dispatch(commands.setChannelOutput(channel.id, e.target.value))}
-          style={{ fontSize: 10, maxWidth: 78, background: "#181818", color: "#bbb" }}
-        >
-          {targets.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </select>
+      {channel.role !== "master" ? (
+        <span className="fbl-strip-out">
+          <span className="fbl-unit" title="Audio To" aria-hidden="true">
+            →
+          </span>
+          <select
+            className="fbl-field fbl-field--sm"
+            data-testid={`output-${channel.id}`}
+            aria-label={`${channel.name} output`}
+            value={channel.output ?? ""}
+            onChange={(e) => dispatch(commands.setChannelOutput(channel.id, e.target.value))}
+          >
+            {targets.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </span>
+      ) : (
+        <span className="fbl-strip-role" style={{ marginTop: "auto", paddingTop: 4 }}>
+          Master
+        </span>
       )}
     </div>
   );
@@ -460,21 +409,18 @@ export function MixerPanel({
   }, [dispatch, commands, selection]);
 
   return (
-    <div
-      className="fbl-mixer"
-      data-testid="mixer-panel"
-      style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
-    >
-      <div style={{ display: "flex", gap: 6, padding: "4px 8px", borderBottom: "1px solid #292929" }}>
+    <div className="fbl-mixer" data-testid="mixer-panel">
+      <div className="fbl-pane-head">
+        <span className="fbl-tb-label">Mixer</span>
         <button
           type="button"
           data-testid="add-track-button"
           onClick={() => dispatch(commands.addTrack())}
-          style={miniButton}
+          className="fbl-btn"
         >
           + Track
         </button>
-        <button type="button" data-testid="add-return-button" onClick={addReturn} style={miniButton}>
+        <button type="button" data-testid="add-return-button" onClick={addReturn} className="fbl-btn">
           + Return
         </button>
         <button
@@ -482,7 +428,7 @@ export function MixerPanel({
           data-testid="group-selected-button"
           onClick={groupSelected}
           disabled={selection.length === 0}
-          style={miniButton}
+          className="fbl-btn"
           title="Group the selected channel"
         >
           Group
@@ -492,7 +438,7 @@ export function MixerPanel({
           data-testid="delete-channel-button"
           onClick={deleteSelected}
           disabled={selection.length === 0 || selection.some((id) => doc.channels[id]?.role === "master")}
-          style={miniButton}
+          className="fbl-btn"
           title="Delete the selected channel"
         >
           Delete
@@ -500,12 +446,12 @@ export function MixerPanel({
         {/* SS6: "cycle-forming edits are rejected with an inline hint" — the
             Audio To picker, Group and Delete all land here. */}
         {hint !== null && (
-          <span data-testid="mixer-hint" role="status" style={rejectionHintStyle}>
+          <span className="fbl-hint" data-testid="mixer-hint" role="status">
             {hint}
           </span>
         )}
       </div>
-      <div style={{ display: "flex", overflowX: "auto", flex: 1, minHeight: 0 }}>
+      <div className="fbl-mixer-strips">
         {doc.channelOrder.map((id) => {
           const channel = doc.channels[id];
           if (channel === undefined) return null;
@@ -527,13 +473,3 @@ export function MixerPanel({
     </div>
   );
 }
-
-const miniButton: React.CSSProperties = {
-  fontSize: 11,
-  background: "#222",
-  color: "#bbb",
-  border: "1px solid #444",
-  borderRadius: 3,
-  padding: "2px 8px",
-  cursor: "pointer",
-};

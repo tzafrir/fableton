@@ -1,4 +1,5 @@
 import { StrictMode } from "react";
+import "./ui/theme/app.css";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import type { AppProjectEngine } from "./app/engine";

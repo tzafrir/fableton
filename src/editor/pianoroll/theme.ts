@@ -2,6 +2,8 @@
 // shell can restyle the editor without touching a draw call, and so the layer
 // tests can assert against named values instead of literals.
 
+import { CANVAS_FONT, SIGNAL, TEXT, alpha } from "../../ui/theme";
+
 export interface PianoRollTheme {
   background: string;
   rowWhite: string;
@@ -46,44 +48,48 @@ export interface PianoRollTheme {
 }
 
 export const DEFAULT_PIANO_ROLL_THEME: PianoRollTheme = {
-  background: "#16181d",
-  rowWhite: "#1e2128",
-  rowBlack: "#171a20",
-  rowLine: "#101216",
-  octaveLine: "#0a0b0e",
-  gridLine: "#22262e",
-  beatLine: "#2b3038",
-  barLine: "#3a414d",
-  outsideClip: "rgba(0, 0, 0, 0.28)",
+  background: "#0d1017",
+  // White and black key rows differ by luminance only — the grid must never
+  // out-shout the notes drawn on top of it.
+  rowWhite: "#161a23",
+  rowBlack: "#0f131a",
+  rowLine: "#0a0d12",
+  octaveLine: "#050709",
+  gridLine: "#1b202b",
+  beatLine: "#252c3a",
+  barLine: "#39415380",
+  outsideClip: alpha("#05070b", 0.42),
 
-  rulerBackground: "#101216",
-  rulerText: "#8b94a3",
-  rulerLine: "#2b3038",
-  rulerFont: "10px ui-sans-serif, system-ui, sans-serif",
+  rulerBackground: "#0d1017",
+  rulerText: TEXT.dim,
+  rulerLine: "#2b3244",
+  rulerFont: CANVAS_FONT.small,
 
-  noteFill: "#5aa9e6",
-  noteMutedFill: "#3c4654",
-  noteStroke: "#0d1014",
-  noteSelectedFill: "#f2c14e",
-  noteSelectedStroke: "#fff3d0",
+  // A note is live signal, so it is aqua; a SELECTED note is attention, so
+  // it is amber. Two hues, one rule, and it holds in the velocity lane too.
+  noteFill: SIGNAL.aqua,
+  noteMutedFill: "#39424f",
+  noteStroke: "#06090d",
+  noteSelectedFill: SIGNAL.amber,
+  noteSelectedStroke: "#fff0cd",
 
-  ghostFill: "rgba(242, 193, 78, 0.35)",
-  ghostStroke: "rgba(255, 243, 208, 0.9)",
-  marqueeFill: "rgba(90, 169, 230, 0.14)",
-  marqueeStroke: "rgba(90, 169, 230, 0.8)",
+  ghostFill: alpha(SIGNAL.amber, 0.35),
+  ghostStroke: alpha("#fff3d0", 0.9),
+  marqueeFill: alpha(SIGNAL.aqua, 0.14),
+  marqueeStroke: alpha(SIGNAL.aqua, 0.8),
 
-  velocityBackground: "#12141a",
-  velocityBorder: "#2b3038",
-  velocityStalk: "#5aa9e6",
-  velocityStalkSelected: "#f2c14e",
-  velocitySweep: "rgba(242, 193, 78, 0.18)",
+  velocityBackground: "#0a0d13",
+  velocityBorder: "#252c3a",
+  velocityStalk: SIGNAL.aqua,
+  velocityStalkSelected: SIGNAL.amber,
+  velocitySweep: alpha(SIGNAL.amber, 0.18),
 
   // Reads as a piano keyboard turned on its side: the gutter is opaque so a
   // note scrolled to tick 0 cannot make the labels unreadable.
-  keyGutterWhite: "#c8ccd4",
-  keyGutterBlack: "#22252c",
-  keyGutterLine: "#0a0b0e",
-  keyGutterText: "#2a2d34",
-  keyGutterTextBlack: "#9aa3b2",
-  keyGutterFont: "9px ui-sans-serif, system-ui, sans-serif",
+  keyGutterWhite: "#c9ceda",
+  keyGutterBlack: "#191d26",
+  keyGutterLine: "#070910",
+  keyGutterText: "#262b35",
+  keyGutterTextBlack: "#9aa3b4",
+  keyGutterFont: CANVAS_FONT.micro,
 };

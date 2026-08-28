@@ -125,19 +125,8 @@ export function ArrangementPanel({
         data-testid="arrangement-add-track"
         title="Add a track"
         onClick={() => store.dispatch(commands.addTrack())}
-        style={{
-          position: "absolute",
-          left: 6,
-          bottom: 6,
-          zIndex: 5,
-          font: "11px system-ui, sans-serif",
-          background: "#222",
-          color: "#bbb",
-          border: "1px solid #444",
-          borderRadius: 3,
-          padding: "2px 8px",
-          cursor: "pointer",
-        }}
+        className="fbl-btn"
+        style={{ position: "absolute", left: 8, bottom: 8, zIndex: 5 }}
       >
         + Track
       </button>

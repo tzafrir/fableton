@@ -24,28 +24,19 @@ export function EnumSelect({ handle, testId }: EnumSelectProps) {
   if (labels.length <= 4) {
     return (
       <div
-        className="fbl-enum"
+        className="fbl-enum fbl-enum-segmented"
         data-testid={testId}
         role="radiogroup"
         aria-label={handle.desc.label}
-        style={{ display: "inline-flex", gap: 2 }}
       >
         {labels.map((label, i) => (
           <button
             key={label}
             type="button"
             role="radio"
+            className="fbl-enum-cell"
             aria-checked={i === index}
             onClick={() => pick(i)}
-            style={{
-              fontSize: 10,
-              padding: "2px 6px",
-              background: i === index ? "#5aa9e6" : "#222",
-              color: i === index ? "#000" : "#bbb",
-              border: "1px solid #444",
-              borderRadius: 3,
-              cursor: "pointer",
-            }}
           >
             {label}
           </button>
@@ -56,12 +47,11 @@ export function EnumSelect({ handle, testId }: EnumSelectProps) {
 
   return (
     <select
-      className="fbl-enum"
+      className="fbl-enum fbl-field fbl-field--sm"
       data-testid={testId}
       aria-label={handle.desc.label}
       value={index}
       onChange={(e) => pick(Number(e.target.value))}
-      style={{ fontSize: 11 }}
     >
       {labels.map((label, i) => (
         <option key={label} value={i}>
@@ -93,15 +83,6 @@ export function ToggleLED({ handle, testId, label }: ToggleLEDProps) {
       onClick={() => {
         handle.setLive(on ? 0 : 1, "user");
         handle.commit();
-      }}
-      style={{
-        width: 14,
-        height: 14,
-        borderRadius: "50%",
-        border: "1px solid #555",
-        background: on ? "#7ad67a" : "#222",
-        cursor: "pointer",
-        padding: 0,
       }}
     />
   );

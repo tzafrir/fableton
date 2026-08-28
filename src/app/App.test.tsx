@@ -52,6 +52,16 @@ vi.mock("../persist", async (importOriginal) => {
   };
 });
 
+
+/** Finds a button by its ACCESSIBLE NAME, not its text: the transport's
+ *  three verbs are glyphs (▶ ■ ●) carrying `aria-label`, which is the name
+ *  every other caller — the e2e suite included — already addresses them by. */
+function findButton(root: ParentNode, name: string): HTMLButtonElement {
+  return [...root.querySelectorAll("button")].find(
+    (b) => (b.getAttribute("aria-label") ?? b.textContent) === name,
+  ) as HTMLButtonElement;
+}
+
 declare global {
   // eslint-disable-next-line no-var
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -181,7 +191,7 @@ describe("App (SS18-M1 app shell)", () => {
     });
     await flushMicrotasks();
 
-    const boot = [...container.querySelectorAll("button")].find((b) => b.textContent === "Boot audio")!;
+    const boot = findButton(container, "Boot audio");
     expect(boot.hasAttribute("disabled")).toBe(false);
 
     await act(async () => {
@@ -191,8 +201,8 @@ describe("App (SS18-M1 app shell)", () => {
       () => container.querySelector("[data-testid=audio-status]")!.textContent!.startsWith("ready"),
     );
 
-    const play = [...container.querySelectorAll("button")].find((b) => b.textContent === "Play")!;
-    const stop = [...container.querySelectorAll("button")].find((b) => b.textContent === "Stop")!;
+    const play = findButton(container, "Play");
+    const stop = findButton(container, "Stop");
     expect(play.hasAttribute("disabled")).toBe(false);
     expect(stop.hasAttribute("disabled")).toBe(true);
 
@@ -222,7 +232,7 @@ describe("App (SS18-M1 app shell)", () => {
     });
     await flushMicrotasks();
 
-    const boot = [...container.querySelectorAll("button")].find((b) => b.textContent === "Boot audio")!;
+    const boot = findButton(container, "Boot audio");
     await act(async () => {
       boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
@@ -249,7 +259,7 @@ describe("App (SS18-M1 app shell)", () => {
     await flushMicrotasks();
 
     posted.length = 0;
-    const play = [...container.querySelectorAll("button")].find((b) => b.textContent === "Play")!;
+    const play = findButton(container, "Play");
     await act(async () => {
       play.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
@@ -263,7 +273,7 @@ describe("App (SS18-M1 app shell)", () => {
 
     // ...and undo is audible in the same way: the note stops being scheduled.
     await act(async () => {
-      [...container.querySelectorAll("button")].find((b) => b.textContent === "Stop")!.dispatchEvent(
+      findButton(container, "Stop").dispatchEvent(
         new MouseEvent("click", { bubbles: true }),
       );
     });
@@ -300,7 +310,7 @@ describe("App (SS18-M1 app shell)", () => {
       root.render(<App storage={storage} onStoreReady={(s) => (store = s)} />);
     });
     await flushMicrotasks();
-    const boot = [...container.querySelectorAll("button")].find((b) => b.textContent === "Boot audio")!;
+    const boot = findButton(container, "Boot audio");
     await act(async () => {
       boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
@@ -323,7 +333,7 @@ describe("App (SS18-M1 app shell)", () => {
     await flushMicrotasks();
     await flushMicrotasks();
     await act(async () => {
-      [...container.querySelectorAll("button")].find((b) => b.textContent === "Play")!.dispatchEvent(
+      findButton(container, "Play").dispatchEvent(
         new MouseEvent("click", { bubbles: true }),
       );
     });
@@ -335,7 +345,7 @@ describe("App (SS18-M1 app shell)", () => {
       root.render(<App storage={storage} />);
     });
     await flushMicrotasks();
-    const boot = [...container.querySelectorAll("button")].find((b) => b.textContent === "Boot audio")!;
+    const boot = findButton(container, "Boot audio");
 
     bootAudioContext.mockRejectedValueOnce(new Error("context refused"));
     await act(async () => {
@@ -407,7 +417,7 @@ describe("App (SS18-M1 app shell)", () => {
     });
     await flushMicrotasks();
 
-    const boot = [...container.querySelectorAll("button")].find((b) => b.textContent === "Boot audio")!;
+    const boot = findButton(container, "Boot audio");
     await act(async () => {
       boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
@@ -498,7 +508,7 @@ describe("App (SS18-M1 app shell)", () => {
       root.render(<App storage={storage} />);
     });
     await flushMicrotasks();
-    const boot = [...container.querySelectorAll("button")].find((b) => b.textContent === "Boot audio")!;
+    const boot = findButton(container, "Boot audio");
     await act(async () => {
       boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       boot.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -642,7 +652,7 @@ describe("App — save / export / import (SS13 via the persistence package)", ()
   });
 
   function button(text: string): HTMLButtonElement {
-    return [...container.querySelectorAll("button")].find((b) => b.textContent === text) as HTMLButtonElement;
+    return findButton(container, text);
   }
 
   it("Save flushes a pending autosave write to storage", async () => {

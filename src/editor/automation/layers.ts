@@ -5,6 +5,7 @@
 // property SS9 insists on, that a frame costs O(VISIBLE) points, not O(all).
 
 import type { AutoPoint, EditorLayer, LayerFrame } from "../../types";
+import { INK, SIGNAL, alpha } from "../../ui/theme";
 import { bendShape } from "../../engine/automation/curve";
 import { segmentModeOf, type AutomationLaneContext } from "./context";
 import type { LanePreview } from "./handlers";
@@ -12,14 +13,17 @@ import { LANE_PAD_PX, POINT_RADIUS_PX, yOfValue } from "./layout";
 import { segmentIndexAt, visiblePointRange } from "./points";
 
 export const AUTOMATION_THEME = {
-  line: "#5aa9e6",
-  point: "#ddeeff",
-  pointSelected: "#f2c14e",
-  ghost: "rgba(242, 193, 78, 0.8)",
-  marquee: "rgba(120, 160, 255, 0.16)",
-  marqueeBorder: "rgba(120, 160, 255, 0.7)",
-  gridLine: "#24262c",
-  laneBound: "#333",
+  // Same two hues as the piano roll: the curve is live signal (aqua), a
+  // selected breakpoint is attention (amber). The point body stays near-white
+  // so a 3 px dot is still visible on top of its own line.
+  line: SIGNAL.aqua,
+  point: "#e8fbfa",
+  pointSelected: SIGNAL.amber,
+  ghost: alpha(SIGNAL.amber, 0.8),
+  marquee: alpha(SIGNAL.aqua, 0.16),
+  marqueeBorder: alpha(SIGNAL.aqua, 0.7),
+  gridLine: "#1b202b",
+  laneBound: INK.lineStrong,
 } as const;
 
 /** Bars + the lane's value bounds. Viewport changes only (SS9). */

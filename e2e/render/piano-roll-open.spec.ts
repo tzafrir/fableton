@@ -30,7 +30,7 @@ import { bootAudio } from "./helpers";
 //
 // The two tests below are the outside-in proof, via TWO independent signals:
 //   1. the piano roll's content canvas draws the starter clip's note-fill
-//      pixels (`#5aa9e6`) once the clip is open;
+//      pixels (`theme.noteFill`, aqua) once the clip is open;
 //   2. selecting all notes and nudging them (Cmd/Ctrl+A, ArrowRight)
 //      dispatches a Move Notes command and enables Undo.
 // The control test pins the ROOT CAUSE in place: it asserts that
@@ -58,15 +58,16 @@ async function contentLayerHasNoteFillPixels(page: import("@playwright/test").Pa
     const ctx = canvas.getContext("2d");
     if (!ctx) return false;
     const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    // noteFill #5aa9e6 = (90, 169, 230); tolerate the velocity-opacity blend
-    // (SS10: "velocity reads as opacity") by checking the blue channel is
-    // clearly elevated in the way only that fill (or its stroke) produces.
+    // noteFill is SIGNAL.aqua #35d0c8 = (53, 208, 200); tolerate the
+    // velocity-opacity blend (SS10: "velocity reads as opacity") by checking
+    // for the green+blue-dominant signature only that fill (or its stroke)
+    // produces against the roll's blue-violet grid.
     for (let i = 0; i < data.length; i += 4) {
       const r = data[i] ?? 0;
       const g = data[i + 1] ?? 0;
       const b = data[i + 2] ?? 0;
       const a = data[i + 3] ?? 0;
-      if (a > 0 && b > 150 && g > 100 && r < 150) return true;
+      if (a > 0 && g > 130 && b > 120 && r < 130) return true;
     }
     return false;
   });

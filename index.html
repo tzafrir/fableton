@@ -3,7 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b0d12" />
     <title>Fableton</title>
+    <!-- Painted before the bundle parses, so the first frame is the app's
+         ground rather than the browser's default white. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0b0d12;
+        color: #e6eaf3;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

@@ -26,15 +26,6 @@ export interface SongControlsProps {
   dispatch: (command: ReturnType<ProjectCommands["setTempo"]>) => void;
 }
 
-const field: React.CSSProperties = {
-  background: "#181818",
-  color: "#ddd",
-  border: "1px solid #444",
-  borderRadius: 3,
-  fontSize: 11,
-  padding: "2px 4px",
-};
-
 export function SongControls({
   projectName,
   bpm,
@@ -69,8 +60,9 @@ export function SongControls({
   };
 
   return (
-    <>
+    <span className="fbl-tb-group">
       <input
+        className="fbl-field"
         data-testid="project-name-input"
         aria-label="Project name"
         title="Project name"
@@ -87,13 +79,12 @@ export function SongControls({
           editingName.current = false;
           setNameDraft(projectName);
         }}
-        style={{ ...field, width: 130 }}
+        style={{ width: 136 }}
       />
 
-      <label
-        style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: "#999" }}
-      >
+      <label className="fbl-tb-group" title={`Tempo (${String(MIN_BPM)}–${String(MAX_BPM)} BPM)`}>
         <input
+          className="fbl-field fbl-field--num"
           data-testid="tempo-input"
           aria-label="Tempo in BPM"
           title={`Tempo (${MIN_BPM}–${MAX_BPM} BPM)`}
@@ -121,16 +112,14 @@ export function SongControls({
           onKeyDown={(e) => {
             if (e.key === "Enter") (e.target as HTMLInputElement).blur();
           }}
-          style={{ ...field, width: 58 }}
+          style={{ width: 54 }}
         />
-        BPM
+        <span className="fbl-unit">BPM</span>
       </label>
 
-      <span
-        style={{ display: "inline-flex", alignItems: "center", gap: 2 }}
-        title="Time signature"
-      >
+      <span className="fbl-tb-group" style={{ gap: 2 }} title="Time signature">
         <input
+          className="fbl-field fbl-field--num"
           data-testid="timesig-numerator"
           aria-label="Time signature beats per bar"
           type="number"
@@ -143,10 +132,11 @@ export function SongControls({
               dispatch(commands.setTimeSignature({ ...timeSignature, numerator: n }));
             }
           }}
-          style={{ ...field, width: 40 }}
+          style={{ width: 38, paddingRight: 4 }}
         />
-        <span style={{ color: "#666", fontSize: 11 }}>/</span>
+        <span className="fbl-unit">/</span>
         <select
+          className="fbl-field"
           data-testid="timesig-denominator"
           aria-label="Time signature beat unit"
           value={timeSignature.denominator}
@@ -158,7 +148,7 @@ export function SongControls({
               }),
             )
           }
-          style={{ ...field, width: 46 }}
+          style={{ width: 50 }}
         >
           {TIME_SIGNATURE_DENOMINATORS.map((d) => (
             <option key={d} value={d}>
@@ -174,18 +164,12 @@ export function SongControls({
         aria-pressed={loop.enabled}
         title="Loop the transport over the arrangement's loop brace"
         onClick={() => dispatch(commands.setLoopRegion({ ...loop, enabled: !loop.enabled }))}
-        style={{
-          fontSize: 11,
-          background: loop.enabled ? "#2d7ff0" : "#222",
-          color: loop.enabled ? "#fff" : "#aaa",
-          border: "1px solid #444",
-          borderRadius: 3,
-          padding: "2px 8px",
-          cursor: "pointer",
-        }}
+        className="fbl-btn"
+        data-on={loop.enabled}
+        data-tone="blue"
       >
         Loop
       </button>
-    </>
+    </span>
   );
 }

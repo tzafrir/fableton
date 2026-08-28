@@ -11,6 +11,7 @@ import {
   createEmptyProject,
   findMasterChannelId,
 } from "./project";
+import { TRACK_COLORS } from "../ui/theme";
 import { createSequentialIdFactory } from "./ids";
 import { expectLegalProject } from "./testing/invariants";
 
@@ -43,7 +44,9 @@ describe("createEmptyProject", () => {
           id: "chan-2",
           role: "track",
           name: "Track 1",
-          color: null,
+          // The starter track takes the first hue off the design system's
+          // ribbon — see `createEmptyProject`.
+          color: TRACK_COLORS[0],
           source: { kind: "instrument", deviceId: "dev-1" },
           chain: [],
           volume: volumeParamId("chan-2"),

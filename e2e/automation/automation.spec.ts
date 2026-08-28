@@ -6,7 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { scanColorRects, type ColorRect } from "../interaction/editing-helpers";
 
 /** The lane editor's point fill (src/editor/automation/view.ts THEME). */
-const POINT_FILL: readonly [number, number, number] = [0xdd, 0xee, 0xff];
+const POINT_FILL: readonly [number, number, number] = [0xe8, 0xfb, 0xfa]; // AUTOMATION_THEME.point
 
 async function bootAndOpenAutomation(page: Page): Promise<void> {
   await page.goto("/");

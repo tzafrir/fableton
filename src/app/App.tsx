@@ -64,6 +64,27 @@ export interface AppProps {
   storage?: ProjectStorage | undefined;
 }
 
+/** The bottom pane's three views (SS18-M2). A table, so the tab strip is one
+ *  `map` instead of three near-identical buttons that drift apart. */
+/** Bottom-pane sizing. A third of the window is the ratio the pane had when
+ *  it was a fixed `flex: 1` against the arrangement's `flex: 2`; the clamp
+ *  keeps a short window from opening on a pane too small to show a mixer
+ *  strip, and a tall one from burying the arrangement. From there it is the
+ *  user's to drag. */
+const MIN_BOTTOM_HEIGHT_PX = 120;
+const MIN_TOP_HEIGHT_PX = 120;
+
+function defaultBottomHeight(): number {
+  const viewport = typeof window === "undefined" ? 900 : window.innerHeight;
+  return Math.max(240, Math.min(520, Math.round(viewport / 3)));
+}
+
+const BOTTOM_TABS = [
+  { id: "pianoroll", label: "Piano Roll" },
+  { id: "mixer", label: "Mixer" },
+  { id: "automation", label: "Automation" },
+] as const;
+
 export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   // --- the document: loaded/created once, then lives for the app's life ---
   const [docState, setDocState] = useState<BootstrapResult | null>(null);
@@ -100,6 +121,37 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
 
   const handleGridChange = useCallback((next: Partial<GridSettings>) => {
     setGridSettings((current) => ({ ...current, ...next }));
+  }, []);
+
+  /** How tall the bottom pane is, in CSS px. A mixer strip is ~300 px of
+   *  controls and the piano roll wants as much room as it can get, so the
+   *  split between the two has to be the user's to set — a fixed 1:2 ratio
+   *  clips whichever one they are actually working in. The canvas editors
+   *  re-measure through the kit's `ResizeObserver` (SS9), so dragging this
+   *  needs no editor plumbing at all. */
+  const [bottomHeight, setBottomHeight] = useState(defaultBottomHeight);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const onSplitterDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const body = bodyRef.current;
+    if (body === null) return;
+    event.preventDefault();
+    const target = event.currentTarget;
+    target.setPointerCapture(event.pointerId);
+    const move = (e: PointerEvent): void => {
+      const rect = body.getBoundingClientRect();
+      const fromBottom = rect.bottom - e.clientY;
+      setBottomHeight(
+        Math.max(MIN_BOTTOM_HEIGHT_PX, Math.min(rect.height - MIN_TOP_HEIGHT_PX, fromBottom)),
+      );
+    };
+    const up = (): void => {
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", up);
+      target.removeEventListener("pointercancel", up);
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", up);
+    target.addEventListener("pointercancel", up);
   }, []);
 
 
@@ -615,9 +667,13 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
 
   if (docState === null) {
     return (
-      <div id="app-root">
-        <h1>Fableton</h1>
-        <p data-testid="app-loading">Loading project…</p>
+      <div id="app-root" className="fbl-app">
+        <div className="fbl-empty" style={{ flex: 1 }}>
+          <h1 className="fbl-brand" style={{ justifySelf: "center" }}>
+            Fableton
+          </h1>
+          <p data-testid="app-loading">Loading project…</p>
+        </div>
       </div>
     );
   }
@@ -626,8 +682,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   const snapshot = store.getState();
 
   return (
-    <div id="app-root" style={{ display: "flex", flexDirection: "column", height: "100vh", minHeight: 0 }}>
-      <h1 style={{ margin: 0, padding: "4px 8px", fontSize: 14 }}>Fableton</h1>
+    <div id="app-root" className="fbl-app">
       <Toolbar
         song={{
           projectName: snapshot.name,
@@ -675,8 +730,8 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
         exportingWav={exportingWav}
         statusMessage={loadError ?? statusMessage}
       />
-      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <div style={{ flex: 2, minHeight: 0 }}>
+      <div className="fbl-body" ref={bodyRef}>
+        <div className="fbl-pane-arrangement">
           <ArrangementPanel
             store={store}
             commands={projectCommands}
@@ -694,67 +749,41 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
             onSelectionChange={setClipSelectionCount}
           />
         </div>
-        <div style={{ flex: 1, minHeight: 0, borderTop: "1px solid #333", display: "flex", flexDirection: "column" }}>
-          <div role="tablist" style={{ display: "flex", gap: 2, padding: "2px 8px", borderBottom: "1px solid #292929" }}>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={bottomTab === "pianoroll"}
-              data-testid="tab-pianoroll"
-              onClick={() => setBottomTab("pianoroll")}
-              style={{
-                fontSize: 11,
-                padding: "2px 10px",
-                background: bottomTab === "pianoroll" ? "#2a2f3a" : "transparent",
-                color: "#ccc",
-                border: "1px solid #333",
-                borderRadius: "4px 4px 0 0",
-                cursor: "pointer",
-              }}
-            >
-              Piano Roll
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={bottomTab === "mixer"}
-              data-testid="tab-mixer"
-              onClick={() => setBottomTab("mixer")}
-              style={{
-                fontSize: 11,
-                padding: "2px 10px",
-                background: bottomTab === "mixer" ? "#2a2f3a" : "transparent",
-                color: "#ccc",
-                border: "1px solid #333",
-                borderRadius: "4px 4px 0 0",
-                cursor: "pointer",
-              }}
-            >
-              Mixer
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={bottomTab === "automation"}
-              data-testid="tab-automation"
-              onClick={() => setBottomTab("automation")}
-              style={{
-                fontSize: 11,
-                padding: "2px 10px",
-                background: bottomTab === "automation" ? "#2a2f3a" : "transparent",
-                color: "#ccc",
-                border: "1px solid #333",
-                borderRadius: "4px 4px 0 0",
-                cursor: "pointer",
-              }}
-            >
-              Automation
-            </button>
+        {/* The one piece of chrome that is pure affordance: grab it and the
+            arrangement gives room to the editor below, or takes it back. */}
+        <div
+          className="fbl-splitter"
+          data-testid="pane-splitter"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize editor pane"
+          onPointerDown={onSplitterDown}
+          onDoubleClick={() => setBottomHeight(defaultBottomHeight())}
+          title="Drag to resize · double-click to reset"
+        />
+        <div className="fbl-pane-bottom" style={{ height: bottomHeight }}>
+          {/* Tabs, not panes stacked behind borders: the underline names the
+              active view and the pane below is the only surface, so the eye
+              is never asked to parse two adjacent edges. */}
+          <div role="tablist" className="fbl-tabs" aria-label="Editor">
+            {BOTTOM_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                className="fbl-tab"
+                aria-selected={bottomTab === tab.id}
+                data-testid={`tab-${tab.id}`}
+                onClick={() => setBottomTab(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
           {/* The piano roll view is a canvas component built imperatively per
               (store, commands) — hiding it with CSS instead of unmounting
               keeps its viewport/selection alive across tab flips. */}
-          <div style={{ flex: 1, minHeight: 0, display: bottomTab === "pianoroll" ? "block" : "none" }}>
+          <div className="fbl-tab-panel" style={{ display: bottomTab === "pianoroll" ? "block" : "none" }}>
             <PianoRollPanel
               store={store}
               commands={projectCommands}
@@ -767,7 +796,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
             />
           </div>
           {bottomTab === "automation" && (
-            <div style={{ flex: 1, minHeight: 0 }}>
+            <div className="fbl-tab-panel">
               <AutomationPanel
                 store={store}
                 commands={projectCommands}
@@ -779,8 +808,8 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
             </div>
           )}
           {bottomTab === "mixer" && (
-            <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-              <div style={{ flex: 1, minWidth: 0, borderRight: "1px solid #292929" }}>
+            <div className="fbl-split">
+              <div>
                 <MixerPanel
                   store={store}
                   commands={projectCommands}
@@ -790,7 +819,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
                   onShowAutomation={handleShowAutomation}
                 />
               </div>
-              <div style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
+              <div style={{ overflow: "auto" }}>
                 <DeviceChainPanel
                   store={store}
                   commands={projectCommands}

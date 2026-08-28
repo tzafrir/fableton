@@ -192,7 +192,7 @@ test.describe("piano roll note editing (SS9/SS10)", () => {
 
     // The velocity lane is excluded for the same reason `scanNotes` excludes
     // it: a SELECTED note's stalk is drawn in `velocityStalkSelected`, which
-    // is the same `#f2c14e` as `noteSelectedFill`, so an unbounded scan counts
+    // is the same amber as `noteSelectedFill`, so an unbounded scan counts
     // every selected note twice (body + stalk). Probe artifact, not an app
     // defect — see `scanColorRects`'s `excludeBottomCssPx` doc.
     const selected = await scanColorRects(page, "piano-roll-panel", "overlay", NOTE_SELECTED_FILL, {

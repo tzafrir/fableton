@@ -22,6 +22,7 @@ import {
 } from "react";
 import type { ParamHandle, ParamState } from "../../types";
 import { createControlGesture } from "./gesture";
+import { SIGNAL } from "../theme";
 
 export interface ParamControlProps {
   handle: ParamHandle;
@@ -78,10 +79,10 @@ export function useParamDisplay(handle: ParamHandle): { value: number; state: Pa
 }
 
 /** Accent for the live value (arc, fader fill) — one palette for the kit. */
-export const ARC_ACCENT = "#5aa9e6";
+export const ARC_ACCENT = SIGNAL.aqua;
 /** SS5 "overridden = arc pulses dim": desaturated, plus the pulse the faces
  *  animate. Naming it here keeps knob and fader saying the same thing. */
-export const ARC_OVERRIDDEN = "#7d8b96";
+export const ARC_OVERRIDDEN = "#6b7787";
 
 interface MenuState {
   x: number;
@@ -257,6 +258,7 @@ export function ParamControl({
       className={`fbl-control ${className ?? ""}`.trim()}
       data-testid={testId}
       data-param-state={state}
+      data-dragging={dragging}
       role="slider"
       tabIndex={0}
       title={title ?? handle.desc.label}
@@ -272,17 +274,6 @@ export function ParamControl({
       onDoubleClick={onDoubleClick}
       onKeyDown={onKeyDown}
       onContextMenu={onContextMenu}
-      style={{
-        position: "relative",
-        display: "inline-flex",
-        flexDirection: "column",
-        alignItems: "center",
-        touchAction: "none",
-        userSelect: "none",
-        // SS5: cursor hidden during drag, restored on release.
-        cursor: dragging ? "none" : "ns-resize",
-        outline: "none",
-      }}
     >
       {children(value, dragging, state)}
 
@@ -291,21 +282,6 @@ export function ParamControl({
         <div
           className="fbl-control-readout"
           data-testid={testId !== undefined ? `${testId}-readout` : undefined}
-          style={{
-            position: "absolute",
-            bottom: "100%",
-            left: "50%",
-            transform: "translateX(-50%)",
-            padding: "2px 6px",
-            background: "#111",
-            color: "#eee",
-            border: "1px solid #444",
-            borderRadius: 3,
-            fontSize: 11,
-            whiteSpace: "nowrap",
-            pointerEvents: "none",
-            zIndex: 40,
-          }}
         >
           {handle.desc.toText(value)}
         </div>
@@ -325,16 +301,6 @@ export function ParamControl({
             else if (e.key === "Escape") setEditing(false);
           }}
           onPointerDown={(e) => e.stopPropagation()}
-          style={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
-            width: 64,
-            fontSize: 11,
-            textAlign: "center",
-            zIndex: 41,
-          }}
         />
       )}
 
@@ -352,21 +318,7 @@ export function ParamControl({
           <div
             className="fbl-control-menu"
             role="menu"
-            style={{
-              position: "fixed",
-              left: menu.x,
-              top: menu.y,
-              zIndex: 50,
-              background: "#181818",
-              border: "1px solid #444",
-              borderRadius: 4,
-              padding: 4,
-              display: "flex",
-              flexDirection: "column",
-              minWidth: 160,
-              fontSize: 12,
-              color: "#ddd",
-            }}
+            style={{ left: menu.x, top: menu.y }}
           >
             <MenuItem
               label="Type value…"
@@ -404,16 +356,8 @@ function MenuItem({ label, onPick }: { label: string; onPick: () => void }) {
     <button
       type="button"
       role="menuitem"
+      className="fbl-menu-item"
       onClick={onPick}
-      style={{
-        background: "none",
-        border: "none",
-        color: "inherit",
-        textAlign: "left",
-        padding: "4px 8px",
-        cursor: "pointer",
-        font: "inherit",
-      }}
     >
       {label}
     </button>

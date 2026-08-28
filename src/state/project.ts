@@ -13,6 +13,7 @@
 // seeding them would mean this package importing the device library just to
 // copy numbers that are already the defaults.
 
+import { trackColorAt } from "../ui/theme";
 import type {
   Channel,
   ChannelId,
@@ -150,6 +151,10 @@ export const createEmptyProject: CreateEmptyProject = (options = {}) => {
     id: trackId,
     role: "track",
     name: "Track 1",
+    // The first hue off the design system's ribbon, for the same reason
+    // `addTrack` assigns one: a track's colour is what the arrangement and
+    // the mixer both use to tell parts apart.
+    color: trackColorAt(0),
     output: masterId,
     source: { kind: "instrument", deviceId: instrumentId },
   });

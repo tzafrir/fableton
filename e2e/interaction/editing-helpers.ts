@@ -60,7 +60,7 @@ export interface ColorRect {
  *
  * `excludeBottomCssPx` trims that many CSS px off the BOTTOM of the layer
  * before scanning. The piano roll needs it: `theme.velocityStalk` is the same
- * `#5aa9e6` as `theme.noteFill` and the velocity lane shares the content
+ * aqua as `theme.noteFill` and the velocity lane shares the content
  * layer, so an unbounded note scan counts each note TWICE — once as its body
  * and once as its velocity stalk — but only while the note is deselected
  * (a selected note's stalk switches to `velocityStalkSelected`). That makes
@@ -215,11 +215,11 @@ export async function scanNotes(
 }
 
 /** SS10 theme colors this suite matches against (kept local so no src/ import is needed). */
-export const NOTE_FILL: readonly [number, number, number] = [0x5a, 0xa9, 0xe6];
-export const NOTE_SELECTED_FILL: readonly [number, number, number] = [0xf2, 0xc1, 0x4e];
-export const GHOST_FILL: readonly [number, number, number] = [0xf2, 0xc1, 0x4e];
-export const MARQUEE_FILL: readonly [number, number, number] = [0x5a, 0xa9, 0xe6];
-export const ARR_CLIP_FILL: readonly [number, number, number] = [0x4f, 0x7b, 0xd6];
+export const NOTE_FILL: readonly [number, number, number] = [0x35, 0xd0, 0xc8]; // SIGNAL.aqua
+export const NOTE_SELECTED_FILL: readonly [number, number, number] = [0xf5, 0xb5, 0x44]; // SIGNAL.amber
+export const GHOST_FILL: readonly [number, number, number] = [0xf5, 0xb5, 0x44]; // SIGNAL.amber
+export const MARQUEE_FILL: readonly [number, number, number] = [0x35, 0xd0, 0xc8]; // SIGNAL.aqua
+export const ARR_CLIP_FILL: readonly [number, number, number] = [0x5b, 0x8d, 0xee]; // TRACK_COLORS[0]
 
 /** Real pointer drag: down at `from`, several intermediate moves, stops
  *  mid-gesture (caller decides mouse-up vs Escape vs more moves). Modifier
