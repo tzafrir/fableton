@@ -1,5 +1,5 @@
-// The instruments and effects added for song-writing: FM, kick, drum machine,
-// overdrive and distortion. Everything here runs against the headless context
+// The instruments and effects added for song-writing: kick, drum machine,
+// overdrive and distortion (the FM synth moved to ./operator.test.ts). Everything here runs against the headless context
 // stand-in (SS15: the load-bearing logic needs no browser).
 
 import { describe, expect, it } from "vitest";
@@ -60,62 +60,9 @@ describe("every new definition is structurally valid", () => {
   });
 });
 
-describe("core.fm", () => {
-  it("modulates the carrier's FREQUENCY, at a ratio of the played note", () => {
-    const { ctx, instance } = rig(FmSynth);
-    const push = paramPusher(instance);
-    push.bind("ratio");
-    push.push("ratio", 3);
-
-    instance.noteOn?.(69, 100, 0); // A4 = 440 Hz
-    const [carrier, modulator] = oscillators(ctx) as [FakeOscillatorNode, FakeOscillatorNode];
-    expect(carrier.frequency.value).toBeCloseTo(440, 5);
-    // The ratio is a RATIO: the modulator tracks the note, so the timbre is
-    // the same on every key.
-    expect(modulator.frequency.value).toBeCloseTo(1320, 5);
-
-    // ...and the modulator's gain lands on the carrier's frequency param,
-    // which is what makes this FM rather than two oscillators playing.
-    const intoFrequency = ctx.created.some(
-      (node) => node instanceof FakeGainNode && node.connectedTo.includes(carrier.frequency),
-    );
-    expect(intoFrequency).toBe(true);
-  });
-
-  it("scales the modulation depth by the carrier frequency", () => {
-    const { ctx, instance } = rig(FmSynth);
-    const push = paramPusher(instance);
-    push.bind("index");
-    push.push("index", 5);
-
-    instance.noteOn?.(69, 127, 0);
-    const carrier = oscillators(ctx)[0] as FakeOscillatorNode;
-    const modGain = ctx.created.find(
-      (n): n is FakeGainNode => n instanceof FakeGainNode && n.connectedTo.includes(carrier.frequency),
-    );
-    // index 5 at 440 Hz = 2200 Hz of deviation. A FIXED depth would turn high
-    // notes to noise and leave low ones dull.
-    expect(modGain?.gain.events[0]?.value).toBeCloseTo(2200, 3);
-  });
-
-  it("stops both oscillators when a note is released", () => {
-    const { ctx, instance } = rig(FmSynth);
-    instance.noteOn?.(60, 100, 0);
-    instance.noteOff?.(60, 1);
-    const [carrier, modulator] = oscillators(ctx) as [FakeOscillatorNode, FakeOscillatorNode];
-    expect(carrier.stoppedAt).not.toBeNull();
-    // A modulator left running is inaudible but never garbage-collected —
-    // one leaked oscillator per note.
-    expect(modulator.stoppedAt).toBe(carrier.stoppedAt);
-  });
-
-  it("caps polyphony, stealing the oldest ringing voice", () => {
-    const { ctx, instance } = rig(FmSynth);
-    for (let i = 0; i < 20; i += 1) instance.noteOn?.(40 + i, 100, i * 0.01);
-    const stopped = oscillators(ctx).filter((o) => o.stoppedAt !== null).length;
-    expect(stopped).toBeGreaterThan(0);
-  });
-});
+// `core.fm` has its own file now — it grew from two operators to four, an
+// algorithm table and thirty-eight params, which is more than a shared
+// "new devices" file should carry. See ./operator.test.ts.
 
 describe("core.kick", () => {
   it("sweeps the pitch DOWN into the played note, exponentially", () => {

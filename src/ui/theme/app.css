@@ -968,9 +968,15 @@ select.fbl-field--sm {
 }
 
 /* A device that draws its own editor (SS7 `DeviceDefinition.editor`). */
-.fbl-device[data-editor] {
+/* A device with its own editor sizes to the picture it draws, not to the
+   150px a knob grid needs. */
+.fbl-device[data-editor="eq8"] {
   min-width: 400px;
   max-width: 460px;
+}
+.fbl-device[data-editor="operator"] {
+  min-width: 340px;
+  max-width: 372px;
 }
 
 /* --- EQ Eight ------------------------------------------------------------ */
@@ -1923,4 +1929,147 @@ select.fbl-field--sm {
 .fbl-qwerty-controls .fbl-key-row {
   grid-template-columns: auto 1fr;
   padding: 0;
+}
+
+/* --- Operator (core.fm) ------------------------------------------------ */
+
+.fbl-operator {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Eleven pictures in a wrapping grid. They are small on purpose: the row is
+   a menu of shapes to recognise, not eleven diagrams to study. */
+.fbl-op-algorithms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 5px;
+  background: var(--fbl-well);
+  border: 1px solid var(--fbl-line);
+  border-radius: var(--fbl-r1);
+}
+
+.fbl-op-algorithm {
+  display: grid;
+  place-items: center;
+  width: 47px;
+  height: 45px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--fbl-r1);
+  cursor: pointer;
+}
+.fbl-op-algorithm:hover {
+  border-color: var(--fbl-line-strong);
+  background: rgba(255, 255, 255, 0.03);
+}
+.fbl-op-algorithm[aria-checked="true"] {
+  border-color: var(--fbl-aqua);
+  background: rgba(53, 208, 200, 0.08);
+}
+
+.fbl-op-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.fbl-op-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  padding: 2px 0 3px;
+  font: inherit;
+  color: var(--fbl-text-faint);
+  background: var(--fbl-well);
+  border: 1px solid var(--fbl-line);
+  border-radius: var(--fbl-r1);
+  cursor: pointer;
+}
+/* An operator that is switched off still has a tab — you have to be able to
+   get to it to switch it on — but it should not read as part of the sound. */
+.fbl-op-tab[data-on="true"] {
+  color: var(--fbl-text);
+}
+.fbl-op-tab[data-on="true"][data-carrier="false"] {
+  border-color: rgba(240, 176, 64, 0.4);
+}
+.fbl-op-tab[aria-pressed="true"] {
+  border-color: var(--fbl-aqua);
+  background: rgba(53, 208, 200, 0.1);
+}
+.fbl-op-tab-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.fbl-op-tab-role {
+  font-family: var(--fbl-font-mono);
+  font-size: 8px;
+  color: var(--fbl-text-faint);
+}
+
+.fbl-op-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fbl-op-detail[data-off="true"] {
+  opacity: 0.45;
+}
+
+.fbl-op-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* On / Wave / Ratio sit on one line and read left to right as a sentence,
+   so they align on their MIDDLES rather than on the knob baselines below. */
+.fbl-op-row--identity {
+  align-items: center;
+}
+/* The drum machine's row labels reserve 68px for a pad name. Here the label
+   is three letters beside four knobs, and that much gutter pushed every knob
+   out of line with the row above it. */
+.fbl-op-row > .fbl-param-row-label {
+  min-width: 0;
+  width: 26px;
+  align-self: center;
+}
+
+/* Coarse and Fine are two integers that mean one number. */
+.fbl-op-ratio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+.fbl-op-ratio-value {
+  min-width: 44px;
+  padding: 3px 6px;
+  font-family: var(--fbl-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  text-align: center;
+  color: var(--fbl-aqua);
+  background: #05070b;
+  border: 1px solid var(--fbl-line);
+  border-radius: var(--fbl-r1);
+}
+
+.fbl-op-envelope {
+  flex: 0 0 auto;
+}
+
+.fbl-op-legend {
+  flex: 1;
+  min-width: 0;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--fbl-text-faint);
 }

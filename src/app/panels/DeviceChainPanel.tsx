@@ -40,6 +40,7 @@ import type {
 } from "../../types";
 import { EnumSelect, Knob, ToggleLED, controlKindFor } from "../../ui/controls";
 import { Eq8Editor } from "./devices/Eq8Editor";
+import { OperatorEditor } from "./devices/OperatorEditor";
 import { useDispatchHint } from "./useDispatchHint";
 
 export interface DeviceChainPanelProps {
@@ -562,6 +563,16 @@ function DevicePanel({
           responsible for every param the device declares. */}
       {def?.editor === "eq8" && (
         <Eq8Editor
+          doc={doc}
+          engine={engine}
+          channelId={channelId}
+          deviceId={deviceId}
+          onShowAutomation={onShowAutomation}
+        />
+      )}
+
+      {def?.editor === "operator" && (
+        <OperatorEditor
           doc={doc}
           engine={engine}
           channelId={channelId}

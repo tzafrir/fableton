@@ -17,7 +17,16 @@ export { Distortion, Overdrive } from "./overdrive";
 export { DrumMachine, PADS } from "./drumMachine";
 export { Filter } from "./filter";
 export { Gate } from "./gate";
-export { FmSynth } from "./fmSynth";
+export { FmSynth, MAX_INDEX, OPERATOR_WAVES, operatorParamIds } from "./fmSynth";
+export {
+  ALGORITHMS,
+  ALGORITHM_LABELS,
+  OPERATOR_COUNT,
+  OPERATOR_NAMES,
+  OUT,
+  algorithmAt,
+  diagramLayout,
+} from "./operator/algorithms";
 export { Kick } from "./kick";
 export { Noise, NOISE_COLORS, NOISE_FILTER_TYPES } from "./noise";
 export { PolySynth } from "./polySynth";
