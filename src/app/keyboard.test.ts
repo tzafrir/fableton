@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createDocumentStore, createEmptyProject, createProjectCommands, createSequentialIdFactory } from "../state";
-import { createUndoRedoHandler, isEditableTarget, type KeyLike } from "./keyboard";
+import { createUndoRedoHandler, isEditableTarget, isTextEntryTarget, type KeyLike } from "./keyboard";
 
 function makeEvent(overrides: Partial<KeyLike> & { key: string }): KeyLike & { prevented: boolean } {
   const event = {
@@ -166,5 +166,32 @@ describe("isEditableTarget", () => {
 
   it("is false for a plain div", () => {
     expect(isEditableTarget(document.createElement("div"))).toBe(false);
+  });
+});
+
+// The narrower half, and the reason it exists: the QWERTY piano must keep
+// playing while a `<select>` has focus, because every device picker leaves
+// one focused and the home row is the instrument.
+describe("isTextEntryTarget", () => {
+  it.each(["INPUT", "TEXTAREA"])("is true for a %s element", (tag) => {
+    expect(isTextEntryTarget(document.createElement(tag))).toBe(true);
+  });
+
+  it("is FALSE for a select — a letter there is typeahead, not text", () => {
+    const select = document.createElement("select");
+    expect(isEditableTarget(select)).toBe(true); // Space still belongs to it
+    expect(isTextEntryTarget(select)).toBe(false); // but `a` is a C
+  });
+
+  it("is true for a contenteditable host, and false for a plain div", () => {
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    expect(isTextEntryTarget(editable)).toBe(true);
+    expect(isTextEntryTarget(document.createElement("div"))).toBe(false);
+  });
+
+  it("is false for null and for non-HTMLElements", () => {
+    expect(isTextEntryTarget(null)).toBe(false);
+    expect(isTextEntryTarget(window)).toBe(false);
   });
 });

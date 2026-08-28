@@ -45,7 +45,7 @@ import {
 } from "./keyboardPiano";
 import { createNoteRecorder } from "./noteRecorder";
 import { createProjectEngine, type AppProjectEngine } from "./engine";
-import { createUndoRedoHandler, isEditableTarget } from "./keyboard";
+import { createUndoRedoHandler, isTextEntryTarget } from "./keyboard";
 import { createAppShortcutHandler } from "./shortcuts";
 import type { KitArrangementView } from "../editor/arrangement";
 import {
@@ -380,15 +380,20 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     if (piano === null) return;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
-      if (isEditableTarget(event.target)) return;
+      // `isTextEntryTarget`, not `isEditableTarget`: a focused `<select>` is
+      // not somewhere you type, it is somewhere a letter does TYPEAHEAD — and
+      // the device pickers leave one focused, so the home row was picking
+      // options (adding a device per keystroke) instead of playing.
+      if (isTextEntryTarget(event.target)) return;
       if (piano.keyDown(event.key, { repeat: event.repeat }) !== "ignored") {
-        // Space would scroll, and the letter keys would type into anything
-        // that picks up a bare keypress.
+        // Space would scroll, the letter keys would type into anything that
+        // picks up a bare keypress — and on a select they would run the
+        // typeahead this handler exists to pre-empt.
         event.preventDefault();
       }
     };
     const onKeyUp = (event: KeyboardEvent): void => {
-      if (isEditableTarget(event.target)) return;
+      if (isTextEntryTarget(event.target)) return;
       piano.keyUp(event.key);
     };
     // A window that loses focus never delivers the keyup, so every held note

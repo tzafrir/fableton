@@ -38,6 +38,7 @@ export interface KeyLike {
 }
 
 const EDITABLE_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
+const TEXT_ENTRY_TAGS = new Set(["INPUT", "TEXTAREA"]);
 
 /** True while the event's target is somewhere the user is typing text — a
  *  form field, or any element with `contenteditable`. Canvas editor hosts are
@@ -50,6 +51,30 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   // `isContentEditable` (it is present on the type but not wired up), so the
   // attribute is the portable check; a real browser keeps `isContentEditable`
   // in sync with it, so this covers both.
+  return target.isContentEditable || target.getAttribute("contenteditable") === "true";
+}
+
+/**
+ * True while the target actually accepts TEXT — the narrower half of
+ * `isEditableTarget`, and the one the QWERTY piano asks about.
+ *
+ * A `<select>` is "editable" in the sense the shortcut table means (Space
+ * belongs to the dropdown, not to the transport) but it does NOT take text:
+ * what a letter does there is TYPEAHEAD, jumping to an option whose label
+ * starts with it. In an app whose home row IS the instrument, that is a trap
+ * — after picking an effect from `+ Add effect…` the select keeps focus, so
+ * `a s d f g` walked the option list and each hop fired `change`, adding a
+ * device per keystroke while the piano stayed silent. Both halves of that are
+ * this one predicate: the piano plays over a focused select, and (because the
+ * piano then calls `preventDefault`) the browser's typeahead never runs.
+ *
+ * Arrow keys, Enter, Escape and Space are untouched, so a select is still
+ * fully operable from the keyboard — only the letter typeahead is given up,
+ * and only on the keys that are notes.
+ */
+export function isTextEntryTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (TEXT_ENTRY_TAGS.has(target.tagName)) return true;
   return target.isContentEditable || target.getAttribute("contenteditable") === "true";
 }
 
