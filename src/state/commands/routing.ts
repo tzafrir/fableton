@@ -47,6 +47,7 @@ export type RoutingCommands = Pick<
   | "setSidechain"
   | "removeSidechain"
   | "addEffect"
+  | "addNoteEffect"
   | "removeDevices"
   | "moveDevice"
   | "setDeviceEnabled"
@@ -228,6 +229,9 @@ export function createRoutingCommands(ids: IdFactory): RoutingCommands {
             const channel = doc.channels[id];
             if (channel === undefined) continue;
             for (const entryId of [...channel.chain]) removeChainEntry(doc, entryId);
+            for (const deviceId of [...(channel.midiChain ?? [])]) {
+              removeDeviceFromDoc(doc, deviceId);
+            }
             if (channel.source !== null) removeDeviceFromDoc(doc, channel.source.deviceId);
           }
           for (const clip of Object.values(doc.clips)) {
@@ -386,6 +390,25 @@ export function createRoutingCommands(ids: IdFactory): RoutingCommands {
       });
     },
 
+    addNoteEffect(channelId, init, index): Command {
+      const deviceId = init.deviceId ?? ids.device();
+      return makeCommand("Add Note Effect", (doc) => {
+        const channel = doc.channels[channelId];
+        if (channel === undefined) return;
+        doc.devices[deviceId] = {
+          id: deviceId,
+          definitionId: init.definitionId,
+          version: init.version ?? 1,
+          channelId,
+          enabled: true,
+        };
+        const chain = channel.midiChain ?? [];
+        const at = index === undefined ? chain.length : clampInt(index, 0, chain.length);
+        chain.splice(at, 0, deviceId);
+        channel.midiChain = chain;
+      });
+    },
+
     removeDevices(deviceIds): Command {
       const targets = [...deviceIds];
       return makeCommand(targets.length === 1 ? "Remove Device" : "Remove Devices", (doc) => {
@@ -397,12 +420,17 @@ export function createRoutingCommands(ids: IdFactory): RoutingCommands {
       return makeCommand("Move Device", (doc) => {
         const channel = doc.channels[channelId];
         if (channel === undefined) return;
-        const from = channel.chain.indexOf(deviceId);
+        // The device id says which chain it is in; a note effect and an audio
+        // effect are never in the same list, so there is nothing to choose.
+        const list =
+          channel.chain.indexOf(deviceId) >= 0 ? channel.chain : channel.midiChain;
+        if (list === undefined) return;
+        const from = list.indexOf(deviceId);
         if (from < 0) return;
-        const to = clampInt(toIndex, 0, channel.chain.length - 1);
+        const to = clampInt(toIndex, 0, list.length - 1);
         if (from === to) return;
-        channel.chain.splice(from, 1);
-        channel.chain.splice(to, 0, deviceId);
+        list.splice(from, 1);
+        list.splice(to, 0, deviceId);
       });
     },
 

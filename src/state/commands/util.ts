@@ -34,6 +34,13 @@ export function detachFromChains(doc: DraftProject, deviceId: DeviceInstanceId):
   const channel = doc.channels[device.channelId];
   if (channel !== undefined) {
     channel.chain = channel.chain.filter((id) => id !== deviceId);
+    if (channel.midiChain !== undefined) {
+      const kept = channel.midiChain.filter((id) => id !== deviceId);
+      // Dropped entirely when it empties: an absent `midiChain` and an empty
+      // one mean the same thing, and only one of the two encodes to nothing.
+      if (kept.length === 0) delete channel.midiChain;
+      else channel.midiChain = kept;
+    }
     if (channel.source !== null && channel.source.deviceId === deviceId) channel.source = null;
   }
   for (const rack of Object.values(doc.racks)) {

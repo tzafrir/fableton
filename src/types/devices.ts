@@ -17,9 +17,29 @@ import type {
   DeviceInstanceId,
   ParamId,
 } from "./ids";
+import type { Ticks } from "./time";
+import type { NoteTarget } from "./transport";
 import type { ParamDescriptor, ParamHandle, ParamRegistry } from "./params";
 
-export type DeviceKind = "instrument" | "audioEffect";
+/**
+ * `midiEffect` is the SS7 device kind that never touches audio: it sits in a
+ * channel's NOTE chain (`Channel.midiChain`), between the scheduler and the
+ * instrument, and rewrites the note stream on the way through. It declares no
+ * ports, appears in no edge of the SS6 routing graph, and is otherwise an
+ * ordinary device — same registry, same params, same panel, same automation,
+ * same undo. See `DeviceInstance.setNoteOutput` for the runtime half.
+ */
+export type DeviceKind = "instrument" | "audioEffect" | "midiEffect";
+
+/**
+ * A device whose panel is not a grid of controls, but its own component.
+ *
+ * Declared as a NAME rather than a component so the device layer keeps
+ * knowing nothing about React (SS7/SS15): the shell owns the component and
+ * looks it up by this id, exactly as it looks a `ControlKind` up. The list
+ * grows only when a component to match it is written.
+ */
+export type DeviceEditorId = "eq8";
 
 /**
  * One audio port on a device. `id` is device-local (`'in'`, `'out'`, `'sc'`).
@@ -79,6 +99,39 @@ export interface AssetLibrary {
   buffer(assetId: AssetId): AudioBuffer | undefined;
   /** Fires after any buffer appears or is dropped. Returns an unsubscribe. */
   onChange(cb: () => void): Unsub;
+}
+
+/**
+ * One look-ahead window, as much of the SCHEDULER as a NOTE EFFECT may see.
+ *
+ * A note effect is the one kind of device that is a scheduling participant:
+ * an arpeggiator holding a chord has to emit notes at moments that no
+ * incoming event announces, so it needs to be told how far ahead the
+ * transport has reached and where that is in musical time. Everything else —
+ * the transport, the tempo map, the document — stays hidden, and the
+ * tick->seconds conversion it needs is handed over as `timeAt`, a closure the
+ * SCHEDULER owns. SS8's "conversion happens in exactly two places" therefore
+ * still holds: this is the scheduler's conversion, lent out.
+ *
+ * ALLOCATION CONTRACT (SS12): this is a per-tick path. The window object is
+ * preallocated and REUSED across windows — read what you need during
+ * `fillNotes` and retain nothing.
+ */
+export interface NoteWindow {
+  /** First tick of the window (inclusive). */
+  readonly fromTick: Ticks;
+  /** Last tick of the window (exclusive). */
+  readonly toTick: Ticks;
+  /**
+   * Audio-clock seconds at which `tick` sounds. Ticks slightly outside
+   * `[fromTick, toTick)` are legal and answer correctly — an effect
+   * frequently needs the time of the step just past the end to know whether
+   * it belongs to this window.
+   */
+  timeAt(tick: Ticks): Seconds;
+  /** Ticks per quarter note, so a note effect can express its rate in beats
+   *  without importing the document's PPQ. */
+  readonly ppq: number;
 }
 
 /** Everything the harness hands a device besides its ports. */
@@ -189,6 +242,12 @@ export interface DeviceDefinition {
   create(ctx: BaseAudioContext, io: DeviceIO, services: DeviceServices): DeviceInstance;
   /** Declarative panel rows; omit -> auto-generated from `params` (SS5). */
   panel?: PanelSpec | undefined;
+  /**
+   * A bespoke panel component, by name. When set, the shell renders that
+   * component INSTEAD of `panel`/the default grid — for a device whose
+   * controls are a picture (an EQ curve you drag) rather than a row of knobs.
+   */
+  editor?: DeviceEditorId | undefined;
   /** Live readouts this device publishes; the panel renders one meter each.
    *  A definition that declares these must implement `readValue`. */
   readouts?: readonly DeviceReadoutSpec[] | undefined;
@@ -253,6 +312,29 @@ export interface DeviceInstance {
    * born with). `value` is `null` when the setting was cleared.
    */
   setSetting?(key: string, value: string | null): void;
+  /**
+   * NOTE EFFECTS only: where this device's processed notes go — the next
+   * effect in `Channel.midiChain`, or the track's instrument at the end of
+   * it. Set by the engine after every apply, and set to a no-op target when
+   * the chain is torn down.
+   *
+   * The device receives notes through the ordinary `noteOn`/`noteOff`/
+   * `allNotesOff` an instrument implements, and emits through this. A device
+   * that implements neither this nor `fillNotes` is a pass-through, which is
+   * the honest default for a half-written effect.
+   */
+  setNoteOutput?(target: NoteTarget): void;
+  /**
+   * NOTE EFFECTS only: emit every note this device owes before the end of
+   * `window`, through the target given to `setNoteOutput`.
+   *
+   * Called once per scheduling window, AFTER that window's incoming events
+   * have been delivered, and in chain order — so an effect always sees what
+   * the one before it has just generated. While the transport is stopped the
+   * shell pumps a free-running window instead, so an arpeggiator answers the
+   * keyboard with no transport running.
+   */
+  fillNotes?(window: NoteWindow): void;
   /** Future PDC (SS6); return 0 when the device adds no latency. */
   latencySamples?(): number;
   /** Called after ramps/tails complete; must disconnect everything it made. */
@@ -283,6 +365,10 @@ export interface DeviceInstanceSpec {
   readValue?: ((readoutId: string) => number | undefined) | undefined;
   /** See `DeviceInstance.setSetting`. */
   setSetting?: ((key: string, value: string | null) => void) | undefined;
+  /** See `DeviceInstance.setNoteOutput`. */
+  setNoteOutput?: ((target: NoteTarget) => void) | undefined;
+  /** See `DeviceInstance.fillNotes`. */
+  fillNotes?: ((window: NoteWindow) => void) | undefined;
   latencySamples?: (() => number) | undefined;
   dispose(when?: Seconds): void;
 }

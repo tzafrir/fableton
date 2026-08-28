@@ -133,7 +133,19 @@ export interface Channel {
   color: string | null;
   /** Track only: the instrument slot (SS6/SS7). */
   source: SourceRef | null;
-  /** Ordered effect chain; ids key into `Project.devices`. */
+  /**
+   * Ordered NOTE effect chain — devices of kind `midiEffect`, which sit
+   * between the scheduler and `source` and rewrite the note stream (an
+   * arpeggiator, and whatever follows it). Ids key into `Project.devices`
+   * exactly as `chain` does; the two lists are disjoint.
+   *
+   * OPTIONAL, and absent rather than `[]` on a channel that has none: it
+   * encodes to nothing, so every project saved before note effects existed
+   * still round-trips byte-for-byte (SS2), and every `Channel` literal that
+   * predates them stays valid. Read it as `channel.midiChain ?? []`.
+   */
+  midiChain?: DeviceInstanceId[] | undefined;
+  /** Ordered AUDIO effect chain; ids key into `Project.devices`. */
   chain: DeviceInstanceId[];
   volume: ParamId;
   pan: ParamId;

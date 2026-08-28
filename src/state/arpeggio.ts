@@ -20,18 +20,13 @@
 // what is sounding at a step IS the chord.
 
 import type { ArpMode, ArpOptions, NoteInit, Ticks } from "../types";
+import { ARP_MODES, arpOrder } from "../music/arpeggio";
 
 export type { ArpMode, ArpOptions };
-
-/** Every mode, in the order the picker lists them. */
-export const ARP_MODES: readonly ArpMode[] = [
-  "up",
-  "down",
-  "upDown",
-  "downUp",
-  "asPlayed",
-  "random",
-];
+// Re-exported, not redefined: the live note effect (`core.arpeggiator`) walks
+// its chords in the same order this transform does, and one copy of that rule
+// is the only way that stays true. See src/music/arpeggio.ts.
+export { ARP_MODES, arpOrder };
 
 export const DEFAULT_ARP_OPTIONS: ArpOptions = {
   step: 240, // a 1/16 note at PPQ 960
@@ -61,33 +56,6 @@ function soundingAt(notes: readonly ArpSource[], tick: Ticks): ArpSource[] {
     }
   }
   return out;
-}
-
-/**
- * The order pitches are visited in, as a list of indices into a low-to-high
- * pitch list of length `n`, expanded over `octaves`.
- *
- * `upDown`/`downUp` do NOT repeat the turning notes — an up-down over three
- * pitches is 1 2 3 2, not 1 2 3 3 2 1 — because the repeat is what makes a
- * bounced arp limp on every cycle.
- */
-export function arpOrder(n: number, mode: ArpMode): number[] {
-  if (n <= 0) return [];
-  const up = Array.from({ length: n }, (_, i) => i);
-  switch (mode) {
-    case "up":
-    case "asPlayed":
-    case "random":
-      return up;
-    case "down":
-      return [...up].reverse();
-    case "upDown":
-      return n <= 2 ? up : [...up, ...up.slice(1, -1).reverse()];
-    case "downUp": {
-      const down = [...up].reverse();
-      return n <= 2 ? down : [...down, ...down.slice(1, -1).reverse()];
-    }
-  }
 }
 
 /**

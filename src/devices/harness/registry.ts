@@ -17,7 +17,7 @@ import type {
 } from "../../types";
 import { PARAM_PATH_SEPARATOR } from "../../params/paramIds";
 
-const KINDS: readonly DeviceKind[] = ["instrument", "audioEffect"];
+const KINDS: readonly DeviceKind[] = ["instrument", "audioEffect", "midiEffect"];
 
 /** `DeviceRegistry` plus the removal verbs tests and hot-reload need. */
 export interface AppDeviceRegistry extends DeviceRegistry {
@@ -91,8 +91,16 @@ export function validateDefinition(def: DeviceDefinition): void {
   }
   assertPorts(def, def.audioIn, "audioIn");
   assertPorts(def, def.audioOut, "audioOut");
-  if (def.audioOut.length === 0) {
+  // A note effect is the one device with no place in the audio graph at all
+  // (SS6): it declares no ports, and requiring one would mean creating a gain
+  // node nothing will ever connect to just to satisfy a check.
+  if (def.kind !== "midiEffect" && def.audioOut.length === 0) {
     throw new Error(`DeviceDefinition "${def.id}": every device needs at least one audio output`);
+  }
+  if (def.kind === "midiEffect" && (def.audioIn.length > 0 || def.audioOut.length > 0)) {
+    throw new Error(
+      `DeviceDefinition "${def.id}": a midiEffect must declare no audio ports — it is not in the routing graph`,
+    );
   }
   if (def.kind === "audioEffect" && def.audioIn.length === 0) {
     throw new Error(`DeviceDefinition "${def.id}": an audioEffect needs at least one audio input`);

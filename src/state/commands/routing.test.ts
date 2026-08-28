@@ -264,3 +264,61 @@ describe("device chain", () => {
     expect(Object.keys(doc.clips)).toEqual(clipsBefore); // SS7: clips untouched
   });
 });
+
+describe("note chain (SS7 midiEffect)", () => {
+  const arp = (deviceId: string) => ({ definitionId: "core.arpeggiator", deviceId });
+
+  it("addNoteEffect appends to midiChain, leaving the audio chain alone", () => {
+    f.store.dispatch(f.commands.addNoteEffect(f.trackId, arp("a")));
+    f.store.dispatch(f.commands.addNoteEffect(f.trackId, arp("b")));
+    f.store.dispatch(f.commands.addEffect(f.trackId, { definitionId: "core.filter", deviceId: "fx" }));
+    const doc = f.store.getState();
+    expect(doc.channels[f.trackId]?.midiChain).toEqual(["a", "b"]);
+    expect(doc.channels[f.trackId]?.chain).toEqual(["fx"]);
+    expect(doc.devices["a"]?.channelId).toBe(f.trackId);
+    expectLegalProject(doc);
+  });
+
+  it("inserts at an index", () => {
+    f.store.dispatch(f.commands.addNoteEffect(f.trackId, arp("a")));
+    f.store.dispatch(f.commands.addNoteEffect(f.trackId, arp("b"), 0));
+    expect(f.store.getState().channels[f.trackId]?.midiChain).toEqual(["b", "a"]);
+  });
+
+  it("moveDevice reorders the NOTE chain, picking the list the device is in", () => {
+    f.store.dispatch(f.commands.addNoteEffect(f.trackId, arp("a")));
+    f.store.dispatch(f.commands.addNoteEffect(f.trackId, arp("b")));
+    f.store.dispatch(f.commands.addEffect(f.trackId, { definitionId: "core.filter", deviceId: "fx" }));
+    f.store.dispatch(f.commands.moveDevice(f.trackId, "b", 0));
+    const doc = f.store.getState();
+    expect(doc.channels[f.trackId]?.midiChain).toEqual(["b", "a"]);
+    expect(doc.channels[f.trackId]?.chain).toEqual(["fx"]);
+  });
+
+  it("removeDevices takes it out of the note chain, and drops the key when it empties", () => {
+    f.store.dispatch(f.commands.addNoteEffect(f.trackId, arp("a")));
+    f.store.dispatch(f.commands.setParamValue(`chan:${f.trackId}/dev:a/gate`, 50));
+    f.store.dispatch(f.commands.removeDevices(["a"]));
+    const doc = f.store.getState();
+    expect(doc.devices["a"]).toBeUndefined();
+    // Absent, not `[]`: the two mean the same thing and only one of them
+    // encodes to nothing (see `Channel.midiChain`).
+    expect(doc.channels[f.trackId]?.midiChain).toBeUndefined();
+    expect(doc.paramValues[`chan:${f.trackId}/dev:a/gate`]).toBeUndefined();
+    expectLegalProject(doc);
+  });
+
+  it("undoes as one entry", () => {
+    f.store.dispatch(f.commands.addNoteEffect(f.trackId, arp("a")));
+    f.store.undo();
+    const doc = f.store.getState();
+    expect(doc.devices["a"]).toBeUndefined();
+    expect(doc.channels[f.trackId]?.midiChain).toBeUndefined();
+  });
+
+  it("deleting the track takes its note effects with it", () => {
+    f.store.dispatch(f.commands.addNoteEffect(f.trackId, arp("a")));
+    f.store.dispatch(f.commands.deleteTracks([f.trackId]));
+    expect(f.store.getState().devices["a"]).toBeUndefined();
+  });
+});

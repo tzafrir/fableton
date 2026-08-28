@@ -23,6 +23,12 @@ import {
 import { createAutomationSampler, type AutomationSampler } from "../../engine/automation/sampler";
 import { createGraphReconciler, type GraphReconciler } from "../../engine/graph/reconciler";
 import { createMeterBus, type MeterBus } from "../../engine/meter/meters";
+import {
+  buildNoteChain,
+  createNoteChainRunner,
+  type ChannelNoteChain,
+  type NoteChainRunner,
+} from "../../engine/notes/noteChain";
 import { createEngineTransport, type Clock, type EngineTransport } from "../../engine/transport";
 import { createParamRegistry, type AppParamRegistry } from "../../params";
 import { createTempoMap } from "../../time";
@@ -30,6 +36,7 @@ import type { ParamCommit } from "../../params";
 import type {
   AuditionSink,
   ChannelId,
+  DeviceInstance,
   DeviceInstanceId,
   MountedDevice,
   NoteTarget,
@@ -110,6 +117,26 @@ export interface AppProjectEngine extends ProjectEngine {
    * device host hands the same library to every device.
    */
   readonly assets: AppAssetLibrary;
+  /**
+   * An `AnalyserNode` on a mounted device's OUTPUT port — what the device is
+   * putting out, as opposed to `analyserFor`'s whole-channel tap. The EQ
+   * draws its own spectrum from this; nothing else needs it yet.
+   *
+   * Same lifecycle as `analyserFor`: created on demand, cached, re-connected
+   * after every apply, `null` when the device is not mounted (or the context
+   * has no `createAnalyser`).
+   */
+  deviceAnalyser(deviceId: DeviceInstanceId): AnalyserNode | null;
+  /**
+   * Runs one free-running note-effect window (see `NoteChainRunner`). The
+   * shell calls it at rAF while the transport is stopped, which is what makes
+   * an arpeggiator answer the keyboard with nothing playing. A no-op while
+   * playing, and while no channel has a note effect.
+   */
+  pumpNotes(): void;
+  /** Whether any channel has a note effect — the shell uses it to decide
+   *  whether the free-run rAF above is worth starting at all. */
+  hasNoteEffects(): boolean;
 }
 
 /**
@@ -120,7 +147,9 @@ export interface AppProjectEngine extends ProjectEngine {
 export const ANALYSER_FFT_SIZE = 2048;
 
 /** The transport's per-track note target — rebuilt per apply, looked up per
- *  tick without allocating (SS12). */
+ *  tick without allocating (SS12). With a `midiChain` on the channel this is
+ *  the HEAD of that chain rather than the instrument itself; everything
+ *  upstream (transport, audition, keyboard) is unaffected either way. */
 interface TrackTarget {
   readonly noteTarget: NoteTarget;
 }
@@ -234,11 +263,21 @@ export function createProjectEngine(
     inputFor: (channelId) => reconciler.inputFor(channelId),
   });
 
+  /** SS7 note effects: the chains sit between the transport and the
+   *  instruments, and are pumped once per look-ahead window (and at rAF while
+   *  stopped, through `pumpNotes`). */
+  const noteChains: NoteChainRunner = createNoteChainRunner({
+    ctx,
+    tempoMap: () => currentTempoMap,
+  });
+
   const targetsByChannel = new Map<ChannelId, TrackTarget>();
   const meteredChannels = new Set<ChannelId>();
   /** Visualiser taps, created lazily by `analyserFor` and re-connected on
    *  every apply. One per channel anyone is actually looking at. */
   const analysers = new Map<ChannelId, AnalyserNode>();
+  /** The same, per DEVICE output (`deviceAnalyser`). */
+  const deviceAnalysers = new Map<DeviceInstanceId, AnalyserNode>();
   const events = createDocumentNoteEventSource(initialDoc);
 
   const transport: EngineTransport = createEngineTransport({
@@ -289,8 +328,15 @@ export function createProjectEngine(
     params.load(doc.paramValues);
 
     // Note targets: each track's source instrument, freshly resolved (a swap
-    // remounted the device; same map, new instance).
+    // remounted the device; same map, new instance), with the channel's note
+    // effects wired in front of it.
+    //
+    // Rebuilt wholesale on every apply, like the meter taps: the wrapper
+    // objects are cheap, and the DEVICES they wrap are the same instances
+    // across applies (the reconciler only remounts what actually changed), so
+    // an arpeggiator keeps the chord it is holding through an unrelated edit.
     targetsByChannel.clear();
+    const chains: ChannelNoteChain[] = [];
     for (const channelId of doc.channelOrder) {
       const channel = doc.channels[channelId];
       if (channel === undefined || channel.role !== "track") continue;
@@ -298,8 +344,35 @@ export function createProjectEngine(
       if (source === null || source.kind !== "instrument") continue;
       const mounted = reconciler.mountedDevice(source.deviceId);
       if (mounted === undefined) continue;
-      const noteTarget = noteTargetOf(mounted);
-      if (noteTarget !== undefined) targetsByChannel.set(channelId, { noteTarget });
+      const instrument = noteTargetOf(mounted);
+      if (instrument === undefined) continue;
+      const effects: DeviceInstance[] = [];
+      for (const deviceId of channel.midiChain ?? []) {
+        const device = doc.devices[deviceId];
+        // A DISABLED note effect is bypassed, exactly as a disabled audio
+        // effect is dropped out of the signal path: it stays mounted, keeps
+        // its params, and the notes route around it.
+        if (device === undefined || !device.enabled) continue;
+        const effect = reconciler.mountedDevice(deviceId)?.instance;
+        if (effect !== undefined) effects.push(effect);
+      }
+      const chain = buildNoteChain(channelId, effects, instrument);
+      chains.push(chain);
+      targetsByChannel.set(channelId, { noteTarget: chain.head });
+    }
+    noteChains.setChains(chains);
+
+    // Device analyser taps follow their device's output port, which is a new
+    // node whenever the device was remounted.
+    for (const [deviceId, analyser] of deviceAnalysers) {
+      analyser.disconnect();
+      const output = reconciler.mountedDevice(deviceId)?.output;
+      if (output === undefined) continue;
+      try {
+        output.connect(analyser);
+      } catch {
+        // Same as the channel taps below: the next apply re-runs this.
+      }
     }
 
     // Analyser taps follow the same post-fader nodes the meters do. Only
@@ -350,12 +423,23 @@ export function createProjectEngine(
   }
 
   transport.addWindowFiller(automation);
+  // After the automation sampler, deliberately: a note effect reads its own
+  // params as plain values when it generates, so it should see the values
+  // this window's automation has just written rather than the previous
+  // window's.
+  transport.addWindowFiller(noteChains);
   transport.addWindowFiller(audioClips);
   // A stopped transport must not leave a take playing over silence; the
   // scheduler also treats the stop as a discontinuity, so the next play does
   // not read as a continuation of the window before it.
   transport.onStateChange((state) => {
-    if (state === "stopped") audioClips.stopAll(ctx.currentTime);
+    const stopped = state === "stopped";
+    if (stopped) audioClips.stopAll(ctx.currentTime);
+    // Handing the free run over to the transport (and back) is a
+    // discontinuity for a note effect the same way a seek is for the clip
+    // scanner: whatever it was holding belongs to the pass that just ended.
+    noteChains.releaseAll(ctx.currentTime);
+    noteChains.setPlaying(!stopped);
   });
 
   return {
@@ -371,6 +455,29 @@ export function createProjectEngine(
     },
 
     assets,
+
+    pumpNotes(): void {
+      noteChains.pumpFree();
+    },
+
+    hasNoteEffects(): boolean {
+      return noteChains.hasEffects();
+    },
+
+    deviceAnalyser(deviceId: DeviceInstanceId): AnalyserNode | null {
+      const existing = deviceAnalysers.get(deviceId);
+      if (existing !== undefined) return existing;
+      const output = reconciler.mountedDevice(deviceId)?.output;
+      if (output === undefined) return null;
+      const create = (ctx as { createAnalyser?: () => AnalyserNode }).createAnalyser;
+      if (typeof create !== "function") return null;
+      const analyser = create.call(ctx);
+      analyser.fftSize = ANALYSER_FFT_SIZE;
+      analyser.smoothingTimeConstant = 0.7;
+      deviceAnalysers.set(deviceId, analyser);
+      output.connect(analyser);
+      return analyser;
+    },
 
     analyserFor(channelId: ChannelId): AnalyserNode | null {
       const existing = analysers.get(channelId);
@@ -430,6 +537,8 @@ export function createProjectEngine(
       meters.dispose();
       for (const analyser of analysers.values()) analyser.disconnect();
       analysers.clear();
+      for (const analyser of deviceAnalysers.values()) analyser.disconnect();
+      deviceAnalysers.clear();
       audioClips.dispose();
       assets.dispose();
       reconciler.dispose();

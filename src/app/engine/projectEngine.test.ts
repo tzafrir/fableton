@@ -453,3 +453,121 @@ describe("createDocumentNoteEventSource — SS3/SS12 re-pointing", () => {
     expect(rest).toHaveLength(0);
   });
 });
+
+describe("createProjectEngine — note effects (SS7 midiEffect)", () => {
+  /** The default project with an arpeggiator ahead of its instrument and a
+   *  whole-bar chord in its clip. */
+  function withArp(project: Project): Project {
+    const { track, clipId } = parts(project);
+    const clip: MidiClip = {
+      ...project.clips[clipId]!,
+      trackId: track,
+      length: 1920,
+      notes: [
+        { id: "n1", start: 0, dur: 1920, pitch: 60, vel: 100 },
+        { id: "n2", start: 0, dur: 1920, pitch: 64, vel: 100 },
+        { id: "n3", start: 0, dur: 1920, pitch: 67, vel: 100 },
+      ],
+    };
+    return {
+      ...project,
+      clips: { ...project.clips, [clipId]: clip },
+      devices: {
+        ...project.devices,
+        arp: {
+          id: "arp",
+          definitionId: "core.arpeggiator",
+          version: 1,
+          channelId: track,
+          enabled: true,
+        },
+      },
+      channels: {
+        ...project.channels,
+        [track]: { ...project.channels[track]!, midiChain: ["arp"] },
+      },
+    };
+  }
+
+  it("mounts a note effect and registers its params, with no audio edge", async () => {
+    const { ctx, base } = setup();
+    const project = withArp(makeProject());
+    const { track } = parts(project);
+    const engine = createProjectEngine(ctx, base.destination as unknown as AudioNode, project, {
+      clock: createManualClock(),
+    });
+    await engine.applyDocument(project as unknown as ProjectSnapshot);
+
+    // It is a device like any other where params are concerned...
+    expect(engine.params.get(deviceParamId(track, "arp", "rate"))).toBeDefined();
+    expect(engine.hasNoteEffects()).toBe(true);
+    // ...and it built no worklet and no second instrument.
+    expect(workletNodes).toHaveLength(1);
+
+    engine.dispose();
+  });
+
+  it("turns a held chord into a stream of single notes on the way to the instrument", async () => {
+    const { ctx, base } = setup();
+    const project = withArp(makeProject());
+    const engine = createProjectEngine(ctx, base.destination as unknown as AudioNode, project, {
+      clock: createManualClock(),
+    });
+    await engine.applyDocument(project as unknown as ProjectSnapshot);
+    engine.transport.play();
+
+    const posted = synthNode().posted.filter((m) => m.type === "noteOn");
+    // Three notes went in at ONE moment; what comes out is one note per step
+    // of the 1/16 grid, each at its own. The first look-ahead window is 200 ms
+    // — 0.4 of a beat at 120 bpm — so it holds the steps at tick 0 and 240.
+    expect(posted.map((m) => m.pitch)).toEqual([60, 64]);
+    expect(new Set(posted.map((m) => m.when)).size).toBe(2);
+
+    engine.dispose();
+  });
+
+  it("bypasses a DISABLED note effect — the chord reaches the instrument whole", async () => {
+    const { ctx, base } = setup();
+    const project = withArp(makeProject());
+    const disabled: Project = {
+      ...project,
+      devices: { ...project.devices, arp: { ...project.devices["arp"]!, enabled: false } },
+    };
+    const engine = createProjectEngine(ctx, base.destination as unknown as AudioNode, disabled, {
+      clock: createManualClock(),
+    });
+    await engine.applyDocument(disabled as unknown as ProjectSnapshot);
+    engine.transport.play();
+
+    const posted = synthNode().posted.filter((m) => m.type === "noteOn");
+    expect(posted).toHaveLength(3);
+    expect(engine.hasNoteEffects()).toBe(false);
+
+    engine.dispose();
+  });
+
+  it("arpeggiates an audition too, once the free-run pump is turned", async () => {
+    const { ctx, base } = setup();
+    const project = withArp(makeProject());
+    const { track } = parts(project);
+    const engine = createProjectEngine(ctx, base.destination as unknown as AudioNode, project, {
+      clock: createManualClock(),
+    });
+    await engine.applyDocument(project as unknown as ProjectSnapshot);
+
+    const node = synthNode();
+    node.posted.length = 0;
+    // Holding a chord on the keyboard, with the transport stopped.
+    const audition = engine.auditionFor(track)!;
+    audition.noteOn(60, 100);
+    audition.noteOn(64, 100);
+    // Nothing sounds until the shell pumps — an arp with no clock is silent,
+    // which is why `pumpNotes` exists at all.
+    expect(node.posted).toHaveLength(0);
+
+    engine.pumpNotes();
+    expect(node.posted.some((m) => m.type === "noteOn")).toBe(true);
+
+    engine.dispose();
+  });
+});

@@ -63,11 +63,11 @@ function countTracks(doc: DraftProject): number {
   return n;
 }
 
-/** Every device instance a channel owns: its source slot plus its chain. */
+/** Every device instance a channel owns: its source slot plus both chains. */
 function devicesOfChannel(doc: DraftProject, channelId: ChannelId): DeviceInstanceId[] {
   const channel = doc.channels[channelId];
   if (channel === undefined) return [];
-  const out = [...channel.chain];
+  const out = [...channel.chain, ...(channel.midiChain ?? [])];
   if (channel.source !== null) out.push(channel.source.deviceId);
   return out;
 }

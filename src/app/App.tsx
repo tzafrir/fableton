@@ -428,6 +428,20 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     });
   }, [docState, historyTick]);
 
+  // How many note effects the DOCUMENT has, which is what decides whether the
+  // free-run pump below is worth running. Read off the document rather than
+  // off the engine deliberately: the engine only learns about a new effect
+  // after `applyDocument` has resolved, which is one async hop AFTER the
+  // render that added it — so an engine-derived count would miss the very
+  // edit that needs the pump started.
+  const noteEffectCount =
+    docState === null
+      ? 0
+      : Object.values(docState.store.getState().channels).reduce(
+          (total, channel) => total + (channel.midiChain?.length ?? 0),
+          0,
+        );
+
   // --- 5. wire the engine to the document once both exist ---------------
   useEffect(() => {
     if (engine === null) return;
@@ -478,6 +492,22 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     });
     return () => cancelAnimationFrame(raf);
   }, [engine, transportState]);
+
+  // --- 6b. free-running note-effect pump (SS7 `midiEffect`) ---------------
+  // An arpeggiator has to answer the keyboard with the transport STOPPED, and
+  // there is no look-ahead window then — so the shell drives one at rAF. It
+  // is the only loop in the app that runs while nothing is playing, so it
+  // starts only once a channel actually has a note effect, and stops again
+  // the moment the transport takes over (`pumpNotes` is a no-op while
+  // playing, but an rAF that does nothing is still an rAF).
+  useEffect(() => {
+    if (engine === null || transportState === "playing" || noteEffectCount === 0) return;
+    let raf = requestAnimationFrame(function loop() {
+      engine.pumpNotes();
+      raf = requestAnimationFrame(loop);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [engine, transportState, noteEffectCount]);
 
   // --- 7. teardown on unmount ---------------------------------------------
   useEffect(

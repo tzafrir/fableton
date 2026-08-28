@@ -101,6 +101,17 @@ export function checkProjectInvariants(project: ProjectSnapshot | Project): stri
   const rackHosts = new Map<string, string>();
   for (const channel of Object.values(project.channels)) {
     if (channel.source !== null) hosts.set(channel.source.deviceId, channel.id);
+    // The NOTE chain hosts devices exactly as the audio chain does; a rack
+    // cannot sit there, so an entry is always a device.
+    for (const deviceId of channel.midiChain ?? []) {
+      if (project.racks[deviceId] !== undefined) {
+        fail(`channels["${channel.id}"].midiChain holds "${deviceId}", which is a rack`);
+      }
+      if (hosts.has(deviceId)) {
+        fail(`devices["${deviceId}"] is claimed twice`);
+      }
+      hosts.set(deviceId, channel.id);
+    }
     for (const entryId of channel.chain) {
       const rack = project.racks[entryId];
       if (rack !== undefined) {

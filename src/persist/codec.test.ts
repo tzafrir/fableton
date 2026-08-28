@@ -514,3 +514,64 @@ describe("audio clips and imported samples round-trip", () => {
     expect(warnings.some((w) => w.message.includes("silent"))).toBe(true);
   });
 });
+
+describe("the note chain round-trips", () => {
+  /** The fixture with an arpeggiator ahead of the track's instrument. */
+  function withNoteChain() {
+    const project = cloneProject(makeFixtureProject());
+    project.devices["arp"] = {
+      id: "arp",
+      definitionId: "core.arpeggiator",
+      version: 1,
+      channelId: TRACK_ID,
+      enabled: true,
+    };
+    project.channels[TRACK_ID]!.midiChain = ["arp"];
+    return project;
+  }
+
+  it("survives an encode/decode with its order intact", () => {
+    const codec = createProjectCodec();
+    const project = withNoteChain();
+    project.devices["arp2"] = { ...project.devices["arp"]!, id: "arp2" };
+    project.channels[TRACK_ID]!.midiChain = ["arp2", "arp"];
+
+    const decoded = codec.decode(codec.encode(project));
+    if (!decoded.ok) throw new Error(decoded.error);
+    expect(decoded.project.channels[TRACK_ID]?.midiChain).toEqual(["arp2", "arp"]);
+  });
+
+  it("encodes to nothing at all when there is none", () => {
+    const codec = createProjectCodec();
+    // Byte-stability across the addition: a project that predates note
+    // effects must encode exactly as it did before they existed.
+    const bare = makeFixtureProject();
+    expect(codec.encode(bare, { savedAt: "2026-01-01T00:00:00.000Z" })).not.toContain("midiChain");
+
+    const decoded = codec.decode(codec.encode(bare));
+    if (!decoded.ok) throw new Error(decoded.error);
+    expect(decoded.project.channels[TRACK_ID]?.midiChain).toBeUndefined();
+  });
+
+  it("drops a note-chain entry naming no device, and warns", () => {
+    const codec = createProjectCodec();
+    const project = withNoteChain();
+    project.channels[TRACK_ID]!.midiChain = ["arp", "ghost"];
+
+    const warnings = codec.validate(project);
+    expect(project.channels[TRACK_ID]?.midiChain).toEqual(["arp"]);
+    expect(warnings.some((w) => w.path.endsWith("midiChain"))).toBe(true);
+  });
+
+  it("refuses to let one device sit in both chains", () => {
+    const codec = createProjectCodec();
+    const project = withNoteChain();
+    // The same instance claimed by the audio chain too: whichever list won,
+    // the device's `channelId` and its wiring would depend on iteration order.
+    project.channels[TRACK_ID]!.chain = [...project.channels[TRACK_ID]!.chain, "arp"];
+
+    codec.validate(project);
+    expect(project.channels[TRACK_ID]?.midiChain).toEqual(["arp"]);
+    expect(project.channels[TRACK_ID]?.chain).not.toContain("arp");
+  });
+});

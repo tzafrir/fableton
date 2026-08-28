@@ -869,6 +869,32 @@ select.fbl-field--sm {
   flex: 0 0 auto;
 }
 
+/* The NOTE chain: devices that run before the instrument. It sits first in
+   the strip because that is the order notes travel in, and carries its own
+   rail so the eye can tell "this is not audio" without reading a label. */
+.fbl-note-chain {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  flex: 0 0 auto;
+  padding: 6px 10px 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--fbl-line);
+  border-left: 3px solid var(--fbl-blue);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.fbl-note-chain-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fbl-text-dim);
+  align-self: stretch;
+  padding-top: 2px;
+}
+
 /* A device is a card: its own surface, a header rail, and a lift. The chain
    scrolls sideways, so a card never shrinks — a squeezed card pushes its own
    controls past its border, which is exactly the bug this layout fixes. */

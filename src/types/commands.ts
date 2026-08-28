@@ -509,11 +509,23 @@ export interface ProjectCommands {
 
   /** Insert an effect into a channel's chain (`index` omitted = append). */
   addEffect(channelId: ChannelId, init: DeviceInit, index?: number | undefined): Command;
+  /**
+   * Insert a NOTE effect into a channel's `midiChain` (`index` omitted =
+   * append) — a device of kind `midiEffect`, which runs between the
+   * scheduler and the track's instrument.
+   *
+   * A separate command from `addEffect` rather than a flag on it: the two
+   * write different lists, and the caller always knows which one it means.
+   * Removal and reorder are shared (`removeDevices`, `moveDevice`), because
+   * there the device id alone says which chain it is in.
+   */
+  addNoteEffect(channelId: ChannelId, init: DeviceInit, index?: number | undefined): Command;
   /** Remove devices from chains/source slots; their `paramValues` go too.
    *  Automation lanes naming their params are KEPT (SS7: never silently
    *  deleted — M3 renders them greyed + re-bindable). */
   removeDevices(deviceIds: readonly DeviceInstanceId[]): Command;
-  /** Reorder within one channel's chain. */
+  /** Reorder within one channel's chain — the audio chain or the note chain,
+   *  whichever the device is actually in. */
   moveDevice(channelId: ChannelId, deviceId: DeviceInstanceId, toIndex: number): Command;
   setDeviceEnabled(deviceId: DeviceInstanceId, enabled: boolean): Command;
   /**

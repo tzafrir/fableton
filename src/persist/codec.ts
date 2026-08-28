@@ -72,7 +72,7 @@ function canonicalSendSpec(s: SendSpec): JsonValue {
 }
 
 function canonicalChannel(c: Channel): JsonValue {
-  return {
+  const out: Record<string, JsonValue> = {
     id: c.id,
     role: c.role,
     name: c.name,
@@ -86,6 +86,12 @@ function canonicalChannel(c: Channel): JsonValue {
     sends: c.sends.map(canonicalSendSpec),
     output: c.output,
   };
+  // Omitted entirely when empty, exactly like `DeviceState.settings`: a
+  // project with no note effects encodes as it did before they existed.
+  if (c.midiChain !== undefined && c.midiChain.length > 0) {
+    out["midiChain"] = [...c.midiChain];
+  }
+  return out;
 }
 
 function canonicalDeviceState(d: DeviceState): JsonValue {
@@ -465,6 +471,15 @@ function parseChannel(raw: JsonValue, key: string, path: string, warnings: LoadW
   const chain = asArray(obj["chain"], `${path}.chain`, warnings).filter(
     (v): v is string => typeof v === "string",
   );
+  // Absent is the common case and not a defect, so it is read without a
+  // warning; an empty list decodes back to "absent" for the same reason it
+  // encodes to nothing.
+  const midiChainRaw =
+    obj["midiChain"] === undefined
+      ? []
+      : asArray(obj["midiChain"], `${path}.midiChain`, warnings).filter(
+          (v): v is string => typeof v === "string",
+        );
 
   const output = obj["output"] === null ? null : asString(obj["output"], `${path}.output`, "", warnings) || null;
 
@@ -475,6 +490,7 @@ function parseChannel(raw: JsonValue, key: string, path: string, warnings: LoadW
     color: asNullableString(obj["color"], `${path}.color`, warnings),
     source: parseSourceRef(obj["source"], `${path}.source`, warnings),
     chain,
+    ...(midiChainRaw.length > 0 ? { midiChain: midiChainRaw } : {}),
     volume: asString(obj["volume"], `${path}.volume`, `chan:${key}/vol`, warnings),
     pan: asString(obj["pan"], `${path}.pan`, `chan:${key}/pan`, warnings),
     mute: asBoolean(obj["mute"], `${path}.mute`, false, warnings),
@@ -1026,6 +1042,23 @@ function validateProject(project: Project): LoadWarning[] {
         deviceHost.set(deviceId, channelId);
       }
     }
+    // Note chain first, on the same one-device-one-home rule. A rack cannot
+    // sit here (a rack is audio wiring), so the entry is always a device.
+    const midiChain = (channel.midiChain ?? []).filter((deviceId) => {
+      if (!(deviceId in project.devices) || deviceHost.has(deviceId)) return false;
+      deviceHost.set(deviceId, channelId);
+      return true;
+    });
+    if (midiChain.length !== (channel.midiChain ?? []).length) {
+      pushWarning(
+        warnings,
+        `channels.${channelId}.midiChain`,
+        "Note-chain entries naming missing or duplicated devices dropped.",
+      );
+    }
+    if (midiChain.length === 0) delete channel.midiChain;
+    else channel.midiChain = midiChain;
+
     const chain = channel.chain.filter((entryId) => {
       // A chain slot holds a rack OR a device, never both (invariant 8) —
       // an id in both collections is unresolvable, so the slot is dropped.

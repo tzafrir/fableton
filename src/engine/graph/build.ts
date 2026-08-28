@@ -181,6 +181,19 @@ export function buildGraph(doc: ProjectSnapshot): GraphDescription {
       }
     }
 
+    // --- note effects (SS7 `midiEffect`) ------------------------------------
+    // Mounted like anything else — params registered, panel drawn, automation
+    // bound — and connected to NOTHING: a note effect has no audio ports and
+    // appears in no edge. Mounting it here rather than in a second, parallel
+    // mechanism is the point: `diffGraph` then mounts, unmounts and swaps it
+    // with the same three lines it already had (SS6 "dynamic effect chains
+    // are a diff, not a feature").
+    for (const deviceId of channel.midiChain ?? []) {
+      const device = doc.devices[deviceId];
+      if (device === undefined) continue;
+      b.mounts.set(device.id, { deviceId: device.id, definitionId: device.definitionId, channelId });
+    }
+
     // --- effect chain, bypassing disabled devices --------------------------
     let cursor: GraphNodeRef = input;
     for (const deviceId of channel.chain) {

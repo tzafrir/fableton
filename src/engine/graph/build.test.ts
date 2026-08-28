@@ -257,3 +257,26 @@ describe("diffGraph", () => {
     expect(patch.disconnect.some((e) => e.from === channelUtilRef("t2", "post"))).toBe(true);
   });
 });
+
+describe("note effects (SS7 midiEffect)", () => {
+  it("mounts a channel's midiChain, and gives it no edges at all", () => {
+    const doc = routingDoc({
+      channels: [
+        { id: "t1", role: "track", midiChain: ["arp"] },
+        { id: "master", role: "master", output: null },
+      ],
+      devices: [{ id: "arp", definitionId: "core.arpeggiator", channelId: "t1" }],
+    });
+
+    const graph = buildGraph(doc);
+
+    // Mounted like anything else — that is how it gets params, a panel and
+    // automation for free...
+    expect(graph.mounts.has("arp")).toBe(true);
+    // ...and connected to nothing: a note effect is not in the audio graph.
+    for (const edge of graph.edges.values()) {
+      expect(edge.from).not.toContain("arp");
+      expect(edge.to).not.toContain("arp");
+    }
+  });
+});

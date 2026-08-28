@@ -3,6 +3,8 @@
 // - Instrument slot (tracks): pick/replace the source instrument. The SS7
 //   swap carries compatible params: the CALLER computes the carry map here
 //   (it knows both definitions), the command applies it — clips untouched.
+// - Note chain (tracks): the `midiEffect` devices that run BEFORE the
+//   instrument — drawn first, because that is the order the notes travel in.
 // - Effect chain: add (from the registry's `audioEffect` list), enable
 //   toggle, reorder, remove. Every edit is one document command; the
 //   reconciler turns it into a patch.
@@ -55,11 +57,14 @@ export interface DeviceChainPanelProps {
 export type DeviceContainer =
   | { kind: "source" }
   | { kind: "channel" }
+  /** The channel's NOTE chain — devices that run before the instrument. */
+  | { kind: "midiChain" }
   | { kind: "rackChain"; rackId: RackId; chainId: RackChainId };
 
 const definitionsById = new Map(CORE_DEVICES.map((d) => [d.id, d]));
 const instrumentDefs = CORE_DEVICES.filter((d) => d.kind === "instrument");
 const effectDefs = CORE_DEVICES.filter((d) => d.kind === "audioEffect");
+const noteEffectDefs = CORE_DEVICES.filter((d) => d.kind === "midiEffect");
 
 /** SS7 swap carry: values for params whose LOCAL id exists on both sides
  *  with an overlapping range; everything else takes defaults. */
@@ -326,7 +331,9 @@ function DevicePanel({
   const siblings =
     container.kind === "rackChain"
       ? (doc.racks[container.rackId]?.chains.find((c) => c.id === container.chainId)?.devices ?? [])
-      : (doc.channels[channelId]?.chain ?? []);
+      : container.kind === "midiChain"
+        ? (doc.channels[channelId]?.midiChain ?? [])
+        : (doc.channels[channelId]?.chain ?? []);
   const index = siblings.indexOf(deviceId);
   /** Reorder within whichever list holds this device. `moveDeviceToChain`
    *  detaches then re-inserts, so the same index arithmetic works for both. */
@@ -983,6 +990,55 @@ export function DeviceChainPanel({
       className="fbl-device-chain"
       data-testid="device-chain-panel"
     >
+      {/* Note effects (SS7 `midiEffect`), tracks only — drawn BEFORE the
+          instrument because that is the order the notes travel in. */}
+      {channel.role === "track" && (
+        <div className="fbl-note-chain" data-testid="note-chain">
+          <span className="fbl-note-chain-label">MIDI</span>
+          {(channel.midiChain ?? []).map((deviceId) => (
+            <DevicePanel
+              key={deviceId}
+              doc={doc}
+              dispatch={dispatch}
+              commands={commands}
+              engine={engine}
+              channelId={channel.id}
+              deviceId={deviceId}
+              container={{ kind: "midiChain" }}
+              onShowAutomation={onShowAutomation}
+              onImportSample={onImportSample}
+            />
+          ))}
+          <select
+            className="fbl-field"
+            style={{ alignSelf: "flex-start", flex: "0 0 auto" }}
+            data-testid="add-note-effect-select"
+            aria-label="Add note effect"
+            value=""
+            onChange={(e) => {
+              const def = definitionsById.get(e.target.value);
+              if (def !== undefined) {
+                dispatch(
+                  commands.addNoteEffect(channel.id, {
+                    definitionId: def.id,
+                    version: def.version,
+                  }),
+                );
+              }
+            }}
+          >
+            <option value="" disabled>
+              + MIDI effect…
+            </option>
+            {noteEffectDefs.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {/* Instrument slot (tracks only, SS7) */}
       {channel.role === "track" && (
         <div className="fbl-slot">

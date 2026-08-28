@@ -298,6 +298,7 @@ export function deviceInstance(spec: HarnessDeviceInstanceSpec): DeviceInstance 
   // Only present when the device actually implements them: the scheduler and
   // the mixer feature-detect instruments with `typeof inst.noteOn === 'function'`.
   const { noteOn, noteOff, allNotesOff, portRouted, readValue, setSetting } = spec;
+  const { setNoteOutput, fillNotes } = spec;
   if (noteOn) instance.noteOn = (pitch, vel, when) => noteOn(pitch, vel, when);
   if (noteOff) instance.noteOff = (pitch, when) => noteOff(pitch, when);
   if (allNotesOff) instance.allNotesOff = (when) => allNotesOff(when);
@@ -309,6 +310,11 @@ export function deviceInstance(spec: HarnessDeviceInstanceSpec): DeviceInstance 
   if (readValue) instance.readValue = (readoutId) => readValue(readoutId);
   // Non-numeric document state (the sampler's file), pushed by the reconciler.
   if (setSetting) instance.setSetting = (key, value) => setSetting(key, value);
+  // Note effects (SS7 `midiEffect`): the engine feature-detects these exactly
+  // as the scheduler feature-detects `noteOn`, so a device that implements
+  // neither simply passes its notes through untouched.
+  if (setNoteOutput) instance.setNoteOutput = (target) => setNoteOutput(target);
+  if (fillNotes) instance.fillNotes = (window) => fillNotes(window);
 
   return instance;
 }

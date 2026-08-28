@@ -12,6 +12,7 @@
 // inside its own file: SS7 — "nothing else in the app knows what a device does
 // internally", and SS4 makes `ParamDescriptor.labels` on the registered handle
 // the sanctioned channel for enum choices.
+export { Arpeggiator, ARP_MODE_LABELS } from "./arpeggiator";
 export { Distortion, Overdrive } from "./overdrive";
 export { DrumMachine, PADS } from "./drumMachine";
 export { Filter } from "./filter";
@@ -28,6 +29,7 @@ export { Reverb } from "./reverb";
 export { Saturator } from "./saturator";
 export { StereoDelay } from "./stereoDelay";
 
+import { Arpeggiator } from "./arpeggiator";
 import { Compressor } from "./compressor";
 import { DrumMachine } from "./drumMachine";
 import { FmSynth } from "./fmSynth";
@@ -65,4 +67,7 @@ export const CORE_DEVICES = [
   Overdrive,
   Distortion,
   Gate,
+  // Note effects (SS7 `midiEffect`) — no audio ports, no place in the SS6
+  // graph; they sit in a channel's `midiChain` ahead of its instrument.
+  Arpeggiator,
 ] as const;
