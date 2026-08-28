@@ -155,8 +155,11 @@ class LazyParamMap extends Map<string, FakeAudioParam> {
 export class FakeAudioWorkletNode extends FakeAudioNode {
   readonly parameters = new LazyParamMap();
   readonly posted: unknown[] = [];
-  onmessage: ((event: { data: unknown }) => void) | null = null;
+  // On the PORT, where the real API puts it: a device listening for its
+  // worklet's reports assigns `node.port.onmessage`, and a fake that only
+  // offered `node.onmessage` would quietly never deliver one.
   readonly port = {
+    onmessage: null as ((event: { data: unknown }) => void) | null,
     postMessage: (message: unknown): void => {
       // Real `postMessage` structured-clones its argument, which is what lets
       // the sender reuse one payload object per message type (SS12 "zero

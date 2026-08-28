@@ -75,6 +75,28 @@ export interface DeviceIO {
   readonly outputs: Readonly<Record<string, AudioNode>>;
 }
 
+/**
+ * A live numeric READOUT a device publishes for its panel — the compressor's
+ * gain reduction, and anything after it that is a number the user must SEE
+ * but can never SET.
+ *
+ * Deliberately not a param: a param is a value the user owns, that automates,
+ * undoes and is saved (SS4/SS13). A readout is the device telling the user
+ * what it is doing right now. It is ephemeral by construction — it never
+ * enters the document, has no handle, and is polled at rAF like the SS6
+ * meters, which is the same "UI-only, never undoable, never saved" bucket.
+ */
+export interface DeviceReadoutSpec {
+  /** DEVICE-LOCAL id, e.g. `"reduction"`. Public API, like a param id. */
+  id: string;
+  label: string;
+  /** Real units (SS4: never normalized), e.g. `"dB"`. */
+  unit?: string | undefined;
+  /** Display range. `min` is the RESTING end — 0 dB of reduction, say. */
+  min: number;
+  max: number;
+}
+
 /** SS5: device panels declare rows of `{ paramId, control? }`. */
 export type ControlKind =
   | "knob"
@@ -123,6 +145,9 @@ export interface DeviceDefinition {
   create(ctx: BaseAudioContext, io: DeviceIO, services: DeviceServices): DeviceInstance;
   /** Declarative panel rows; omit -> auto-generated from `params` (SS5). */
   panel?: PanelSpec | undefined;
+  /** Live readouts this device publishes; the panel renders one meter each.
+   *  A definition that declares these must implement `readValue`. */
+  readouts?: readonly DeviceReadoutSpec[] | undefined;
   /**
    * One-time async setup per context, awaited by the harness before the
    * first `create` on that context — this is where a worklet-backed device
@@ -159,6 +184,13 @@ export interface DeviceInstance {
    * ones (`DeviceIO.inputs` keys other than `'in'`).
    */
   portRouted?(portId: string, routed: boolean): void;
+  /**
+   * Current value of one `DeviceDefinition.readouts` entry, in its own real
+   * units. Called from the UI at rAF, so it must be a cheap field read — the
+   * DSP side pushes into that field on its own schedule, never the reverse.
+   * Returns `undefined` for an id this device does not publish.
+   */
+  readValue?(readoutId: string): number | undefined;
   /** Future PDC (SS6); return 0 when the device adds no latency. */
   latencySamples?(): number;
   /** Called after ramps/tails complete; must disconnect everything it made. */
@@ -185,6 +217,8 @@ export interface DeviceInstanceSpec {
   allNotesOff?: ((when: Seconds) => void) | undefined;
   /** See `DeviceInstance.portRouted`. */
   portRouted?: ((portId: string, routed: boolean) => void) | undefined;
+  /** See `DeviceInstance.readValue`. */
+  readValue?: ((readoutId: string) => number | undefined) | undefined;
   latencySamples?: (() => number) | undefined;
   dispose(when?: Seconds): void;
 }

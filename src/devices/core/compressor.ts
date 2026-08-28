@@ -32,6 +32,10 @@ export const Compressor: DeviceDefinition = {
     p.ms("release", "Release", { min: 5, max: 2000, default: 120 }),
     p.db("makeup", "Makeup", { min: 0, max: 24, default: 0 }),
   ],
+  // The one number a compressor user actually watches. It is a READOUT, not
+  // a param (types/devices `DeviceReadoutSpec`): the device reports it, the
+  // user cannot set it, and it never touches the document.
+  readouts: [{ id: "reduction", label: "GR", unit: "dB", min: 0, max: 24 }],
 
   async prepare(ctx): Promise<void> {
     await ctx.audioWorklet.addModule(compressorWorkletUrl);
@@ -60,6 +64,18 @@ export const Compressor: DeviceDefinition = {
     node.connect(outGain);
     outGain.connect(io.out);
 
+    // Latest gain reduction, as last reported by the worklet (~every 21 ms;
+    // see `GR_REPORT_QUANTA`). A plain field: `readValue` is called at rAF and
+    // must not do work, and a dropped message costs one frame of one meter.
+    let reductionDb = 0;
+    node.port.onmessage = (event: MessageEvent<unknown>): void => {
+      const data = event.data;
+      if (typeof data === "object" && data !== null && (data as { type?: unknown }).type === "gr") {
+        const value = (data as { value?: unknown }).value;
+        if (typeof value === "number" && Number.isFinite(value)) reductionDb = value;
+      }
+    };
+
     const param = (name: string): AudioParam => {
       const found = node.parameters.get(name);
       if (found === undefined) throw new Error(`compressor worklet lacks param ${name}`);
@@ -86,6 +102,7 @@ export const Compressor: DeviceDefinition = {
         if (localId === "attack") handle.bindAudioParam(param("attack"));
         else if (localId === "release") handle.bindAudioParam(param("release"));
       },
+      readValue: (readoutId) => (readoutId === "reduction" ? reductionDb : undefined),
       dispose: (when?: Seconds): void => {
         rampOutAndDisconnect(when, [outGain], { context: ctx, also: [node] });
       },

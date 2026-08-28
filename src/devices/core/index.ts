@@ -18,6 +18,7 @@ export { Filter } from "./filter";
 export { Gate } from "./gate";
 export { FmSynth } from "./fmSynth";
 export { Kick } from "./kick";
+export { Noise, NOISE_COLORS, NOISE_FILTER_TYPES } from "./noise";
 export { PolySynth } from "./polySynth";
 export { Compressor } from "./compressor";
 export { Eq3 } from "./eq3";
@@ -30,6 +31,7 @@ import { Compressor } from "./compressor";
 import { DrumMachine } from "./drumMachine";
 import { FmSynth } from "./fmSynth";
 import { Kick } from "./kick";
+import { Noise } from "./noise";
 import { Distortion, Overdrive } from "./overdrive";
 import { Eq3 } from "./eq3";
 import { Filter } from "./filter";
@@ -50,6 +52,7 @@ export const CORE_DEVICES = [
   FmSynth,
   Kick,
   DrumMachine,
+  Noise,
   Filter,
   Eq3,
   Compressor,

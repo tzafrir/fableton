@@ -11,7 +11,7 @@
 // - "Audio From" (SS6): rendered on any device whose definition declares an
 //   `'sc'` input port; writes an explicit `SidechainEdge`.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CORE_DEVICES } from "../../devices/core";
 import { FACTORY_RACKS } from "../../presets/factoryRacks";
 import { presetStore } from "../../presets/store";
@@ -23,6 +23,7 @@ import type {
   CommandResult,
   DeviceDefinition,
   DeviceInstanceId,
+  DeviceReadoutSpec,
   DocumentStore,
   PanelSpec,
   ParamHandle,
@@ -114,6 +115,69 @@ function ParamControlFor({
         onShowAutomation === undefined ? undefined : () => onShowAutomation(handle.desc.id)
       }
     />
+  );
+}
+
+/**
+ * One live device readout (SS5 `DeviceReadoutSpec`) as a meter.
+ *
+ * Polled at rAF straight off the engine, exactly like the SS6 strip meters,
+ * and for the same reason: the value is UI-only and changes faster than the
+ * document ever does, so pushing it through React state per report would be
+ * a re-render per audio block. The bar is written with a direct style write
+ * on a ref for the same reason — nothing above it re-renders at all.
+ *
+ * Gain reduction reads RIGHT-TO-LEFT, the way every hardware GR meter does:
+ * a compressor at rest shows nothing, and the bar grows leftward from the
+ * top of the scale as the device pulls the signal down.
+ */
+function ReadoutMeter({
+  spec,
+  engine,
+  deviceId,
+}: {
+  spec: DeviceReadoutSpec;
+  engine: AppProjectEngine | null;
+  deviceId: DeviceInstanceId;
+}) {
+  const fillRef = useRef<HTMLDivElement | null>(null);
+  const textRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    if (engine === null) return;
+    let raf = 0;
+    let shown = -1;
+    const span = Math.max(1e-6, spec.max - spec.min);
+    const tick = (): void => {
+      raf = requestAnimationFrame(tick);
+      const value = engine.deviceReadout(deviceId, spec.id);
+      if (value === undefined) return;
+      // A tenth of a dB is below what the eye resolves on a 60 px bar; not
+      // repainting inside that keeps a quiet compressor completely idle.
+      if (Math.abs(value - shown) < 0.05) return;
+      shown = value;
+      const fraction = Math.min(1, Math.max(0, (value - spec.min) / span));
+      const fill = fillRef.current;
+      if (fill !== null) fill.style.width = `${String(fraction * 100)}%`;
+      const text = textRef.current;
+      if (text !== null) {
+        text.textContent = `${value < 0.05 ? "0" : `-${value.toFixed(1)}`}${spec.unit ?? ""}`;
+      }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [engine, deviceId, spec]);
+
+  return (
+    <div className="fbl-readout" data-testid={`readout-${deviceId}-${spec.id}`}>
+      <span className="fbl-readout-label">{spec.label}</span>
+      <div className="fbl-readout-track" title={`${spec.label}: 0 to ${String(spec.max)}${spec.unit ?? ""}`}>
+        <div ref={fillRef} className="fbl-readout-fill" style={{ width: "0%" }} />
+      </div>
+      <span ref={textRef} className="fbl-readout-value">
+        0{spec.unit ?? ""}
+      </span>
+    </div>
   );
 }
 
@@ -397,6 +461,16 @@ function DevicePanel({
           })}
         </div>
       ))}
+
+      {/* Live readouts (SS5 `DeviceReadoutSpec`): what the device is doing,
+          under the params that told it to. */}
+      {def?.readouts !== undefined && def.readouts.length > 0 && (
+        <div className="fbl-readouts">
+          {def.readouts.map((spec) => (
+            <ReadoutMeter key={spec.id} spec={spec} engine={engine} deviceId={deviceId} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

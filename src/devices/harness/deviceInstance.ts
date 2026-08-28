@@ -297,13 +297,16 @@ export function deviceInstance(spec: HarnessDeviceInstanceSpec): DeviceInstance 
 
   // Only present when the device actually implements them: the scheduler and
   // the mixer feature-detect instruments with `typeof inst.noteOn === 'function'`.
-  const { noteOn, noteOff, allNotesOff, portRouted } = spec;
+  const { noteOn, noteOff, allNotesOff, portRouted, readValue } = spec;
   if (noteOn) instance.noteOn = (pitch, vel, when) => noteOn(pitch, vel, when);
   if (noteOff) instance.noteOff = (pitch, when) => noteOff(pitch, when);
   if (allNotesOff) instance.allNotesOff = (when) => allNotesOff(when);
   // SS6 routing news, same feature-detected shape: the reconciler calls it
   // only on devices that asked for it (`typeof inst.portRouted === 'function'`).
   if (portRouted) instance.portRouted = (portId, routed) => portRouted(portId, routed);
+  // SS5 device readouts (gain reduction and friends): a cheap field read the
+  // panel polls at rAF. Same feature-detected shape as the rest.
+  if (readValue) instance.readValue = (readoutId) => readValue(readoutId);
 
   return instance;
 }

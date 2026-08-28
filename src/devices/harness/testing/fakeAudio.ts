@@ -123,7 +123,12 @@ class LazyParamMap extends Map<string, FakeAudioParam> {
 export class FakeAudioWorkletNode extends FakeAudioNode {
   readonly parameters = new LazyParamMap();
   readonly posted: unknown[] = [];
+  // `onmessage` lives on the PORT, where the real API puts it: a device
+  // listening for its worklet's reports (the compressor's gain reduction)
+  // assigns `node.port.onmessage`, and a fake that offered it anywhere else
+  // would quietly never deliver one.
   readonly port = {
+    onmessage: null as ((event: { data: unknown }) => void) | null,
     postMessage: (message: unknown): void => {
       this.posted.push(message);
     },

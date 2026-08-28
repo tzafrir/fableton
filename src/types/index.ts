@@ -204,6 +204,7 @@ export type {
   DeviceDefinition,
   DeviceHost,
   DeviceIO,
+  DeviceReadoutSpec,
   DeviceInstance,
   DeviceServices,
   DeviceTempo,

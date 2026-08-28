@@ -13,15 +13,19 @@ const SR = 48000;
 const BLOCK = 128;
 
 class FakeProcessorBase {
+  readonly posted: unknown[] = [];
   readonly port = {
     onmessage: null as ((event: { data: unknown }) => void) | null,
-    postMessage(): void {},
+    postMessage: (message: unknown): void => {
+      this.posted.push(message);
+    },
   };
 }
 
 interface ProcessorLike {
+  posted: unknown[];
   port: { onmessage: ((event: { data: unknown }) => void) | null };
-  kernel: { reductionDb: number };
+  kernel: { reductionDb: number; peakReductionDb: number };
   process(
     inputs: Float32Array[][],
     outputs: Float32Array[][],
@@ -40,11 +44,13 @@ const params: Record<string, Float32Array> = {
 async function loadProcessor(): Promise<{
   Processor: new () => ProcessorLike;
   idleSeconds: number;
+  reportQuanta: number;
 }> {
   const module = await import("../../../worklets/compressor-processor");
   return {
     Processor: module.CompressorProcessor as unknown as new () => ProcessorLike,
     idleSeconds: module.SC_IDLE_SECONDS,
+    reportQuanta: module.GR_REPORT_QUANTA,
   };
 }
 
@@ -128,5 +134,55 @@ describe("CompressorProcessor keying", () => {
     const processor = new Processor();
     render(processor, 1, null);
     expect(processor.kernel.reductionDb).toBeCloseTo(15, 1);
+  });
+});
+
+// SS5 device readout: the panel's gain-reduction meter is fed from here.
+describe("CompressorProcessor gain-reduction reporting", () => {
+  const grValues = (processor: ProcessorLike): number[] =>
+    processor.posted
+      .filter((m): m is { type: string; value: number } =>
+        typeof m === "object" && m !== null && (m as { type?: unknown }).type === "gr",
+      )
+      .map((m) => m.value);
+
+  it("posts one message every GR_REPORT_QUANTA blocks, not one per block", async () => {
+    const { Processor, reportQuanta } = await loadProcessor();
+    const processor = new Processor();
+    for (let i = 0; i < reportQuanta * 3; i++) render(processor, 1, 0);
+    expect(grValues(processor)).toHaveLength(3);
+  });
+
+  it("reports the reduction actually applied, and 0 when nothing is over", async () => {
+    const { Processor, reportQuanta } = await loadProcessor();
+    const processor = new Processor();
+    for (let i = 0; i < reportQuanta; i++) render(processor, 1, 0);
+    // 20 dB over a -20 threshold at 4:1 = 15 dB down.
+    expect(grValues(processor)[0]).toBeCloseTo(15, 1);
+
+    const quiet = new Processor();
+    for (let i = 0; i < reportQuanta; i++) render(quiet, 0.0001, 0);
+    expect(grValues(quiet)[0]).toBe(0);
+  });
+
+  it("reports the PEAK over the interval, so a transient inside one block shows", async () => {
+    // The reason `peakReductionDb` exists: with an instant release, a loud
+    // block followed by silent ones ends every interval at 0 dB of reduction,
+    // and an end-of-block reading would report that the compressor did
+    // nothing on precisely the hit it caught.
+    const { Processor, reportQuanta } = await loadProcessor();
+    const processor = new Processor();
+    render(processor, 1, 0); // the transient
+    for (let i = 1; i < reportQuanta; i++) render(processor, 0.0001, 0);
+    expect(processor.kernel.reductionDb).toBe(0); // where it ended up...
+    expect(grValues(processor)[0]).toBeCloseTo(15, 1); // ...and what it caught
+  });
+
+  it("starts each interval from zero rather than holding the old peak", async () => {
+    const { Processor, reportQuanta } = await loadProcessor();
+    const processor = new Processor();
+    for (let i = 0; i < reportQuanta; i++) render(processor, 1, 0);
+    for (let i = 0; i < reportQuanta; i++) render(processor, 0.0001, 0);
+    expect(grValues(processor)[1]).toBe(0);
   });
 });

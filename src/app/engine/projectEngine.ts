@@ -25,6 +25,7 @@ import type { ParamCommit } from "../../params";
 import type {
   AuditionSink,
   ChannelId,
+  DeviceInstanceId,
   MountedDevice,
   NoteTarget,
   ProjectEngine,
@@ -77,6 +78,15 @@ export interface AppProjectEngine extends ProjectEngine {
    * `prepareDefinition` deliberately allows reachable.
    */
   onApplyError(cb: (error: unknown) => void): Unsub;
+  /**
+   * Current value of a mounted device's SS5 readout (`DeviceReadoutSpec`),
+   * in its own real units — the compressor's gain reduction, and whatever
+   * follows it. `undefined` when the device is not mounted or publishes no
+   * such id, which is also what the panel gets before the engine boots.
+   *
+   * UI-only, like the meters: polled at rAF, never in the document.
+   */
+  deviceReadout(deviceId: DeviceInstanceId, readoutId: string): number | undefined;
 }
 
 /** The transport's per-track note target — rebuilt per apply, looked up per
@@ -284,6 +294,10 @@ export function createProjectEngine(
     onParamCommit(cb: (commit: ParamCommit) => void): Unsub {
       return params.onCommit(cb);
     },
+    deviceReadout(deviceId: DeviceInstanceId, readoutId: string): number | undefined {
+      return reconciler.mountedDevice(deviceId)?.instance.readValue?.(readoutId);
+    },
+
     onApplyError(cb: (error: unknown) => void): Unsub {
       applyErrorListeners.add(cb);
       return () => {

@@ -38,6 +38,16 @@ export class CompressorKernel {
   envelopeDb = SILENCE_DB;
   /** Last applied gain reduction in dB (for meters/tests). */
   reductionDb = 0;
+  /**
+   * Largest reduction applied during the LAST `process` call, in dB.
+   *
+   * `reductionDb` is the final sample's, which is the wrong number for a
+   * meter: a fast transient can be fully caught and fully released inside one
+   * 128-frame block, so an end-of-block sample reports 0 dB for exactly the
+   * peaks a compressor exists to catch. Reset per call, so it always describes
+   * the block just processed.
+   */
+  peakReductionDb = 0;
 
   constructor(readonly sampleRate: number) {}
 
@@ -58,6 +68,7 @@ export class CompressorKernel {
     const ratio = Math.max(1, params.ratio);
     const slope = 1 - 1 / ratio;
     const makeup = gainOfDb(params.makeupDb);
+    this.peakReductionDb = 0;
 
     for (let i = 0; i < blockLength; i++) {
       // Peak across key channels.
@@ -74,6 +85,7 @@ export class CompressorKernel {
       const over = this.envelopeDb - params.thresholdDb;
       const reduction = over > 0 ? over * slope : 0;
       this.reductionDb = reduction;
+      if (reduction > this.peakReductionDb) this.peakReductionDb = reduction;
       const gain = gainOfDb(-reduction) * makeup;
 
       for (let ch = 0; ch < main.length; ch++) {

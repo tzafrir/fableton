@@ -948,6 +948,64 @@ select.fbl-field--sm {
   color: var(--fbl-text-faint);
 }
 
+/* Live device readouts (SS5 `DeviceReadoutSpec`) — what the device is
+   DOING, as opposed to what it was told to do. Deliberately quieter than the
+   param controls above them: a readout is watched, never aimed at. */
+.fbl-readouts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--fbl-line);
+}
+
+.fbl-readout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fbl-readout-label {
+  min-width: 68px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fbl-text-faint);
+}
+
+.fbl-readout-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--fbl-well);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.5);
+  overflow: hidden;
+}
+
+/* Grows from the RIGHT: a gain-reduction meter pulls down from 0 dB, the
+   way the hardware ones every engineer has already read do. */
+.fbl-readout-fill {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--fbl-amber-dim), var(--fbl-amber));
+}
+
+.fbl-readout-value {
+  min-width: 46px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: var(--fbl-text-dim);
+}
+
 /* A control whose handle does not exist yet (audio not booted). */
 .fbl-param-pending {
   font-size: 10px;

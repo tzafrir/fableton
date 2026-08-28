@@ -44,6 +44,23 @@ const SC_SILENCE = 1e-7;
  */
 export const SC_IDLE_SECONDS = 8;
 
+/**
+ * How often the processor reports gain reduction to the main thread, in
+ * render quanta. 8 quanta is ~21 ms at 48 kHz — under a rAF frame, so the
+ * meter never starves, and two orders of magnitude cheaper than a message
+ * per block. The value reported is the PEAK reduction over the interval, not
+ * the last sample's: a GR meter that sampled instantaneously would miss the
+ * very transients a compressor exists to catch.
+ */
+export const GR_REPORT_QUANTA = 8;
+
+/** Message the processor posts back with that peak. */
+export interface GrMessage {
+  type: "gr";
+  /** Peak gain reduction over the interval, in dB (positive = quieter). */
+  value: number;
+}
+
 /** Message the main thread may post to state the SS6 routing truth outright. */
 interface ScRoutedMessage {
   type: "scRouted";
@@ -88,6 +105,9 @@ export class CompressorProcessor extends AudioWorkletProcessor {
   #scRouted: boolean | undefined = undefined;
   /** Frames since the sc input last carried signal (layer 2). */
   #scSilentFrames = Number.POSITIVE_INFINITY;
+  /** Peak reduction seen since the last report, and the quanta counter. */
+  #grPeakDb = 0;
+  #grQuanta = 0;
 
   constructor() {
     super();
@@ -132,6 +152,17 @@ export class CompressorProcessor extends AudioWorkletProcessor {
     const frames = out[0]?.length ?? 0;
     const key = sc !== undefined && this.#keysFromSidechain(sc, frames) ? sc : out;
     this.kernel.process(out, key, p);
+
+    // SS5 readout: gain reduction, peak-held between reports. The kernel
+    // already tracks it per sample for exactly this; all that is added here
+    // is the throttle, so the render path costs one compare and one counter.
+    if (this.kernel.peakReductionDb > this.#grPeakDb) this.#grPeakDb = this.kernel.peakReductionDb;
+    if (++this.#grQuanta >= GR_REPORT_QUANTA) {
+      this.#grQuanta = 0;
+      const message: GrMessage = { type: "gr", value: this.#grPeakDb };
+      this.port.postMessage(message);
+      this.#grPeakDb = 0;
+    }
     return true;
   }
 }

@@ -29,7 +29,7 @@ import { midiToHz, pluckShapeFromIndex } from "./pluck";
 import { StereoDelay } from "./stereoDelay";
 
 describe("the SS18-M4 library", () => {
-  it("ships a valid library: 5 instruments + 9 effects", () => {
+  it("ships a valid library: 6 instruments + 9 effects", () => {
     for (const def of CORE_DEVICES) expect(() => validateDefinition(def)).not.toThrow();
     const instruments = CORE_DEVICES.filter((d) => d.kind === "instrument");
     const effects = CORE_DEVICES.filter((d) => d.kind === "audioEffect");
@@ -37,6 +37,7 @@ describe("the SS18-M4 library", () => {
       "core.drum-machine",
       "core.fm",
       "core.kick",
+      "core.noise",
       "core.pluck",
       "core.poly-synth",
     ]);
@@ -349,6 +350,16 @@ describe("every shipped definition mounts through the real host (SS7 lifecycle)"
       // resolve — including the compressor's optional `sc`.
       for (const port of definition.audioIn) expect(mounted.io.inputs[port.id]).toBeDefined();
       for (const port of definition.audioOut) expect(mounted.io.outputs[port.id]).toBeDefined();
+      // A declared SS5 readout must actually be readable: the panel renders a
+      // meter for every entry, and a definition that promises one without
+      // implementing `readValue` draws a meter pinned at nothing forever.
+      for (const readout of definition.readouts ?? []) {
+        expect(
+          mounted.instance.readValue?.(readout.id),
+          `${definition.id} publishes ${readout.id}`,
+        ).toBeTypeOf("number");
+        expect(definition.params.some((desc) => desc.id === readout.id)).toBe(false);
+      }
 
       mounted.dispose();
       for (let i = 0; i < 4; i++) timers.runAll();
@@ -358,6 +369,28 @@ describe("every shipped definition mounts through the real host (SS7 lifecycle)"
       host.dispose();
     });
   }
+
+  it("core.compressor's gain reduction reaches readValue from the worklet", async () => {
+    const devices = createDeviceRegistry();
+    devices.register(Compressor);
+    const host = createDeviceHost(asContext(ctx), params, devices, { schedule: timers.schedule });
+    const mounted = await host.mount({ definition: Compressor, instanceId: "d1", channelId: "c1" });
+    const node = workletNodes[0]!;
+
+    expect(mounted.instance.readValue?.("reduction")).toBe(0);
+    node.port.onmessage?.({ data: { type: "gr", value: 7.5 } });
+    expect(mounted.instance.readValue?.("reduction")).toBe(7.5);
+    // Anything that is not a well-formed report leaves the last value alone
+    // rather than blanking the meter.
+    node.port.onmessage?.({ data: { type: "gr", value: Number.NaN } });
+    node.port.onmessage?.({ data: { type: "something-else" } });
+    expect(mounted.instance.readValue?.("reduction")).toBe(7.5);
+    expect(mounted.instance.readValue?.("nope")).toBeUndefined();
+
+    mounted.dispose();
+    for (let i = 0; i < 4; i++) timers.runAll();
+    host.dispose();
+  });
 
   // SS6 -> SS7: the reconciler tells a device whether its optional input port
   // is actually fed. The compressor's keying depends on it — without the
