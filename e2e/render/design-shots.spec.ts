@@ -46,6 +46,12 @@ test.describe("@design", () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.getByTestId("tab-mixer").click();
     await page.screenshot({ path: ".playwright/design/07-narrow.png", fullPage: true });
+
+    await page.setViewportSize({ width: 1560, height: 950 });
+    await page.getByTestId("shortcuts-button").click();
+    await page.getByTestId("shortcuts-overlay").screenshot({
+      path: ".playwright/design/08-shortcuts.png",
+    });
   });
 });
 

@@ -76,6 +76,10 @@ export interface ToolbarProps {
   /** Surfaced import/decode errors and load warnings — a one-line status
    *  string, or `null` when there is nothing to report. */
   statusMessage?: string | null | undefined;
+
+  /** Opens the keyboard reference (also bound to `?`). The app's key map was
+   *  entirely undiscoverable before it had a control. */
+  onShowShortcuts?: (() => void) | undefined;
 }
 
 /** The override menu's entries: adaptive, the fixed divisions a composer
@@ -180,6 +184,7 @@ export function Toolbar({
   onExportWav,
   exportingWav,
   statusMessage,
+  onShowShortcuts,
 }: ToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -263,13 +268,18 @@ export function Toolbar({
       {/* The QWERTY piano: a s d f g h j k l ; are the white keys, w e t y u
           o p the black ones, z/x shift the octave and c/v the velocity.
           Nothing else on screen says which C the `a` key is. */}
-      <span
-        className="fbl-status fbl-status--plain"
+      {/* The QWERTY piano's live state, and the way in to the map that
+          explains it: a tooltip is not where you look for "which C does `a`
+          play", so the readout is the button that answers. */}
+      <button
+        type="button"
+        className="fbl-status fbl-status--plain fbl-status--button"
         data-testid="keyboard-readout"
-        title="Computer keyboard: a-; play white keys, w/e/t/y/u/o/p black; z/x octave, c/v velocity"
+        onClick={onShowShortcuts}
+        title="Computer keyboard: a-; play white keys, w/e/t/y/u/o/p black; z/x octave, c/v velocity — click for the full map"
       >
         Oct {keyboardOctave} · Vel {keyboardVelocity}
-      </span>
+      </button>
 
       <Sep />
 
@@ -445,6 +455,16 @@ export function Toolbar({
       >
         {transportState}
       </span>
+      <button
+        type="button"
+        className="fbl-btn fbl-btn--icon"
+        data-testid="shortcuts-button"
+        onClick={onShowShortcuts}
+        aria-label="Keyboard shortcuts"
+        title="Keyboard shortcuts (?)"
+      >
+        ?
+      </button>
     </div>
   );
 }

@@ -12,3 +12,5 @@ export { AutomationPanel } from "./AutomationPanel";
 export type { AutomationPanelProps, LaneFocusRequest } from "./AutomationPanel";
 export { SongControls, TIME_SIGNATURE_DENOMINATORS } from "./SongControls";
 export type { SongControlsProps } from "./SongControls";
+export { ShortcutsOverlay } from "./ShortcutsOverlay";
+export type { ShortcutsOverlayProps } from "./ShortcutsOverlay";

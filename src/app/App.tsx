@@ -45,8 +45,9 @@ import {
 import { createNoteRecorder } from "./noteRecorder";
 import { createProjectEngine, type AppProjectEngine } from "./engine";
 import { createUndoRedoHandler, isEditableTarget } from "./keyboard";
+import { createAppShortcutHandler } from "./shortcuts";
 import type { KitArrangementView } from "../editor/arrangement";
-import { ArrangementPanel, AutomationPanel, DeviceChainPanel, MixerPanel, PianoRollPanel, Toolbar } from "./panels";
+import { ArrangementPanel, AutomationPanel, DeviceChainPanel, MixerPanel, PianoRollPanel, ShortcutsOverlay, Toolbar } from "./panels";
 import type { LaneFocusRequest } from "./panels";
 import { bootstrapProject, type BootstrapResult } from "./persistence";
 
@@ -103,6 +104,9 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   const [audioBooting, setAudioBooting] = useState(false);
   const [transportState, setTransportState] = useState<TransportState>("stopped");
   const engineRef = useRef<AppProjectEngine | null>(null);
+  // Read by the Space shortcut, which has to know which way to toggle at the
+  // moment the key lands — not at the moment its handler was built.
+  const transportStateRef = useRef<TransportState>("stopped");
   const bootingRef = useRef(false); // synchronous guard, see App's M0 ancestor
 
   // --- which clip the piano roll shows ---
@@ -114,6 +118,8 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   // SS4 transport pill: lights while any param is overridden (SS11).
   const [hasOverrides, setHasOverrides] = useState(false);
   const [exportingWav, setExportingWav] = useState(false);
+  /** The keyboard reference panel (`?`). */
+  const [helpOpen, setHelpOpen] = useState(false);
   // SS10 "Snapping": the fixed-grid override + triplet toggle. Ephemeral UI
   // state (SS13) owned here and pushed into BOTH editors, so the arrangement
   // and the piano roll always snap the same way.
@@ -194,6 +200,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     setBottomTab("automation");
     setLaneFocus({ paramId }); // a fresh object: asking twice still re-selects
   }, []);
+  transportStateRef.current = transportState;
   const openClipIdRef = useRef<ClipId | null>(null);
   openClipIdRef.current = openClipId;
   const selectedChannelIdRef = useRef<ChannelId | null>(null);
@@ -370,6 +377,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [docState]);
+
 
   // A sensible default selection (first track) so the mixer's chain panel
   // and the automation panel have a subject before the user clicks a strip.
@@ -665,6 +673,41 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     [docState],
   );
 
+  // --- 4b. the shell's own map (Space, Home, F9, Cmd/Ctrl+S, 1/2, ?) -----
+  //
+  // Same window-level, back-off-while-typing discipline as undo/redo, and
+  // downstream of both editors: the kit stops propagation on a key it
+  // consumed, so a piano-roll `Delete` never reaches this listener. The
+  // table and its matching live in ./shortcuts.ts; this effect only supplies
+  // the verbs and reads state through refs, so the handler never goes stale.
+  useEffect(() => {
+    if (docState === null) return;
+    const handle = createAppShortcutHandler({
+      playPause: () => {
+        // Space before the first click boots audio — the transport cannot
+        // start without a context, and "nothing happened" is the worst
+        // possible answer to the most obvious key in a DAW.
+        if (engineRef.current === null) {
+          void handleBoot();
+          return;
+        }
+        if (transportStateRef.current === "playing") handleStop();
+        else handlePlay();
+      },
+      stop: handleStop,
+      returnToStart: () => handleSeek(0),
+      record: handleRecord,
+      save: handleSaveNow,
+      setTool,
+      toggleHelp: () => setHelpOpen((open) => !open),
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      handle(event);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [docState, handleBoot, handlePlay, handleStop, handleSeek, handleRecord, handleSaveNow]);
+
   if (docState === null) {
     return (
       <div id="app-root" className="fbl-app">
@@ -729,6 +772,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
         onExportWav={() => void handleExportWav()}
         exportingWav={exportingWav}
         statusMessage={loadError ?? statusMessage}
+        onShowShortcuts={() => setHelpOpen(true)}
       />
       <div className="fbl-body" ref={bodyRef}>
         <div className="fbl-pane-arrangement">
@@ -839,6 +883,15 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
       <span data-testid="history-tick" style={{ display: "none" }}>
         {historyTick}
       </span>
+      {/* Every key the app answers to. `?` opens it, Esc closes it — and the
+          panel renders the same table the handler matches against, so it
+          cannot describe a binding the app does not have. */}
+      <ShortcutsOverlay
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        octave={keyboardState.octave}
+        velocity={keyboardState.velocity}
+      />
     </div>
   );
 }

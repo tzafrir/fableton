@@ -5,14 +5,18 @@
 // binding) so the window-level `keydown` listener in `App.tsx` is a one-line
 // wrapper around this.
 //
-// Deliberately narrow: undo/redo is the ONLY global shortcut the app shell
-// owns. Every editor-local key map (SS10's piano-roll table, the
+// Deliberately narrow: this handler owns undo/redo and nothing else. The
+// shell's other global keys (Space, Home, F9, Cmd/Ctrl+S, the tool digits,
+// `?`) live in ./shortcuts.ts, which keeps them in a table the help panel
+// also renders; undo/redo stays here because SS18-M1 names it, and its rows
+// are documented over there as `UNDO_ROWS` with a test that feeds them back
+// to this function. Every editor-local key map (SS10's piano-roll table, the
 // arrangement's) is registered on its own `GestureEngine` and only fires
-// while that editor's host element has focus — this handler runs at the
-// window level and must therefore stay out of the way of ordinary typing
-// (a project-name field, a clip-rename input) and out of the way of an
-// editor's own binding of the same physical key, which is why it also
-// backs off while any element with a text cursor is focused.
+// while that editor's host element has focus — these window-level handlers
+// must therefore stay out of the way of ordinary typing (a project-name
+// field, a clip-rename input) and out of the way of an editor's own binding
+// of the same physical key, which is why they back off while any element
+// with a text cursor is focused.
 
 import type { DocumentStore } from "../types";
 
@@ -27,6 +31,10 @@ export interface KeyLike {
   readonly target: EventTarget | null;
   preventDefault(): void;
   repeat?: boolean | undefined;
+  /** True once something upstream has consumed the key. The canvas editors
+   *  also `stopPropagation`, so a key they took never reaches the window at
+   *  all; this is the belt to that pair of braces. */
+  defaultPrevented?: boolean | undefined;
 }
 
 const EDITABLE_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
