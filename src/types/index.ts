@@ -16,6 +16,7 @@
 export type { Milliseconds, Normalized, Seconds, Unsub } from "./common";
 
 export type {
+  AssetId,
   ChannelId,
   ClipId,
   DeviceDefinitionId,
@@ -56,6 +57,7 @@ export type { MidiClip, Note } from "./clip";
 export { DEFAULT_MACRO_VALUE, MACRO_MAX, MACRO_MIN } from "./document";
 
 export type {
+  AudioAsset,
   AutomationLane,
   AutoPoint,
   Channel,
@@ -199,6 +201,7 @@ export {
 } from "./editor";
 
 export type {
+  AssetLibrary,
   ControlKind,
   CreateDeviceHost,
   CreateDeviceInstance,
@@ -207,6 +210,7 @@ export type {
   DeviceIO,
   DeviceNoteName,
   DeviceReadoutSpec,
+  DeviceSettingSpec,
   DeviceInstance,
   DeviceServices,
   DeviceTempo,

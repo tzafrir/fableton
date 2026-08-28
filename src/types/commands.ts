@@ -19,6 +19,7 @@
 import type { Unsub } from "./common";
 import type { MidiClip, Note } from "./clip";
 import type {
+  AssetId,
   ChannelId,
   ClipId,
   DeviceDefinitionId,
@@ -30,7 +31,7 @@ import type {
   RackId,
   RackMacroId,
 } from "./ids";
-import type { AutoPoint, Project, ProjectId, SidechainEdge } from "./document";
+import type { AudioAsset, AutoPoint, Project, ProjectId, SidechainEdge } from "./document";
 import type { Ticks, TimeSignature } from "./time";
 import type { LoopRegion } from "./transport";
 
@@ -206,6 +207,8 @@ export interface IdFactory {
   clip(): ClipId;
   note(): NoteId;
   lane(): LaneId;
+  /** An imported audio file (`Project.assets`). */
+  asset(): AssetId;
   /** A rack occupies a chain slot, so its id shares the device namespace —
    *  a distinct prefix keeps saved files readable, nothing more. */
   rack(): RackId;
@@ -435,6 +438,19 @@ export interface ProjectCommands {
   removeSidechain(deviceId: DeviceInstanceId, port?: string | undefined): Command;
 
   // devices (SS7) — chain edits; the reconciler turns each into a patch
+  // assets (imported audio files)
+  /**
+   * Register an imported audio file's METADATA. The samples are written to
+   * storage by the caller BEFORE this is dispatched — the document only ever
+   * holds the reference (see `AssetId`), so the command cannot fail on I/O
+   * and undo cannot lose bytes it never held.
+   */
+  addAsset(asset: AudioAsset): Command;
+  /** Forget an asset. Devices referring to it keep the reference and simply
+   *  have nothing to play, which is recoverable; silently rewriting their
+   *  settings would not be. */
+  removeAsset(assetId: AssetId): Command;
+
   /** Insert an effect into a channel's chain (`index` omitted = append). */
   addEffect(channelId: ChannelId, init: DeviceInit, index?: number | undefined): Command;
   /** Remove devices from chains/source slots; their `paramValues` go too.
@@ -444,6 +460,17 @@ export interface ProjectCommands {
   /** Reorder within one channel's chain. */
   moveDevice(channelId: ChannelId, deviceId: DeviceInstanceId, toIndex: number): Command;
   setDeviceEnabled(deviceId: DeviceInstanceId, enabled: boolean): Command;
+  /**
+   * Set (or clear, with `null`) one non-numeric device setting — the sampler's
+   * chosen file, and anything else a `ParamDescriptor` cannot hold. See
+   * `DeviceState.settings`. Undoable and saved like any other document edit;
+   * the reconciler pushes the new value to the live device after the apply.
+   */
+  setDeviceSetting(
+    deviceId: DeviceInstanceId,
+    key: string,
+    value: string | null,
+  ): Command;
   /**
    * SS7 swap: replace a track's source instrument with a NEW instance of
    * `init.definitionId`. Clips are untouched; `carryValues` (device-LOCAL id

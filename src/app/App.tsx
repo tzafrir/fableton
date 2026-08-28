@@ -60,6 +60,8 @@ import {
 import type { LaneFocusRequest } from "./panels";
 import { bootstrapProject, type BootstrapResult } from "./persistence";
 import { pitchNamesForClip } from "./pitchNames";
+import { importSample, loadProjectSamples } from "./samples";
+import { createAssetStore } from "../persist/assets";
 
 export interface AppProps {
   /** Called once the engine is mounted (e2e bridge only — see `src/main.tsx`);
@@ -411,11 +413,18 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
   useEffect(() => {
     if (docState === null || engine === null) return;
     const unsubParams = connectParamRegistry(docState.store, engine.params);
+    const assetStore = createAssetStore(docState.storage);
     const unsubApply = docState.store.onChange((change) => {
       // `applyDocument` always resolves — a reconcile failure is reported
       // through `onApplyError` (wired in `handleBoot`) instead of rejecting,
       // so this `void` can never become an unhandled rejection.
       void engine.applyDocument(change.doc);
+      // A document can GAIN an asset without an import having just happened:
+      // undoing a remove, or opening a project file whose samples are already
+      // in storage. `loadProjectSamples` skips what the library already has
+      // (successes and failures alike), so this is a map lookup per asset in
+      // the overwhelmingly common case where nothing changed.
+      void loadProjectSamples(change.doc, engine.assets, assetStore);
     });
     void engine.applyDocument(docState.store.getState());
     return () => {
@@ -499,6 +508,16 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
       setEngine(nextEngine);
       setAudioStatus(`ready (worklet loaded, state=${ctx.state})`);
       onEngineReady?.(nextEngine);
+      // The project's imported samples: bytes out of storage, decoded into
+      // the engine's library. Deliberately AFTER "ready" and not awaited —
+      // decoding a few megabytes must not hold up the transport, and a
+      // sampler whose file has not landed yet is silent for a moment rather
+      // than broken (see `Sampler`, which resolves its buffer per note).
+      void loadProjectSamples(
+        docState.store.getState(),
+        nextEngine.assets,
+        createAssetStore(docState.storage),
+      );
     } catch (error) {
       nextEngine?.dispose();
       engineRef.current = null;
@@ -508,6 +527,36 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
       setAudioBooting(false);
     }
   }, [docState, onEngineReady]);
+
+  /**
+   * SS7 `audioAsset` settings: the device panel's "Load…" button.
+   *
+   * Lives here because importing touches all three layers at once — the
+   * engine's decoder, the byte store, and the document — and the panel is
+   * only allowed to know about the last of them. Returns the new asset id so
+   * the slot that asked can select it.
+   */
+  const handleImportSample = useCallback(
+    async (file: File): Promise<string | null> => {
+      const bootstrap = docStateRef.current;
+      const live = engineRef.current;
+      if (bootstrap === null || live === null) return null;
+      const result = await importSample(file, {
+        store: bootstrap.store,
+        commands: projectCommands,
+        assets: live.assets,
+        assetStore: createAssetStore(bootstrap.storage),
+        ids: defaultIdFactory,
+      });
+      if (result.status === "rejected") {
+        setStatusMessage(result.reason);
+        return null;
+      }
+      setStatusMessage(`Imported ${result.name}`);
+      return result.assetId;
+    },
+    [],
+  );
 
   const handlePlay = useCallback(() => {
     engineRef.current?.transport.play();
@@ -893,6 +942,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
                   engine={engine}
                   channelId={selectedChannelId}
                   onShowAutomation={handleShowAutomation}
+                  onImportSample={engine === null ? undefined : handleImportSample}
                 />
               </div>
             </div>

@@ -21,6 +21,7 @@ import type {
   DeviceInstanceId,
   DeviceRegistry,
   DeviceServices,
+  AssetLibrary,
   DeviceTempo,
   MountDeviceOptions,
   MountedDevice,
@@ -77,11 +78,21 @@ export interface DeviceHostOptions {
    *  fixed 120 bpm stand-in is used — enough for every device that ignores
    *  tempo, and for tests that do not care. */
   tempo?: DeviceTempo | undefined;
+  /** Decoded imported audio (`DeviceServices.assets`). Omitted, devices see
+   *  an EMPTY library — correct for every device that has no samples, and
+   *  the honest answer for a sampler in a host that has none loaded. */
+  assets?: AssetLibrary | undefined;
   /** Injectable `setTimeout` for the deferred port teardown (tests). */
   schedule?: DelayedCall | undefined;
   /** Extra wait after `dispose(when)` before port nodes are disconnected. */
   teardownRampMs?: number | undefined;
 }
+
+/** A library that holds nothing and never changes. */
+const EMPTY_ASSET_LIBRARY: AssetLibrary = {
+  buffer: () => undefined,
+  onChange: () => () => undefined,
+};
 
 const defaultSchedule: DelayedCall = (cb, ms) => {
   setTimeout(cb, ms);
@@ -106,6 +117,7 @@ export function createDeviceHost(
       secondsPerBeat: () => 0.5, // 120 bpm
       onChange: () => () => undefined,
     },
+    assets: options.assets ?? EMPTY_ASSET_LIBRARY,
   };
   const schedule = options.schedule ?? defaultSchedule;
   const teardownRampMs = options.teardownRampMs ?? DEFAULT_RAMP_OUT_MS;

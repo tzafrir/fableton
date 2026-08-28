@@ -11,6 +11,7 @@
 
 import type { Seconds, Unsub } from "./common";
 import type {
+  AssetId,
   ChannelId,
   DeviceDefinitionId,
   DeviceInstanceId,
@@ -63,9 +64,27 @@ export interface DeviceTempo {
   onChange(cb: () => void): Unsub;
 }
 
+/**
+ * Decoded audio the app has imported, as much of it as a DEVICE may see.
+ *
+ * A sampler needs the samples behind an `AssetId` and needs to be told when
+ * one arrives (decoding is async, and a project loads long before its audio
+ * finishes decoding). It must NOT see the document, the asset list, or the
+ * storage layer: a device that could enumerate the project's assets could
+ * also decide which one to play, and that decision is document data.
+ */
+export interface AssetLibrary {
+  /** Decoded samples for an id, or `undefined` while it is still loading (or
+   *  if it never existed). Cheap: a map read, safe to call per note. */
+  buffer(assetId: AssetId): AudioBuffer | undefined;
+  /** Fires after any buffer appears or is dropped. Returns an unsubscribe. */
+  onChange(cb: () => void): Unsub;
+}
+
 /** Everything the harness hands a device besides its ports. */
 export interface DeviceServices {
   tempo: DeviceTempo;
+  assets: AssetLibrary;
 }
 
 export interface DeviceIO {
@@ -95,6 +114,23 @@ export interface DeviceReadoutSpec {
   /** Display range. `min` is the RESTING end — 0 dB of reduction, say. */
   min: number;
   max: number;
+}
+
+/**
+ * One non-numeric device setting, DECLARED — so the SS5 panel knows to draw
+ * a control for it and what kind. See `DeviceState.settings` for why these
+ * are not params.
+ *
+ * `kind` is the whole vocabulary: a setting the panel cannot render is a
+ * setting the user cannot change, so the list grows only when a control to
+ * match it is written.
+ */
+export interface DeviceSettingSpec {
+  /** DEVICE-LOCAL key, matching a `DeviceState.settings` key. Public API. */
+  key: string;
+  label: string;
+  /** `audioAsset` -> a sample slot: pick an imported file, or import one. */
+  kind: "audioAsset";
 }
 
 /** One named MIDI note of an instrument that is not played chromatically. */
@@ -166,6 +202,8 @@ export interface DeviceDefinition {
    * dead space they are. Anything that plays chromatically simply omits it.
    */
   noteNames?: readonly DeviceNoteName[] | undefined;
+  /** Non-numeric settings this device takes, for the panel to render. */
+  settings?: readonly DeviceSettingSpec[] | undefined;
   /**
    * One-time async setup per context, awaited by the harness before the
    * first `create` on that context — this is where a worklet-backed device
@@ -209,6 +247,12 @@ export interface DeviceInstance {
    * Returns `undefined` for an id this device does not publish.
    */
   readValue?(readoutId: string): number | undefined;
+  /**
+   * One `DeviceState.settings` entry, pushed by the reconciler after every
+   * apply that changed it (and once per mount for the settings a device is
+   * born with). `value` is `null` when the setting was cleared.
+   */
+  setSetting?(key: string, value: string | null): void;
   /** Future PDC (SS6); return 0 when the device adds no latency. */
   latencySamples?(): number;
   /** Called after ramps/tails complete; must disconnect everything it made. */
@@ -237,6 +281,8 @@ export interface DeviceInstanceSpec {
   portRouted?: ((portId: string, routed: boolean) => void) | undefined;
   /** See `DeviceInstance.readValue`. */
   readValue?: ((readoutId: string) => number | undefined) | undefined;
+  /** See `DeviceInstance.setSetting`. */
+  setSetting?: ((key: string, value: string | null) => void) | undefined;
   latencySamples?: (() => number) | undefined;
   dispose(when?: Seconds): void;
 }

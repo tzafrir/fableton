@@ -182,6 +182,7 @@ export const createEmptyProject: CreateEmptyProject = (options = {}) => {
     lanes: {},
     racks: {},
     sidechains: [],
+    assets: {},
     paramValues: {
       ...defaultMixerParamValues(masterId),
       ...defaultMixerParamValues(trackId),

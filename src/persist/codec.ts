@@ -15,6 +15,7 @@
 import { findRoutingCycle, sidechainIsFeedForward } from "../engine/graph/validate";
 import { rackChainParamId } from "../params/paramIds";
 import type {
+  AudioAsset,
   AutomationLane,
   AutoPoint,
   Channel,
@@ -87,12 +88,32 @@ function canonicalChannel(c: Channel): JsonValue {
 }
 
 function canonicalDeviceState(d: DeviceState): JsonValue {
-  return {
+  const out: Record<string, JsonValue> = {
     id: d.id,
     definitionId: d.definitionId,
     version: d.version,
     channelId: d.channelId,
     enabled: d.enabled,
+  };
+  // Omitted entirely when empty, so a device with no settings encodes exactly
+  // as it did before settings existed — byte-stability (SS2) across the
+  // addition, and nothing to diff in an old project's file.
+  const keys = Object.keys(d.settings ?? {}).sort();
+  if (keys.length > 0) {
+    const settings: Record<string, JsonValue> = {};
+    for (const key of keys) settings[key] = d.settings?.[key] ?? "";
+    out["settings"] = settings;
+  }
+  return out;
+}
+
+function canonicalAsset(a: AudioAsset): JsonValue {
+  return {
+    id: a.id,
+    name: a.name,
+    sampleRate: a.sampleRate,
+    channels: a.channels,
+    frames: a.frames,
   };
 }
 
@@ -242,6 +263,7 @@ function canonicalProject(p: Project): JsonValue {
     lanes: canonicalRecord(p.lanes, lexicographicOrder(p.lanes), canonicalAutomationLane),
     racks: canonicalRecord(p.racks, lexicographicOrder(p.racks), canonicalRack),
     sidechains: p.sidechains.map(canonicalSidechainEdge),
+    assets: canonicalRecord(p.assets, lexicographicOrder(p.assets), canonicalAsset),
     paramValues: canonicalParamValues(p.paramValues),
   };
 }
@@ -443,6 +465,42 @@ function parseDeviceState(raw: JsonValue, key: string, path: string, warnings: L
     version: Math.round(asFiniteNumber(obj["version"], `${path}.version`, 1, warnings)),
     channelId: asString(obj["channelId"], `${path}.channelId`, "", warnings),
     enabled: asBoolean(obj["enabled"], `${path}.enabled`, true, warnings),
+    ...parseDeviceSettings(obj["settings"], `${path}.settings`, warnings),
+  };
+}
+
+/** Device settings are strings by contract; anything else in the file is
+ *  dropped with a warning rather than smuggled through as a number. */
+function parseDeviceSettings(
+  raw: JsonValue | undefined,
+  path: string,
+  warnings: LoadWarning[],
+): { settings?: Record<string, string> } {
+  if (raw === undefined || raw === null) return {};
+  const obj = asObject(raw, path, warnings);
+  const settings: Record<string, string> = {};
+  for (const key of Object.keys(obj).sort()) {
+    const value = obj[key];
+    if (typeof value === "string") settings[key] = value;
+    else pushWarning(warnings, `${path}.${key}`, "Setting is not a string; dropped.");
+  }
+  return Object.keys(settings).length === 0 ? {} : { settings };
+}
+
+function parseAsset(raw: JsonValue, key: string, path: string, warnings: LoadWarning[]): AudioAsset {
+  const obj = asObject(raw, path, warnings);
+  return {
+    id: key,
+    name: asString(obj["name"], `${path}.name`, key, warnings),
+    sampleRate: Math.max(
+      1,
+      Math.round(asFiniteNumber(obj["sampleRate"], `${path}.sampleRate`, 48000, warnings)),
+    ),
+    channels: Math.max(
+      1,
+      Math.round(asFiniteNumber(obj["channels"], `${path}.channels`, 1, warnings)),
+    ),
+    frames: Math.max(0, Math.round(asFiniteNumber(obj["frames"], `${path}.frames`, 0, warnings))),
   };
 }
 
@@ -664,6 +722,16 @@ function parseProject(raw: JsonValue, warnings: LoadWarning[]): ParseOutcome {
     parseSidechainEdge(v, `sidechains[${i}]`, warnings),
   );
 
+  // Assets are ADDITIVE, like racks: a file written before they existed has
+  // no `assets` key and decodes to `{}`. That totality is why this needed no
+  // schema bump — see PROJECT_SCHEMA_VERSION.
+  const assetsObj = asObject(raw["assets"], "assets", warnings);
+  const assets: Record<string, AudioAsset> = {};
+  for (const key of Object.keys(assetsObj)) {
+    const value = assetsObj[key];
+    if (value !== undefined) assets[key] = parseAsset(value, key, `assets.${key}`, warnings);
+  }
+
   const paramValues = parseParamValues(raw["paramValues"], "paramValues", warnings);
 
   const project: Project = {
@@ -679,6 +747,7 @@ function parseProject(raw: JsonValue, warnings: LoadWarning[]): ParseOutcome {
     lanes,
     racks,
     sidechains,
+    assets,
     paramValues,
   };
   return { project };

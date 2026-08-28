@@ -70,6 +70,7 @@ describe("createEmptyProject", () => {
       lanes: {},
       racks: {},
       sidechains: [],
+      assets: {},
       paramValues: {
         [volumeParamId("chan-1")]: DEFAULT_VOLUME_DB,
         [panParamId("chan-1")]: DEFAULT_PAN,

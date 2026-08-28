@@ -98,6 +98,7 @@ export function makeFixtureProject(): Project {
         to: { device: MASTER_FX_ID, port: "sc" },
       },
     ],
+    assets: {},
     paramValues: {
       [`chan:${MASTER_ID}/vol`]: 0,
       [`chan:${MASTER_ID}/pan`]: 0,

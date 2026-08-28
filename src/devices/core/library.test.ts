@@ -29,7 +29,7 @@ import { midiToHz, pluckShapeFromIndex } from "./pluck";
 import { StereoDelay } from "./stereoDelay";
 
 describe("the SS18-M4 library", () => {
-  it("ships a valid library: 6 instruments + 9 effects", () => {
+  it("ships a valid library: 7 instruments + 9 effects", () => {
     for (const def of CORE_DEVICES) expect(() => validateDefinition(def)).not.toThrow();
     const instruments = CORE_DEVICES.filter((d) => d.kind === "instrument");
     const effects = CORE_DEVICES.filter((d) => d.kind === "audioEffect");
@@ -40,6 +40,7 @@ describe("the SS18-M4 library", () => {
       "core.noise",
       "core.pluck",
       "core.poly-synth",
+      "core.sampler",
     ]);
     expect(effects.map((d) => d.id).sort()).toEqual([
       "core.compressor",

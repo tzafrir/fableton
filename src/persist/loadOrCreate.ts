@@ -9,6 +9,7 @@
 // depends on both packages) rather than imported here. Only the FROZEN
 // `CreateEmptyProject` type crosses this file's boundary.
 
+import { isAssetKey } from "./assets";
 import type { CreateEmptyProject, DecodeResult, LoadWarning, Project, ProjectCodec, ProjectStorage } from "../types";
 
 export type ProjectSource = "storage" | "created";
@@ -40,7 +41,12 @@ export async function loadOrCreateProject(
   codec: ProjectCodec,
   options: LoadOrCreateOptions,
 ): Promise<LoadOrCreateResult> {
-  const key = options.key ?? (storage.available ? (await storage.list())[0] : undefined);
+  // Asset slots share this storage (see ./assets.ts) and must never be
+  // mistaken for the newest PROJECT: importing a sample would otherwise make
+  // the next reload try to open it as a song.
+  const key =
+    options.key ??
+    (storage.available ? (await storage.list()).find((k) => !isAssetKey(k)) : undefined);
 
   if (storage.available && key !== undefined) {
     const text = await storage.read(key);

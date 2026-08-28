@@ -494,6 +494,8 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
   /** What each device port was last told, so a re-apply that changes nothing
    *  says nothing. Keyed `<deviceId>/<portId>`; entries die with the mount. */
   const portRouting = new Map<string, boolean>();
+  /** Device id -> the settings that device has already been told about. */
+  const deviceSettings = new Map<DeviceInstanceId, Map<string, string>>();
 
   /**
    * A device cannot see its own incoming connections, and the harness gives it
@@ -506,6 +508,47 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
    * device that mounts with its sidechain already wired is told at mount, and
    * a port fed by two sources stays routed when only one goes away.
    */
+  /**
+   * Pushes `DeviceState.settings` into the live devices (SS7 non-numeric
+   * state — the sampler's chosen file).
+   *
+   * Same shape as `syncPortRouting` and for the same reason: a device cannot
+   * read the document, so the reconciler — the only code that sees both —
+   * tells it. Diffed against what each device was last told, so a device is
+   * told once per actual change rather than once per apply (and every apply
+   * is every knob release, every note drag).
+   *
+   * A device REMOUNTED under the same id is told from scratch: `applyPatch`
+   * clears its row here when it unmounts, so a swap does not inherit the
+   * previous instance's memory of what it had been told.
+   */
+  function syncDeviceSettings(doc: ProjectSnapshot): void {
+    for (const deviceId of Object.keys(doc.devices)) {
+      const mounted = host.get(deviceId);
+      if (mounted === undefined || typeof mounted.instance.setSetting !== "function") continue;
+      const settings = doc.devices[deviceId]?.settings ?? {};
+      let told = deviceSettings.get(deviceId);
+      if (told === undefined) {
+        told = new Map<string, string>();
+        deviceSettings.set(deviceId, told);
+      }
+      for (const key of Object.keys(settings)) {
+        const value = settings[key] ?? "";
+        if (told.get(key) === value) continue;
+        told.set(key, value);
+        mounted.instance.setSetting(key, value);
+      }
+      for (const key of [...told.keys()]) {
+        if (key in settings) continue;
+        told.delete(key);
+        mounted.instance.setSetting(key, null);
+      }
+    }
+    for (const deviceId of [...deviceSettings.keys()]) {
+      if (host.get(deviceId) === undefined) deviceSettings.delete(deviceId);
+    }
+  }
+
   function syncPortRouting(desired: GraphDescription): void {
     const fed = new Set<string>();
     for (const edge of desired.edges.values()) {
@@ -624,6 +667,8 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
       // After the edges are real: the device learns whether its optional
       // input ports are actually fed (SS6 sidechain -> SS7 device).
       syncPortRouting(desired);
+      // ...and what its non-numeric document state says (SS7 settings).
+      syncDeviceSettings(doc);
       // Structural gains (input/postfx/post) keep the GainNode default of 1;
       // vol/pan/send/mute were seeded from the document at creation and are
       // driven from here on by the param binds and the audible set.

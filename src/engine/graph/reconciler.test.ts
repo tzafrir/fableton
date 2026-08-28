@@ -735,3 +735,107 @@ describe("rack macros (SS7)", () => {
     expect(params.get(macroParam)).toBeUndefined();
   });
 });
+
+// SS7 non-numeric device state (`DeviceState.settings`) — the sampler's file.
+// The reconciler is the only code that can see both the document and the live
+// device, so it is what tells one about the other; this is about it telling
+// the truth exactly once per actual change.
+describe("device settings (SS7 non-numeric state)", () => {
+  const settingEvents: Array<[string, string | null]> = [];
+
+  const TestSettingSynth: DeviceDefinition = {
+    id: "test.setting-synth",
+    version: 1,
+    kind: "instrument",
+    label: "Test Setting Synth",
+    params: [],
+    audioIn: [],
+    audioOut: [{ id: "out" }],
+    settings: [{ key: "sample", label: "Sample", kind: "audioAsset" }],
+    create(ctx, io) {
+      const voice = ctx.createGain();
+      voice.connect(io.out);
+      return deviceInstance({
+        noteOn: () => undefined,
+        setSetting: (key, value) => settingEvents.push([key, value]),
+        dispose: () => voice.disconnect(),
+      });
+    },
+  };
+
+  function rigWithSettings(): GraphReconciler {
+    const localFake = createFakeAudioContext();
+    const localParams = createParamRegistry({ now: () => localFake.currentTime });
+    const registry = createDeviceRegistry([TestSettingSynth]);
+    const host = createDeviceHost(asContext(localFake), localParams, registry);
+    return createGraphReconciler({
+      ctx: asContext(localFake),
+      destination: asNode(localFake.destination),
+      host,
+      params: localParams,
+      immediate: true,
+    });
+  }
+
+  /** One track whose instrument is the settings-taking synth. */
+  function docWith(settings?: Record<string, string>): ProjectSnapshot {
+    const base = twoTrackDoc();
+    const doc = JSON.parse(JSON.stringify(base)) as Project;
+    const trackId = doc.channelOrder.find((id) => doc.channels[id]?.role === "track");
+    if (trackId === undefined) throw new Error("fixture has no track");
+    doc.devices["dev-setting"] = {
+      id: "dev-setting",
+      definitionId: TestSettingSynth.id,
+      version: 1,
+      channelId: trackId,
+      enabled: true,
+      ...(settings === undefined ? {} : { settings }),
+    };
+    const channel = doc.channels[trackId];
+    if (channel !== undefined) channel.source = { kind: "instrument", deviceId: "dev-setting" };
+    return doc as ProjectSnapshot;
+  }
+
+  beforeEach(() => {
+    settingEvents.length = 0;
+  });
+
+  it("tells a device what it was BORN with, at mount", async () => {
+    const r = rigWithSettings();
+    await r.apply(docWith({ sample: "asset-1" }));
+    expect(settingEvents).toEqual([["sample", "asset-1"]]);
+  });
+
+  it("tells it once per change, not once per apply", async () => {
+    // Every knob release and every note drag reaches `applyDocument`; a
+    // device re-told its file on each would reload a sample per gesture.
+    const r = rigWithSettings();
+    const withSample = docWith({ sample: "asset-1" });
+    await r.apply(withSample);
+    await r.apply(withSample);
+    await r.apply(withSample);
+    expect(settingEvents).toEqual([["sample", "asset-1"]]);
+
+    await r.apply(docWith({ sample: "asset-2" }));
+    expect(settingEvents).toEqual([
+      ["sample", "asset-1"],
+      ["sample", "asset-2"],
+    ]);
+  });
+
+  it("reports a cleared setting as null", async () => {
+    const r = rigWithSettings();
+    await r.apply(docWith({ sample: "asset-1" }));
+    await r.apply(docWith());
+    expect(settingEvents).toEqual([
+      ["sample", "asset-1"],
+      ["sample", null],
+    ]);
+  });
+
+  it("says nothing at all for a device with no settings", async () => {
+    const r = rigWithSettings();
+    await r.apply(docWith());
+    expect(settingEvents).toEqual([]);
+  });
+});

@@ -105,6 +105,10 @@ export class FakeWaveShaperNode extends FakeAudioNode {
 export class FakeBufferSourceNode extends FakeAudioNode {
   buffer: unknown = null;
   loop = false;
+  loopStart = 0;
+  loopEnd = 0;
+  /** A sampler pitches by playback rate, so it has to be a real param. */
+  readonly playbackRate = new FakeAudioParam(1);
   onended: (() => void) | null = null;
   startedAt: number | null = null;
   stoppedAt: number | null = null;
@@ -282,6 +286,7 @@ export function fakeServices(bpm = 120): DeviceServices & { setBpm(next: number)
         return () => listeners.delete(cb);
       },
     },
+    assets: { buffer: () => undefined, onChange: () => () => undefined },
     setBpm(next: number): void {
       current = next;
       for (const cb of [...listeners]) cb();

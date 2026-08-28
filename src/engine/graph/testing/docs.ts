@@ -97,6 +97,7 @@ export function routingDoc(spec: DocSpec): Project {
     lanes: {},
     racks,
     sidechains: spec.sidechains ?? [],
+    assets: {},
     paramValues,
   };
 }

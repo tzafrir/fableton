@@ -20,6 +20,7 @@ export { FmSynth } from "./fmSynth";
 export { Kick } from "./kick";
 export { Noise, NOISE_COLORS, NOISE_FILTER_TYPES } from "./noise";
 export { PolySynth } from "./polySynth";
+export { Sampler, SAMPLE_SETTING_KEY } from "./sampler";
 export { Compressor } from "./compressor";
 export { Eq3 } from "./eq3";
 export { Pluck } from "./pluck";
@@ -38,6 +39,7 @@ import { Filter } from "./filter";
 import { Gate } from "./gate";
 import { Pluck } from "./pluck";
 import { PolySynth } from "./polySynth";
+import { Sampler } from "./sampler";
 import { Reverb } from "./reverb";
 import { Saturator } from "./saturator";
 import { StereoDelay } from "./stereoDelay";
@@ -53,6 +55,7 @@ export const CORE_DEVICES = [
   Kick,
   DrumMachine,
   Noise,
+  Sampler,
   Filter,
   Eq3,
   Compressor,

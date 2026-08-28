@@ -269,6 +269,7 @@ export function fakeServices(bpm = 120): DeviceServices {
       secondsPerBeat: () => 60 / bpm,
       onChange: () => () => undefined,
     },
+    assets: { buffer: () => undefined, onChange: () => () => undefined },
   };
 }
 

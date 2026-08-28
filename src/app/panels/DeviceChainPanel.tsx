@@ -24,6 +24,7 @@ import type {
   DeviceDefinition,
   DeviceInstanceId,
   DeviceReadoutSpec,
+  DeviceSettingSpec,
   DocumentStore,
   PanelSpec,
   ParamHandle,
@@ -45,6 +46,9 @@ export interface DeviceChainPanelProps {
   /** SS5's control context menu: "Show/create automation lane" — the shell
    *  creates (or re-enables) that param's lane and reveals it. */
   onShowAutomation?: ((paramId: ParamId) => void) | undefined;
+  /** Imports an audio file and returns its new `AssetId` (or `null` when it
+   *  was rejected). Absent until audio is booted — decoding needs a context. */
+  onImportSample?: ((file: File) => Promise<string | null>) | undefined;
 }
 
 /** Where a rendered device instance lives. */
@@ -181,6 +185,98 @@ function ReadoutMeter({
   );
 }
 
+/**
+ * A device's sample slot (SS7 `DeviceSettingSpec` of kind `audioAsset`).
+ *
+ * Two ways in, because there are two situations: pick a file the project has
+ * already imported, or import a new one. The picker is the primary control —
+ * once a session has a few samples, choosing one should not mean going back
+ * to the file system — and "Load…" sits beside it.
+ */
+function SampleSlot({
+  spec,
+  doc,
+  dispatch,
+  commands,
+  deviceId,
+  onImportSample,
+}: {
+  spec: DeviceSettingSpec;
+  doc: ProjectSnapshot;
+  dispatch: (command: Command) => CommandResult;
+  commands: ProjectCommands;
+  deviceId: DeviceInstanceId;
+  onImportSample?: ((file: File) => Promise<string | null>) | undefined;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = useState(false);
+  const current = doc.devices[deviceId]?.settings?.[spec.key] ?? "";
+  const assets = Object.values(doc.assets).sort((a, b) => a.name.localeCompare(b.name));
+  /** A setting pointing at an asset the project no longer has — a removed
+   *  sample, or a project file opened without its bytes. Worth SAYING, since
+   *  the symptom is otherwise an instrument that is silently mute. */
+  const dangling = current !== "" && !assets.some((asset) => asset.id === current);
+
+  const choose = (assetId: string): void => {
+    dispatch(commands.setDeviceSetting(deviceId, spec.key, assetId === "" ? null : assetId));
+  };
+
+  return (
+    <div className="fbl-param-row" data-testid={`setting-${deviceId}-${spec.key}`}>
+      <span className="fbl-param-row-label">{spec.label}</span>
+      <select
+        className="fbl-field fbl-field--sm"
+        value={dangling ? "" : current}
+        data-testid={`sample-select-${deviceId}`}
+        data-missing={dangling}
+        onChange={(event) => choose(event.target.value)}
+        title={dangling ? "This sample is no longer in the project" : "Choose an imported sample"}
+      >
+        <option value="">{dangling ? "Sample missing" : "No sample"}</option>
+        {assets.map((asset) => (
+          <option key={asset.id} value={asset.id}>
+            {asset.name}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className="fbl-btn fbl-btn--tiny"
+        disabled={busy || onImportSample === undefined}
+        data-testid={`sample-load-${deviceId}`}
+        title={
+          onImportSample === undefined
+            ? "Boot audio before importing a sample — the file has to be decoded"
+            : "Import an audio file from disk"
+        }
+        onClick={() => inputRef.current?.click()}
+      >
+        {busy ? "Loading…" : "Load…"}
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="audio/*"
+        style={{ display: "none" }}
+        data-testid={`sample-file-${deviceId}`}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          // Cleared immediately so picking the SAME file twice fires again —
+          // a re-import after a failed one is the common case.
+          event.target.value = "";
+          if (file === undefined || onImportSample === undefined) return;
+          setBusy(true);
+          void onImportSample(file)
+            .then((assetId) => {
+              if (assetId !== null) choose(assetId);
+            })
+            .finally(() => setBusy(false));
+        }}
+      />
+    </div>
+  );
+}
+
 function DevicePanel({
   doc,
   dispatch,
@@ -190,6 +286,7 @@ function DevicePanel({
   deviceId,
   container,
   onShowAutomation,
+  onImportSample,
 }: {
   doc: ProjectSnapshot;
   /** The panel's rejection-aware dispatch (SS6 inline hint) — see
@@ -204,6 +301,9 @@ function DevicePanel({
    *  Same panel, three containers. */
   container: DeviceContainer;
   onShowAutomation?: ((paramId: ParamId) => void) | undefined;
+  /** Imports an audio file and returns its new `AssetId` (or `null` when it
+   *  was rejected). Absent until audio is booted — decoding needs a context. */
+  onImportSample?: ((file: File) => Promise<string | null>) | undefined;
 }) {
   const device = doc.devices[deviceId];
   const def = device !== undefined ? definitionsById.get(device.definitionId) : undefined;
@@ -462,6 +562,20 @@ function DevicePanel({
         </div>
       ))}
 
+      {/* Non-numeric settings (SS7 `DeviceSettingSpec`) — the sampler's file.
+          Above the readouts and below the params, because it is an input. */}
+      {def?.settings?.map((spec) => (
+        <SampleSlot
+          key={spec.key}
+          spec={spec}
+          doc={doc}
+          dispatch={dispatch}
+          commands={commands}
+          deviceId={deviceId}
+          onImportSample={onImportSample}
+        />
+      ))}
+
       {/* Live readouts (SS5 `DeviceReadoutSpec`): what the device is doing,
           under the params that told it to. */}
       {def?.readouts !== undefined && def.readouts.length > 0 && (
@@ -524,6 +638,7 @@ function RackPanel({
   channelId,
   rackId,
   onShowAutomation,
+  onImportSample,
 }: {
   doc: ProjectSnapshot;
   dispatch: (command: Command) => CommandResult;
@@ -532,6 +647,9 @@ function RackPanel({
   channelId: ChannelId;
   rackId: RackId;
   onShowAutomation?: ((paramId: ParamId) => void) | undefined;
+  /** Imports an audio file and returns its new `AssetId` (or `null` when it
+   *  was rejected). Absent until audio is booted — decoding needs a context. */
+  onImportSample?: ((file: File) => Promise<string | null>) | undefined;
 }) {
   const rack = doc.racks[rackId];
   const slots = doc.channels[channelId]?.chain ?? [];
@@ -787,6 +905,7 @@ function RackPanel({
                   deviceId={deviceId}
                   container={{ kind: "rackChain", rackId, chainId: chain.id }}
                   onShowAutomation={onShowAutomation}
+                  onImportSample={onImportSample}
                 />
               ))}
               <select
@@ -829,6 +948,7 @@ export function DeviceChainPanel({
   engine,
   channelId,
   onShowAutomation,
+  onImportSample,
 }: DeviceChainPanelProps) {
   const [, force] = useState(0);
   useEffect(() => store.onChange(() => force((n) => n + 1)), [store]);
@@ -905,6 +1025,7 @@ export function DeviceChainPanel({
               deviceId={sourceDevice.id}
               container={{ kind: "source" }}
               onShowAutomation={onShowAutomation}
+              onImportSample={onImportSample}
             />
           )}
         </div>
@@ -922,6 +1043,7 @@ export function DeviceChainPanel({
             channelId={channel.id}
             rackId={entryId}
             onShowAutomation={onShowAutomation}
+            onImportSample={onImportSample}
           />
         ) : (
           <DevicePanel
@@ -934,6 +1056,7 @@ export function DeviceChainPanel({
             deviceId={entryId}
             container={{ kind: "channel" }}
             onShowAutomation={onShowAutomation}
+            onImportSample={onImportSample}
           />
         ),
       )}

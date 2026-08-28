@@ -15,6 +15,7 @@ import {
   type AppDeviceHost,
   type AppDeviceRegistry,
 } from "../../devices/harness";
+import { createAssetLibrary, type AppAssetLibrary } from "../../engine/assets/library";
 import { createAutomationSampler, type AutomationSampler } from "../../engine/automation/sampler";
 import { createGraphReconciler, type GraphReconciler } from "../../engine/graph/reconciler";
 import { createMeterBus, type MeterBus } from "../../engine/meter/meters";
@@ -99,6 +100,12 @@ export interface AppProjectEngine extends ProjectEngine {
    * nothing, which is the honest picture of "no audio here".
    */
   analyserFor(channelId: ChannelId): AnalyserNode | null;
+  /**
+   * Decoded imported audio (SS7 `DeviceServices.assets`), as the SHELL sees
+   * it: the shell reads bytes out of storage and pushes them in here, and the
+   * device host hands the same library to every device.
+   */
+  readonly assets: AppAssetLibrary;
 }
 
 /**
@@ -175,7 +182,9 @@ export function createProjectEngine(
   // change notification, so a tempo-synced delay or LFO can convert a note
   // LENGTH without being able to see the transport or the song position.
   const tempoListeners = new Set<() => void>();
+  const assets: AppAssetLibrary = createAssetLibrary(ctx);
   const host: AppDeviceHost = createDeviceHost(ctx, params, registry, {
+    assets,
     tempo: {
       secondsPerBeat: () => 60 / currentTempoMap.bpmAt(0),
       onChange: (cb) => {
@@ -337,6 +346,8 @@ export function createProjectEngine(
       return reconciler.mountedDevice(deviceId)?.instance.readValue?.(readoutId);
     },
 
+    assets,
+
     analyserFor(channelId: ChannelId): AnalyserNode | null {
       const existing = analysers.get(channelId);
       if (existing !== undefined) return existing;
@@ -395,6 +406,7 @@ export function createProjectEngine(
       meters.dispose();
       for (const analyser of analysers.values()) analyser.disconnect();
       analysers.clear();
+      assets.dispose();
       reconciler.dispose();
       host.dispose();
       params.dispose();

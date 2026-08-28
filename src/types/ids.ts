@@ -32,6 +32,18 @@ export type DeviceInstanceId = string;
 /** Id of a clip in the arrangement (SS10). */
 export type ClipId = string;
 
+/**
+ * Id of an imported audio file (`Project.assets`).
+ *
+ * The document holds only the METADATA under this id — a name, a sample
+ * rate, a length. The samples themselves are megabytes, and the document is
+ * a plain JSON value that gets structurally cloned into every undo entry and
+ * re-serialised on every autosave (SS13); putting audio in it would make a
+ * two-second sample cost more per keystroke than the entire rest of the song.
+ * The bytes live beside the project in `ProjectStorage`, keyed by this id.
+ */
+export type AssetId = string;
+
 /** Id of a note inside a clip (SS10). */
 export type NoteId = string;
 

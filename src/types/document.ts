@@ -15,6 +15,7 @@
 
 import type { MidiClip } from "./clip";
 import type {
+  AssetId,
   ChannelId,
   ClipId,
   DeviceDefinitionId,
@@ -46,6 +47,26 @@ export interface SourceRef {
 }
 
 /**
+ * An imported audio file, as the DOCUMENT sees it: a name and enough shape to
+ * draw and lay it out without decoding anything. See `AssetId` for why the
+ * samples are not here.
+ *
+ * Everything on it is descriptive, not editable: it describes a file the user
+ * imported, so there is no command that changes one — only `addAsset` and
+ * `removeAsset`.
+ */
+export interface AudioAsset {
+  id: AssetId;
+  /** The file's own name, shown in pickers. Not unique, not an id. */
+  name: string;
+  sampleRate: number;
+  channels: number;
+  /** Length in SAMPLE FRAMES at `sampleRate`. Seconds are derivable and are
+   *  deliberately not stored: SS8 keeps derived time out of the document. */
+  frames: number;
+}
+
+/**
  * One instantiated device (instrument or effect). Param VALUES are NOT stored
  * here — they live in `Project.paramValues` keyed by full `ParamId`, which is
  * exactly the shape `ParamRegistry.load()` / `.snapshot()` speak (SS4). One
@@ -61,6 +82,19 @@ export interface DeviceState {
   channelId: ChannelId;
   /** Device on/off (the SS5 toggle in the device header). */
   enabled: boolean;
+  /**
+   * Non-numeric device state — everything a `ParamDescriptor` cannot hold.
+   *
+   * Params are numbers by construction (SS4), which is what makes them
+   * automatable, mappable and interpolatable. A sampler's chosen file is
+   * none of those things: it is an `AssetId`, it has no range, and "halfway
+   * between two samples" is not a value. Rather than bend the param system
+   * around it, such state lives here — plain strings, saved and undone with
+   * the rest of the document, pushed to the live device by the reconciler.
+   *
+   * Keys are DEVICE-LOCAL and are public API exactly as param ids are.
+   */
+  settings?: Record<string, string> | undefined;
 }
 
 /** SS6 send: a tap from one channel into another (normally a return). */
@@ -248,6 +282,9 @@ export interface Project {
    *  Additive: a document with no racks carries `{}`. */
   racks: Record<RackId, RackState>;
   sidechains: SidechainEdge[];
+  /** Imported audio files, by id. Metadata only — the samples live beside
+   *  the project in storage (see `AssetId`). `{}` in a song with none. */
+  assets: Record<AssetId, AudioAsset>;
   /** `ParamId -> committed real-unit value` (SS4 `snapshot()` / `load()`). */
   paramValues: Record<ParamId, number>;
 }

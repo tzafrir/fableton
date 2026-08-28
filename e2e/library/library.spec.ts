@@ -45,6 +45,7 @@ test("the whole device library is reachable from the menus", async ({ page }) =>
     "Kick",
     "Drum Machine",
     "Noise",
+    "Sampler",
   ]);
 });
 

@@ -87,6 +87,7 @@ export function makeProject(): Project {
     lanes: {},
     racks: {},
     sidechains: [],
+    assets: {},
     paramValues: {},
   };
 }

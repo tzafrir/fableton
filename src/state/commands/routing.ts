@@ -49,7 +49,10 @@ export type RoutingCommands = Pick<
   | "removeDevices"
   | "moveDevice"
   | "setDeviceEnabled"
+  | "setDeviceSetting"
   | "setInstrument"
+  | "addAsset"
+  | "removeAsset"
 >;
 
 /** A fresh send's amount, in dB: silent until the user raises it (SS6). */
@@ -406,6 +409,45 @@ export function createRoutingCommands(ids: IdFactory): RoutingCommands {
       return makeCommand(enabled ? "Enable Device" : "Disable Device", (doc) => {
         const device = doc.devices[deviceId];
         if (device !== undefined) device.enabled = enabled;
+      });
+    },
+
+    setDeviceSetting(deviceId, key, value): Command {
+      return makeCommand(value === null ? "Clear Setting" : "Set Setting", (doc) => {
+        const device = doc.devices[deviceId];
+        if (device === undefined) return;
+        if (value === null) {
+          if (device.settings === undefined) return;
+          delete device.settings[key];
+          // Document invariant 9: no key holds `undefined`, and an empty map
+          // is noise in every diff and every saved file.
+          if (Object.keys(device.settings).length === 0) delete device.settings;
+          return;
+        }
+        if (device.settings === undefined) device.settings = {};
+        device.settings[key] = value;
+      });
+    },
+
+    addAsset(asset): Command {
+      // Copied field by field rather than spread: the caller owns its object,
+      // and the document must not end up holding a reference to something
+      // that can be mutated behind its back (SS13: plain, owned data).
+      const stored = {
+        id: asset.id,
+        name: asset.name,
+        sampleRate: Math.max(1, Math.round(asset.sampleRate)),
+        channels: Math.max(1, Math.round(asset.channels)),
+        frames: Math.max(0, Math.round(asset.frames)),
+      };
+      return makeCommand("Import Sample", (doc) => {
+        doc.assets[stored.id] = { ...stored };
+      });
+    },
+
+    removeAsset(assetId): Command {
+      return makeCommand("Remove Sample", (doc) => {
+        delete doc.assets[assetId];
       });
     },
 

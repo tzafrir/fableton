@@ -297,7 +297,7 @@ export function deviceInstance(spec: HarnessDeviceInstanceSpec): DeviceInstance 
 
   // Only present when the device actually implements them: the scheduler and
   // the mixer feature-detect instruments with `typeof inst.noteOn === 'function'`.
-  const { noteOn, noteOff, allNotesOff, portRouted, readValue } = spec;
+  const { noteOn, noteOff, allNotesOff, portRouted, readValue, setSetting } = spec;
   if (noteOn) instance.noteOn = (pitch, vel, when) => noteOn(pitch, vel, when);
   if (noteOff) instance.noteOff = (pitch, when) => noteOff(pitch, when);
   if (allNotesOff) instance.allNotesOff = (when) => allNotesOff(when);
@@ -307,6 +307,8 @@ export function deviceInstance(spec: HarnessDeviceInstanceSpec): DeviceInstance 
   // SS5 device readouts (gain reduction and friends): a cheap field read the
   // panel polls at rAF. Same feature-detected shape as the rest.
   if (readValue) instance.readValue = (readoutId) => readValue(readoutId);
+  // Non-numeric document state (the sampler's file), pushed by the reconciler.
+  if (setSetting) instance.setSetting = (key, value) => setSetting(key, value);
 
   return instance;
 }
