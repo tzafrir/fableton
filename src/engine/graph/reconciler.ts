@@ -70,6 +70,10 @@ export interface GraphReconciler {
   mountedDevice(deviceId: DeviceInstanceId): MountedDevice | undefined;
   /** The channel's post-fader node — the SS6 meter tap. */
   meterTapFor(channelId: ChannelId): AudioNode | undefined;
+  /** A channel's INPUT node — the head of its chain, where an instrument (or
+   *  an audio clip player) feeds it. Audio clips connect here so they go
+   *  through the track's effects and fader like everything else. */
+  inputFor(channelId: ChannelId): AudioNode | undefined;
   /**
    * The live node behind a graph ref (`channelUtilRef`, `sendRef`). The
    * reconciler owns every utility node, so this is the only way anything
@@ -682,6 +686,10 @@ export function createGraphReconciler(options: GraphReconcilerOptions): GraphRec
 
     meterTapFor(channelId: ChannelId): AudioNode | undefined {
       return utilNodes.get(channelUtilRef(channelId, "post"));
+    },
+
+    inputFor(channelId: ChannelId): AudioNode | undefined {
+      return utilNodes.get(channelUtilRef(channelId, "input"));
     },
 
     nodeFor(ref: GraphNodeRef): AudioNode | undefined {

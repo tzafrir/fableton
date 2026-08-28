@@ -23,6 +23,7 @@ import type { Grid } from "../../types/viewport";
 import { FINE_NUDGE_TICKS, MIN_CLIP_TICKS } from "../../types/editor";
 import type { ArrangementContext } from "./context";
 import type { ClipView } from "./geometry";
+import { isAudioClip, loopOf } from "./geometry";
 import { defaultLoopFor } from "./edits";
 
 const CONSUMED: KeyOutcome = { command: null, preventDefault: true };
@@ -38,7 +39,7 @@ export function splittableClips(context: ArrangementContext, at: Ticks): ClipVie
   for (const id of context.selection.ids()) {
     const clip = context.scene.clip(id);
     if (clip === undefined) continue;
-    if (clip.loop !== undefined && clip.loop !== null) continue;
+    if (loopOf(clip) !== null || isAudioClip(clip)) continue;
     if (at > clip.start && at < clip.start + clip.length) out.push(clip);
   }
   return out;
@@ -69,7 +70,7 @@ export function toggleLoopOnSelection(context: ArrangementContext): number {
     if (clip !== undefined) clips.push(clip);
   }
   if (clips.length === 0) return 0;
-  const looped = (clip: ClipView): boolean => clip.loop !== undefined && clip.loop !== null;
+  const looped = (clip: ClipView): boolean => loopOf(clip) !== null;
   const allLooped = clips.every(looped);
   const targets = allLooped ? clips : clips.filter((clip) => !looped(clip));
   const commands = targets.map((clip) =>

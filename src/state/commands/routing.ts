@@ -12,6 +12,7 @@
 // descriptor is meaningless while a lane without a target is a UI state.
 
 import type {
+  AudioAsset,
   ChannelId,
   Command,
   DeviceInstanceId,
@@ -439,9 +440,18 @@ export function createRoutingCommands(ids: IdFactory): RoutingCommands {
         sampleRate: Math.max(1, Math.round(asset.sampleRate)),
         channels: Math.max(1, Math.round(asset.channels)),
         frames: Math.max(0, Math.round(asset.frames)),
+        peaks: asset.peaks === undefined ? undefined : [...asset.peaks],
       };
       return makeCommand("Import Sample", (doc) => {
-        doc.assets[stored.id] = { ...stored };
+        const copy: AudioAsset = {
+          id: stored.id,
+          name: stored.name,
+          sampleRate: stored.sampleRate,
+          channels: stored.channels,
+          frames: stored.frames,
+        };
+        if (stored.peaks !== undefined) copy.peaks = [...stored.peaks];
+        doc.assets[stored.id] = copy;
       });
     },
 

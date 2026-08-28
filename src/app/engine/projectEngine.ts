@@ -16,6 +16,10 @@ import {
   type AppDeviceRegistry,
 } from "../../devices/harness";
 import { createAssetLibrary, type AppAssetLibrary } from "../../engine/assets/library";
+import {
+  createAudioClipScheduler,
+  type AudioClipScheduler,
+} from "../../engine/audioclips/scheduler";
 import { createAutomationSampler, type AutomationSampler } from "../../engine/automation/sampler";
 import { createGraphReconciler, type GraphReconciler } from "../../engine/graph/reconciler";
 import { createMeterBus, type MeterBus } from "../../engine/meter/meters";
@@ -218,6 +222,18 @@ export function createProjectEngine(
     isMessageBound: (id) => params.bindingKind(id) === "message",
   });
 
+  /** SS10's audio clips: the second thing on the timeline that has to be
+   *  scheduled into the transport's look-ahead window. Registered beside the
+   *  automation sampler, below. */
+  let currentDoc: ProjectSnapshot = initialDoc;
+  const audioClips: AudioClipScheduler = createAudioClipScheduler({
+    ctx,
+    doc: () => currentDoc,
+    tempoMap: () => currentTempoMap,
+    assets,
+    inputFor: (channelId) => reconciler.inputFor(channelId),
+  });
+
   const targetsByChannel = new Map<ChannelId, TrackTarget>();
   const meteredChannels = new Set<ChannelId>();
   /** Visualiser taps, created lazily by `analyserFor` and re-connected on
@@ -329,10 +345,18 @@ export function createProjectEngine(
     // changed — only then does the transport re-anchor, because the new scan
     // will not emit note-offs for notes the OLD one started (see
     // `Transport.notesChanged`), and a param edit must not cut held notes.
+    currentDoc = doc;
     if (events.setDocument(doc)) transport.notesChanged();
   }
 
   transport.addWindowFiller(automation);
+  transport.addWindowFiller(audioClips);
+  // A stopped transport must not leave a take playing over silence; the
+  // scheduler also treats the stop as a discontinuity, so the next play does
+  // not read as a continuation of the window before it.
+  transport.onStateChange((state) => {
+    if (state === "stopped") audioClips.stopAll(ctx.currentTime);
+  });
 
   return {
     transport,
@@ -406,6 +430,7 @@ export function createProjectEngine(
       meters.dispose();
       for (const analyser of analysers.values()) analyser.disconnect();
       analysers.clear();
+      audioClips.dispose();
       assets.dispose();
       reconciler.dispose();
       host.dispose();

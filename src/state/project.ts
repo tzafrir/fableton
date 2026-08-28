@@ -183,6 +183,7 @@ export const createEmptyProject: CreateEmptyProject = (options = {}) => {
     racks: {},
     sidechains: [],
     assets: {},
+    audioClips: {},
     paramValues: {
       ...defaultMixerParamValues(masterId),
       ...defaultMixerParamValues(trackId),

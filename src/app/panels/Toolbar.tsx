@@ -3,7 +3,7 @@
 // Plain DOM controls — this is exactly the "bounded by count" UI SS15 keeps
 // in React, never canvas.
 
-import { useCallback, useRef, type ChangeEvent, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import type { AutosaveState, GridSettings, ToolMode, TransportState } from "../../types";
 import { SongControls, type SongControlsProps } from "./SongControls";
 
@@ -75,6 +75,9 @@ export interface ToolbarProps {
   /** Enabled while the piano roll has a note selection to act on. */
   canArpeggiate: boolean;
   onShowArpeggiator: () => void;
+  /** Imports an audio file and drops it on the selected track at the
+   *  playhead. Absent until audio is booted — the file has to be decoded. */
+  onAddAudioClip?: ((file: File) => Promise<void>) | undefined;
 
   /** Surfaced import/decode errors and load warnings — a one-line status
    *  string, or `null` when there is nothing to report. */
@@ -179,6 +182,7 @@ export function Toolbar({
   onLoopClip,
   canArpeggiate,
   onShowArpeggiator,
+  onAddAudioClip,
   autosaveState,
   autosaveError,
   autosaveAvailable = true,
@@ -192,6 +196,8 @@ export function Toolbar({
   onShowShortcuts,
 }: ToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const audioInputRef = useRef<HTMLInputElement | null>(null);
+  const [audioBusy, setAudioBusy] = useState(false);
 
   const handleImportClick = useCallback(() => {
     fileInputRef.current?.click();
@@ -413,6 +419,36 @@ export function Toolbar({
         >
           Arpeggiate…
         </button>
+        <button
+          type="button"
+          className="fbl-btn"
+          data-testid="add-audio-button"
+          disabled={onAddAudioClip === undefined || audioBusy}
+          title={
+            onAddAudioClip === undefined
+              ? "Boot audio before adding a file — it has to be decoded"
+              : "Put an audio file on the selected track, at the playhead"
+          }
+          onClick={() => audioInputRef.current?.click()}
+        >
+          {audioBusy ? "Adding…" : "Add Audio…"}
+        </button>
+        <input
+          ref={audioInputRef}
+          type="file"
+          accept="audio/*"
+          style={{ display: "none" }}
+          data-testid="add-audio-file"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            // Cleared immediately so the SAME file can be added twice — which
+            // is an ordinary thing to want, unlike with the sampler's slot.
+            event.target.value = "";
+            if (file === undefined || onAddAudioClip === undefined) return;
+            setAudioBusy(true);
+            void onAddAudioClip(file).finally(() => setAudioBusy(false));
+          }}
+        />
       </Group>
 
       <Sep />

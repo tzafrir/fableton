@@ -44,6 +44,15 @@ export interface SceneChange {
 
 export const NO_CHANGE: SceneChange = { structure: false, clips: false, song: false };
 
+/** Every clip of either kind, in no particular order (each lane sorts its
+ *  own). Allocates one array per re-index, which happens on a document
+ *  change, never per frame. */
+function allClips(doc: ProjectSnapshot): ClipView[] {
+  const out: ClipView[] = Object.values(doc.clips);
+  for (const clip of Object.values(doc.audioClips)) out.push(clip);
+  return out;
+}
+
 interface MutableRow {
   channelId: ChannelId;
   row: number;
@@ -106,7 +115,10 @@ export function createArrangementScene(initial: ProjectSnapshot): ArrangementSce
     for (const row of rows) {
       if (targets === null || targets.has(row.row)) row.clips = [];
     }
-    for (const clip of Object.values(doc.clips)) {
+    // BOTH maps: the arrangement is the one place that holds MIDI and audio
+    // clips together (see `AudioClip`), and to a lane they are the same
+    // thing — a rectangle with a start and a length.
+    for (const clip of allClips(doc)) {
       const row = rowOfChannelId.get(clip.trackId);
       clipById.set(clip.id, clip);
       if (row === undefined) {
@@ -163,7 +175,7 @@ export function createArrangementScene(initial: ProjectSnapshot): ArrangementSce
         // cost of re-indexing is paid only when a lane actually changed.
         continue;
       }
-      if (head === "clips") {
+      if (head === "clips" || head === "audioClips") {
         clips = true;
         const id = patch.path[1];
         if (typeof id === "string") clipIds.add(id);
@@ -172,6 +184,13 @@ export function createArrangementScene(initial: ProjectSnapshot): ArrangementSce
       }
       if (head === "tempo" || head === "timeSignature" || head === "loop") {
         song = true;
+        continue;
+      }
+      // An asset's peaks are what an audio clip's waveform is drawn from, so
+      // a sample arriving (or leaving) repaints the content layer.
+      if (head === "assets") {
+        clips = true;
+        full = true;
         continue;
       }
       if (head === undefined) full = true;
@@ -255,9 +274,11 @@ export function createArrangementScene(initial: ProjectSnapshot): ArrangementSce
         for (const id of clipIds) {
           const before = clipRow.get(id);
           if (before !== undefined) targets.add(before);
-          const after = rowOfChannelId.get(next.clips[id]?.trackId ?? "");
+          const after = rowOfChannelId.get(
+            (next.clips[id] ?? next.audioClips[id])?.trackId ?? "",
+          );
           if (after !== undefined) targets.add(after);
-          if (next.clips[id] === undefined) {
+          if (next.clips[id] === undefined && next.audioClips[id] === undefined) {
             clipById.delete(id);
             clipRow.delete(id);
           }

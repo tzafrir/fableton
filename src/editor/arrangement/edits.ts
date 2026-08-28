@@ -15,6 +15,7 @@ import type { ClipId } from "../../types/ids";
 import type { Ticks } from "../../types/time";
 import { MIN_CLIP_TICKS, loopAfterGrow } from "../../types/editor";
 import type { ClipView } from "./geometry";
+import { isAudioClip, loopOf } from "./geometry";
 import type { ArrangementScene } from "./scene";
 
 /** One previewed clip rectangle, in musical units. */
@@ -41,9 +42,9 @@ function labelOf(clip: ClipView, scene: ArrangementScene): string {
   return scene.doc.channels[clip.trackId]?.name ?? "";
 }
 
-function loopOf(clip: ClipView): ClipGhost["loop"] {
-  const loop = clip.loop;
-  return loop === undefined || loop === null ? null : { start: loop.start, end: loop.end };
+function ghostLoopOf(clip: ClipView): ClipGhost["loop"] {
+  const loop = loopOf(clip);
+  return loop === null ? null : { start: loop.start, end: loop.end };
 }
 
 /**
@@ -110,7 +111,7 @@ export function moveGhosts(
       row: row < 0 ? 0 : row + deltaRows,
       start: Math.max(0, clip.start + deltaTicks),
       length: clip.length,
-      loop: loopOf(clip),
+      loop: ghostLoopOf(clip),
       label: labelOf(clip, scene),
     };
   });
@@ -173,13 +174,15 @@ export function trimClips(
     // repeats appear under the pointer as the clip is stretched instead of
     // arriving as a surprise on mouse-up.
     const loop =
-      loopOf(clip) ??
+      ghostLoopOf(clip) ??
       (edge === "end"
         ? loopAfterGrow({
             previousLength: clip.length,
             newLength: length,
             hasLoop: false,
-            hasNotes: clip.notes.length > 0,
+            // An audio clip has no notes to tile; `loopAfterGrow` declines
+            // for it, which is the same answer it gives an empty MIDI clip.
+            hasNotes: !isAudioClip(clip) && clip.notes.length > 0,
           })
         : null);
     const row = scene.rowOfClip(clip.id);

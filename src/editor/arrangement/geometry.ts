@@ -10,7 +10,7 @@
 // Everything here is a pure function of (viewport, clip, row) — no DOM, no
 // canvas, no document — which is what makes it unit-testable headlessly (SS15).
 
-import type { MidiClip } from "../../types/clip";
+import type { AudioClip, MidiClip } from "../../types/clip";
 import type { Immutable } from "../../types/commands";
 import type { Ticks } from "../../types/time";
 import type { Viewport } from "../../types/viewport";
@@ -24,8 +24,27 @@ import {
   MIN_BRACE_LANE_PX,
 } from "./constants";
 
-/** A clip as the editor reads it: deep-readonly, straight off the snapshot. */
-export type ClipView = Immutable<MidiClip>;
+/**
+ * A clip as the editor reads it: deep-readonly, straight off the snapshot.
+ *
+ * The arrangement is the ONE place that holds both kinds — everywhere else
+ * in the app a clip is a `MidiClip` (see `AudioClip` for why) — so the union
+ * lives here, and `isAudioClip` is how the few places that care tell them
+ * apart. Everything that only needs a rectangle on a lane (geometry, hit
+ * zones, move, trim, marquee, selection) works on either without asking.
+ */
+export type ClipView = Immutable<MidiClip> | Immutable<AudioClip>;
+
+export function isAudioClip(clip: ClipView): clip is Immutable<AudioClip> {
+  return "kind" in clip && clip.kind === "audio";
+}
+
+/** A clip's loop brace, or `null` — audio clips have none. One accessor so
+ *  the union does not have to be narrowed at a dozen call sites. */
+export function loopOf(clip: ClipView): { readonly start: Ticks; readonly end: Ticks } | null {
+  if (isAudioClip(clip)) return null;
+  return clip.loop ?? null;
+}
 
 export interface Rect {
   readonly x: number;
@@ -103,7 +122,7 @@ export function braceHeightPx(viewport: Viewport): number {
 export function loopSpanTicks(
   clip: ClipView,
 ): { readonly start: Ticks; readonly end: Ticks } | null {
-  const loop = clip.loop;
+  const loop = loopOf(clip);
   if (loop === undefined || loop === null) return null;
   return { start: clip.start + loop.start, end: clip.start + loop.end };
 }

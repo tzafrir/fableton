@@ -13,7 +13,7 @@
 // The store, the commands and the history that mutate it are in ./commands;
 // the file envelope and migrations are in ./persist.
 
-import type { MidiClip } from "./clip";
+import type { AudioClip, MidiClip } from "./clip";
 import type {
   AssetId,
   ChannelId,
@@ -64,6 +64,17 @@ export interface AudioAsset {
   /** Length in SAMPLE FRAMES at `sampleRate`. Seconds are derivable and are
    *  deliberately not stored: SS8 keeps derived time out of the document. */
   frames: number;
+  /**
+   * A coarse waveform: peak amplitude (0..1) over `peaks.length` equal
+   * slices of the file, computed once at import.
+   *
+   * In the DOCUMENT, unlike the samples, and deliberately: the arrangement
+   * has to draw the waveform on every frame, from a worker-free main thread,
+   * for clips whose audio may not have finished decoding — or may be missing
+   * entirely. A few hundred numbers is a couple of kilobytes, which the
+   * document can carry; the samples are megabytes, which it cannot.
+   */
+  peaks?: number[] | undefined;
 }
 
 /**
@@ -277,6 +288,10 @@ export interface Project {
   channels: Record<ChannelId, Channel>;
   devices: Record<DeviceInstanceId, DeviceState>;
   clips: Record<ClipId, MidiClip>;
+  /** Audio clips, in their own map (see `AudioClip` for why). Their ids share
+   *  the `ClipId` namespace with `clips`, so a selection can hold both and no
+   *  id resolves to two different clips. */
+  audioClips: Record<ClipId, AudioClip>;
   lanes: Record<LaneId, AutomationLane>;
   /** SS7 effect racks, keyed by the chain slot they occupy (see `RackState`).
    *  Additive: a document with no racks carries `{}`. */

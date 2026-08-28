@@ -50,7 +50,7 @@ export type {
 } from "./time";
 export { PPQ, TICKS_PER_WHOLE_NOTE } from "./time";
 
-export type { MidiClip, Note } from "./clip";
+export type { AudioClip, MidiClip, Note } from "./clip";
 
 // --- M1 (SS9, SS10, SS13) ---------------------------------------------------
 
@@ -95,6 +95,7 @@ export type {
   NoteDelta,
   ArpMode,
   ArpOptions,
+  AudioClipInit,
   NoteInit,
   NoteSpan,
   NoteVelocityEdit,

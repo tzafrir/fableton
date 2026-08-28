@@ -71,6 +71,7 @@ describe("createEmptyProject", () => {
       racks: {},
       sidechains: [],
       assets: {},
+      audioClips: {},
       paramValues: {
         [volumeParamId("chan-1")]: DEFAULT_VOLUME_DB,
         [panParamId("chan-1")]: DEFAULT_PAN,

@@ -99,6 +99,7 @@ export function makeFixtureProject(): Project {
       },
     ],
     assets: {},
+    audioClips: {},
     paramValues: {
       [`chan:${MASTER_ID}/vol`]: 0,
       [`chan:${MASTER_ID}/pan`]: 0,

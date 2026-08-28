@@ -15,13 +15,24 @@ import type { AppAssetLibrary } from "../engine/assets/library";
 import type { AssetId } from "../types";
 import {
   MAX_SAMPLE_BYTES,
+  PEAK_COUNT,
   importSample,
   loadProjectSamples,
+  peaksOf,
   type ImportableFile,
 } from "./samples";
 
 function fakeBuffer(): AudioBuffer {
-  return { duration: 1, sampleRate: 44100, numberOfChannels: 2, length: 44100 } as AudioBuffer;
+  // A ramp, so `peaksOf` has something with shape to measure.
+  const data = new Float32Array(44100);
+  for (let i = 0; i < data.length; i++) data[i] = i / data.length;
+  return {
+    duration: 1,
+    sampleRate: 44100,
+    numberOfChannels: 2,
+    length: data.length,
+    getChannelData: () => data,
+  } as unknown as AudioBuffer;
 }
 
 /** A library that decodes whatever it is given, unless told to fail. */
@@ -169,5 +180,55 @@ describe("loadProjectSamples", () => {
     await expect(
       loadProjectSamples(f.store.getState(), fresh.library, f.assetStore),
     ).resolves.toBe(0);
+  });
+});
+
+describe("peaksOf", () => {
+  /** A buffer whose channel data is `make(i)`. */
+  function buffer(frames: number, make: (i: number) => number, channels = 1): AudioBuffer {
+    const data = Array.from({ length: channels }, () => new Float32Array(frames));
+    for (const channel of data) {
+      for (let i = 0; i < frames; i++) channel[i] = make(i);
+    }
+    return {
+      length: frames,
+      sampleRate: 48000,
+      numberOfChannels: channels,
+      duration: frames / 48000,
+      getChannelData: (index: number) => data[index] ?? new Float32Array(0),
+    } as unknown as AudioBuffer;
+  }
+
+  it("returns one value per slice, 0..1", () => {
+    const peaks = peaksOf(buffer(48000, () => 0.5));
+    expect(peaks).toHaveLength(PEAK_COUNT);
+    expect(peaks.every((v) => v >= 0 && v <= 1)).toBe(true);
+    expect(Math.max(...peaks)).toBeCloseTo(0.5, 5);
+  });
+
+  it("takes the MAX in a slice, so a transient survives", () => {
+    // The reason it is not RMS: the eye reads a waveform as an envelope, and
+    // averaging turns every transient into a bump.
+    const peaks = peaksOf(buffer(48000, (i) => (i === 0 ? 1 : 0)), 100);
+    expect(peaks[0]).toBe(1);
+    expect(peaks[1]).toBe(0);
+  });
+
+  it("folds channels together — the picture is one lane tall", () => {
+    const stereo = peaksOf(buffer(1000, () => 0.25, 2), 10);
+    expect(Math.max(...stereo)).toBeCloseTo(0.25, 5);
+  });
+
+  it("survives an empty buffer and rectifies negative samples", () => {
+    expect(peaksOf(buffer(0, () => 0), 8)).toEqual(new Array<number>(8).fill(0));
+    expect(Math.max(...peaksOf(buffer(100, () => -0.75), 4))).toBeCloseTo(0.75, 5);
+  });
+
+  it("is stored with the asset, so the arrangement can draw without decoding", async () => {
+    const f = fixture();
+    const result = await importSample(file("kick.wav", 2048), f.deps);
+    if (result.status !== "imported") throw new Error("expected an import");
+    const asset = f.store.getState().assets[result.assetId];
+    expect(asset?.peaks).toHaveLength(PEAK_COUNT);
   });
 });

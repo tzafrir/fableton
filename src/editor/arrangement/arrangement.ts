@@ -43,6 +43,7 @@ import { createTrimDragHandler } from "./dragTrim";
 import { createLaneHeaders, type LaneHeadersView } from "./headers";
 import type { ArrangementHit } from "./hits";
 import { createHitTesters } from "./hits";
+import { isAudioClip } from "./geometry";
 import { createArrangementKeyBindings, splitSelectionAt, toggleLoopOnSelection } from "./keys";
 import { createArrangementClipsLayer, createArrangementGridLayer, drawSelectionAndHover } from "./layers";
 import { createRuler, type RulerView } from "./ruler";
@@ -192,6 +193,11 @@ export function createArrangementView(options: ArrangementViewOptions): KitArran
     scene,
     playheadTicks: () => playheadTicks,
     openClip: (clipId: ClipId) => {
+      // An audio clip has no notes, so there is nothing for the piano roll to
+      // show; double-clicking one leaves the shell where it is rather than
+      // swapping to an empty editor and losing the user's place.
+      const clip = scene.clip(clipId);
+      if (clip !== undefined && isAudioClip(clip)) return;
       options.onOpenClip?.(clipId);
     },
     selectChannel: (channelId: ChannelId) => {

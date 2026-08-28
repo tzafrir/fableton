@@ -98,6 +98,7 @@ export function routingDoc(spec: DocSpec): Project {
     racks,
     sidechains: spec.sidechains ?? [],
     assets: {},
+    audioClips: {},
     paramValues,
   };
 }

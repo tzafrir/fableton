@@ -16,6 +16,7 @@ import { findRoutingCycle, sidechainIsFeedForward } from "../engine/graph/valida
 import { rackChainParamId } from "../params/paramIds";
 import type {
   AudioAsset,
+  AudioClip,
   AutomationLane,
   AutoPoint,
   Channel,
@@ -108,13 +109,36 @@ function canonicalDeviceState(d: DeviceState): JsonValue {
 }
 
 function canonicalAsset(a: AudioAsset): JsonValue {
-  return {
+  const out: Record<string, JsonValue> = {
     id: a.id,
     name: a.name,
     sampleRate: a.sampleRate,
     channels: a.channels,
     frames: a.frames,
   };
+  // Rounded to three places on the way out: the waveform is drawn a few
+  // hundred pixels wide, so full float precision is bytes spent on a
+  // difference no eye and no test can see.
+  if (a.peaks !== undefined && a.peaks.length > 0) {
+    out["peaks"] = a.peaks.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 1000) / 1000);
+  }
+  return out;
+}
+
+function canonicalAudioClip(c: AudioClip): JsonValue {
+  const out: Record<string, JsonValue> = {
+    kind: "audio",
+    id: c.id,
+    trackId: c.trackId,
+    start: c.start,
+    length: c.length,
+    assetId: c.assetId,
+    offsetFrames: c.offsetFrames,
+    gainDb: c.gainDb,
+  };
+  if (c.name !== undefined) out["name"] = c.name;
+  if (c.color !== undefined && c.color !== null) out["color"] = c.color;
+  return out;
 }
 
 /** Document invariant 4: `clip.notes` stays sorted by `(start, pitch)`. The
@@ -264,6 +288,11 @@ function canonicalProject(p: Project): JsonValue {
     racks: canonicalRecord(p.racks, lexicographicOrder(p.racks), canonicalRack),
     sidechains: p.sidechains.map(canonicalSidechainEdge),
     assets: canonicalRecord(p.assets, lexicographicOrder(p.assets), canonicalAsset),
+    audioClips: canonicalRecord(
+      p.audioClips,
+      lexicographicOrder(p.audioClips),
+      canonicalAudioClip,
+    ),
     paramValues: canonicalParamValues(p.paramValues),
   };
 }
@@ -501,7 +530,48 @@ function parseAsset(raw: JsonValue, key: string, path: string, warnings: LoadWar
       Math.round(asFiniteNumber(obj["channels"], `${path}.channels`, 1, warnings)),
     ),
     frames: Math.max(0, Math.round(asFiniteNumber(obj["frames"], `${path}.frames`, 0, warnings))),
+    ...parsePeaks(obj["peaks"], `${path}.peaks`, warnings),
   };
+}
+
+function parsePeaks(
+  raw: JsonValue | undefined,
+  path: string,
+  warnings: LoadWarning[],
+): { peaks?: number[] } {
+  if (raw === undefined || raw === null) return {};
+  const values = asArray(raw, path, warnings).map((v, i) =>
+    Math.min(1, Math.max(0, asFiniteNumber(v, `${path}[${String(i)}]`, 0, warnings))),
+  );
+  return values.length === 0 ? {} : { peaks: values };
+}
+
+function parseAudioClip(
+  raw: JsonValue,
+  key: string,
+  path: string,
+  warnings: LoadWarning[],
+): AudioClip {
+  const obj = asObject(raw, path, warnings);
+  const out: AudioClip = {
+    kind: "audio",
+    id: key,
+    trackId: asString(obj["trackId"], `${path}.trackId`, "", warnings),
+    start: Math.max(0, Math.round(asFiniteNumber(obj["start"], `${path}.start`, 0, warnings))),
+    length: Math.max(
+      1,
+      Math.round(asFiniteNumber(obj["length"], `${path}.length`, 1, warnings)),
+    ),
+    assetId: asString(obj["assetId"], `${path}.assetId`, "", warnings),
+    offsetFrames: Math.max(
+      0,
+      Math.round(asFiniteNumber(obj["offsetFrames"], `${path}.offsetFrames`, 0, warnings)),
+    ),
+    gainDb: asFiniteNumber(obj["gainDb"], `${path}.gainDb`, 0, warnings),
+  };
+  if (typeof obj["name"] === "string") out.name = obj["name"];
+  if (typeof obj["color"] === "string") out.color = obj["color"];
+  return out;
 }
 
 function parseNote(raw: JsonValue, path: string, warnings: LoadWarning[]): Note {
@@ -732,6 +802,15 @@ function parseProject(raw: JsonValue, warnings: LoadWarning[]): ParseOutcome {
     if (value !== undefined) assets[key] = parseAsset(value, key, `assets.${key}`, warnings);
   }
 
+  const audioClipsObj = asObject(raw["audioClips"], "audioClips", warnings);
+  const audioClips: Record<string, AudioClip> = {};
+  for (const key of Object.keys(audioClipsObj)) {
+    const value = audioClipsObj[key];
+    if (value !== undefined) {
+      audioClips[key] = parseAudioClip(value, key, `audioClips.${key}`, warnings);
+    }
+  }
+
   const paramValues = parseParamValues(raw["paramValues"], "paramValues", warnings);
 
   const project: Project = {
@@ -748,6 +827,7 @@ function parseProject(raw: JsonValue, warnings: LoadWarning[]): ParseOutcome {
     racks,
     sidechains,
     assets,
+    audioClips,
     paramValues,
   };
   return { project };
@@ -819,6 +899,38 @@ function validateProject(project: Project): LoadWarning[] {
     if (clip !== undefined && !(clip.trackId in project.channels)) {
       delete project.clips[clipId];
       pushWarning(warnings, `clips.${clipId}`, "Clip referenced a missing channel; dropped.");
+    }
+  }
+
+  // Audio clips: the same "must live on a real channel" rule, plus two of
+  // their own — the asset has to exist, and an id may not name a clip in
+  // BOTH maps (a selection holds ids, so one id must mean one clip).
+  for (const clipId of Object.keys(project.audioClips)) {
+    const clip = project.audioClips[clipId];
+    if (clip === undefined) continue;
+    if (clipId in project.clips) {
+      delete project.audioClips[clipId];
+      pushWarning(
+        warnings,
+        `audioClips.${clipId}`,
+        "Id names both a MIDI and an audio clip; the audio one was dropped.",
+      );
+      continue;
+    }
+    if (!(clip.trackId in project.channels)) {
+      delete project.audioClips[clipId];
+      pushWarning(warnings, `audioClips.${clipId}`, "Clip referenced a missing channel; dropped.");
+      continue;
+    }
+    if (!(clip.assetId in project.assets)) {
+      // KEPT, not dropped: the sample may simply not have travelled with the
+      // project file, and deleting the arrangement because the audio is
+      // missing would lose work that a re-import restores.
+      pushWarning(
+        warnings,
+        `audioClips.${clipId}.assetId`,
+        "Clip references a sample this project does not have; it will be silent.",
+      );
     }
   }
 

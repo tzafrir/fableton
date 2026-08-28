@@ -4,6 +4,8 @@
 // one verb that has to).
 
 import type {
+  AudioClip,
+  AudioClipInit,
   ChannelId,
   ClipDelta,
   ClipId,
@@ -17,7 +19,7 @@ import type {
   ProjectSnapshot,
   Ticks,
 } from "../../types";
-import { MIN_CLIP_TICKS, loopAfterGrow } from "../../types";
+import { MIN_CLIP_TICKS, PPQ, loopAfterGrow } from "../../types";
 import { noteFromInit } from "./notes";
 import {
   MIN_NOTE_DUR_TICKS,
@@ -40,18 +42,36 @@ export type ClipCommands = Pick<
   | "trimClips"
   | "splitClip"
   | "duplicateClips"
+  | "createAudioClip"
   | "setClipLoop"
   | "renameClip"
   | "setClipColor"
 >;
 
-function clipsByIds(doc: DraftProject, clipIds: readonly ClipId[]): DraftClip[] {
+/**
+ * The four fields every clip has wherever it lives, MIDI or audio: an id, a
+ * lane, a start and a length.
+ *
+ * The arrangement moves, trims, duplicates, renames, recolours and deletes
+ * both kinds with the same gesture and the same command, so the commands work
+ * through this rather than through either map — and adding a third kind of
+ * clip later would need no new verbs, only a new entry in `anyClipOf`.
+ */
+type PositionedClip = { id: ClipId; trackId: ChannelId; start: Ticks; length: Ticks };
+
+/** Whichever map holds `clipId`. Ids are unique across both (document
+ *  invariant), so at most one can answer. */
+function anyClipOf(doc: DraftProject, clipId: ClipId): PositionedClip | undefined {
+  return doc.clips[clipId] ?? doc.audioClips[clipId];
+}
+
+function anyClipsByIds(doc: DraftProject, clipIds: readonly ClipId[]): PositionedClip[] {
   const seen = new Set<ClipId>();
-  const out: DraftClip[] = [];
+  const out: PositionedClip[] = [];
   for (const id of clipIds) {
     if (seen.has(id)) continue;
     seen.add(id);
-    const clip = doc.clips[id];
+    const clip = anyClipOf(doc, id);
     if (clip !== undefined) out.push(clip);
   }
   return out;
@@ -63,7 +83,11 @@ function clipsByIds(doc: DraftProject, clipIds: readonly ClipId[]): DraftClip[] 
  * clip lands on an existing channel whose role is `'track'` — clips do not
  * live on groups, returns or the master.
  */
-function clampClipDelta(doc: DraftProject, clips: readonly DraftClip[], delta: ClipDelta): ClipDelta {
+function clampClipDelta(
+  doc: DraftProject,
+  clips: readonly PositionedClip[],
+  delta: ClipDelta,
+): ClipDelta {
   if (clips.length === 0) return { ticks: 0, tracks: 0 };
   let minStart = Number.POSITIVE_INFINITY;
   for (const clip of clips) if (clip.start < minStart) minStart = clip.start;
@@ -80,7 +104,7 @@ function clampClipDelta(doc: DraftProject, clips: readonly DraftClip[], delta: C
   return { ticks, tracks };
 }
 
-function targetTrack(doc: DraftProject, clip: DraftClip, rowDelta: number): ChannelId {
+function targetTrack(doc: DraftProject, clip: PositionedClip, rowDelta: number): ChannelId {
   if (rowDelta === 0) return clip.trackId;
   const row = doc.channelOrder.indexOf(clip.trackId);
   if (row < 0) return clip.trackId;
@@ -125,17 +149,55 @@ export function createClipCommands(ids: IdFactory): ClipCommands {
       );
     },
 
+    createAudioClip(init: AudioClipInit): Command {
+      const clipId = init.id ?? ids.clip();
+      const start = Math.max(0, tick(init.start));
+      const length = Math.max(MIN_CLIP_TICKS, tick(init.length));
+      const offsetFrames = Math.max(0, Math.round(init.offsetFrames ?? 0));
+      const gainDb = init.gainDb ?? 0;
+      const name = init.name;
+      return makeCommand(
+        "Add Audio Clip",
+        (doc) => {
+          const clip: AudioClip = {
+            kind: "audio",
+            id: clipId,
+            trackId: init.trackId,
+            start,
+            length,
+            assetId: init.assetId,
+            offsetFrames,
+            gainDb,
+          };
+          if (name !== undefined) clip.name = name;
+          doc.audioClips[clipId] = clip;
+        },
+        {
+          canRun: (doc) => {
+            if (doc.channels[init.trackId] === undefined) return "That track no longer exists.";
+            if (doc.channels[init.trackId]?.role !== "track") return "Clips can only live on tracks.";
+            if (doc.assets[init.assetId] === undefined) return "That sample is not in this project.";
+            if (doc.clips[clipId] !== undefined || doc.audioClips[clipId] !== undefined) {
+              return "A clip with that id already exists.";
+            }
+            return null;
+          },
+        },
+      );
+    },
+
     deleteClips(clipIds: readonly ClipId[]): Command {
       return makeCommand(clipIds.length === 1 ? "Delete Clip" : "Delete Clips", (doc) => {
         for (const id of clipIds) {
           if (doc.clips[id] !== undefined) delete doc.clips[id];
+          else if (doc.audioClips[id] !== undefined) delete doc.audioClips[id];
         }
       });
     },
 
     moveClips(clipIds: readonly ClipId[], delta: ClipDelta): Command {
       return makeCommand("Move Clips", (doc) => {
-        const clips = clipsByIds(doc, clipIds);
+        const clips = anyClipsByIds(doc, clipIds);
         if (clips.length === 0) return;
         const clamped = clampClipDelta(doc, clips, delta);
         if (clamped.ticks === 0 && clamped.tracks === 0) return;
@@ -153,6 +215,32 @@ export function createClipCommands(ids: IdFactory): ClipCommands {
     trimClips(spans: readonly ClipSpan[]): Command {
       return makeCommand("Trim Clips", (doc) => {
         for (const span of spans) {
+          const audio = doc.audioClips[span.id];
+          if (audio !== undefined) {
+            const newStart = Math.max(0, tick(span.start));
+            const newLength = Math.max(MIN_CLIP_TICKS, tick(span.length));
+            const shift = newStart - audio.start;
+            audio.start = newStart;
+            audio.length = newLength;
+            // The LEFT edge moved, so the same amount of MUSIC has to come
+            // off the front of the file: an audio clip's content is pinned to
+            // its start the way a MIDI clip's notes are. Frames per tick
+            // comes from the asset's own rate and the tempo at the clip —
+            // close enough at any single tempo, and the alternative (a
+            // tempo-map integral per trim) buys precision no ear can hear on
+            // a drag.
+            if (shift !== 0) {
+              const asset = doc.assets[audio.assetId];
+              const bpm = doc.tempo[0]?.bpm ?? 120;
+              const framesPerTick =
+                asset === undefined ? 0 : (asset.sampleRate * 60) / (bpm * PPQ);
+              audio.offsetFrames = Math.max(
+                0,
+                Math.round(audio.offsetFrames + shift * framesPerTick),
+              );
+            }
+            continue;
+          }
           const clip = clipOf(doc, span.id);
           if (clip === undefined) continue;
           const newStart = Math.max(0, tick(span.start));
@@ -282,15 +370,40 @@ export function createClipCommands(ids: IdFactory): ClipCommands {
     ): Command {
       const minted = clipIds.map((_, i) => newIds?.[i] ?? ids.clip());
       return makeCommand("Duplicate Clips", (doc) => {
+        // Audio clips duplicate too, and by the same gesture — the copy is a
+        // second reference to the same asset, not a second copy of the file.
+        const audioSources = clipIds
+          .map((id, i) => ({ clip: doc.audioClips[id], id: minted[i] }))
+          .filter(
+            (entry): entry is { clip: NonNullable<typeof entry.clip>; id: ClipId } =>
+              entry.clip !== undefined && entry.id !== undefined,
+          );
         const sources = clipIds
           .map((id, i) => ({ clip: doc.clips[id], id: minted[i] }))
           .filter((entry): entry is { clip: DraftClip; id: ClipId } => entry.clip !== undefined && entry.id !== undefined);
-        if (sources.length === 0) return;
+        if (sources.length === 0 && audioSources.length === 0) return;
         const clamped = clampClipDelta(
           doc,
-          sources.map((entry) => entry.clip),
+          [...sources, ...audioSources].map((entry) => entry.clip),
           delta,
         );
+        for (const entry of audioSources) {
+          if (doc.clips[entry.id] !== undefined || doc.audioClips[entry.id] !== undefined) continue;
+          const source = entry.clip;
+          const copy: AudioClip = {
+            kind: "audio",
+            id: entry.id,
+            trackId: targetTrack(doc, source, clamped.tracks),
+            start: Math.max(0, source.start + clamped.ticks),
+            length: source.length,
+            assetId: source.assetId,
+            offsetFrames: source.offsetFrames,
+            gainDb: source.gainDb,
+          };
+          if (source.name !== undefined) copy.name = source.name;
+          if (source.color !== undefined && source.color !== null) copy.color = source.color;
+          doc.audioClips[entry.id] = copy;
+        }
         for (const entry of sources) {
           if (doc.clips[entry.id] !== undefined) continue;
           const source = entry.clip;
@@ -333,7 +446,7 @@ export function createClipCommands(ids: IdFactory): ClipCommands {
       return makeCommand(
         "Rename Clip",
         (doc) => {
-          const clip = clipOf(doc, clipId);
+          const clip = doc.clips[clipId] ?? doc.audioClips[clipId];
           if (clip === undefined) return;
           clip.name = name;
         },
@@ -344,7 +457,7 @@ export function createClipCommands(ids: IdFactory): ClipCommands {
 
     setClipColor(clipId: ClipId, color: string | null): Command {
       return makeCommand("Set Clip Color", (doc) => {
-        const clip = clipOf(doc, clipId);
+        const clip = doc.clips[clipId] ?? doc.audioClips[clipId];
         if (clip === undefined) return;
         clip.color = color;
       });

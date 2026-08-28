@@ -17,6 +17,7 @@ import type { ArrangementContext } from "./context";
 import type { ClipGhost } from "./edits";
 import { loopAfterDrag } from "./edits";
 import { drawGhosts } from "./ghosts";
+import { loopOf } from "./geometry";
 import type { ArrangementHit } from "./hits";
 
 export type LoopPart = "loopStart" | "loopEnd" | "loopBody";
@@ -83,7 +84,7 @@ export function createLoopDragHandler(
       const { clipId, loop } = update.preview;
       if (loop === null || clipId === "") return null;
       const clip = context.scene.clip(clipId);
-      const current = clip?.loop;
+      const current = clip === undefined ? null : loopOf(clip);
       if (current !== undefined && current !== null && current.start === loop.start && current.end === loop.end) {
         return null;
       }

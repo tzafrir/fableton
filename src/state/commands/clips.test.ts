@@ -215,3 +215,152 @@ describe("clip commands", () => {
     }
   });
 });
+
+describe("audio clips", () => {
+  /** A project with one imported sample, ready to place. */
+  function withSample() {
+    const f = makeFixture();
+    f.store.dispatch(
+      f.commands.addAsset({
+        id: "asset-1",
+        name: "take.wav",
+        sampleRate: 48000,
+        channels: 2,
+        frames: 48000,
+      }),
+    );
+    return f;
+  }
+
+  const audioOf = (f: ReturnType<typeof makeFixture>, id: string) =>
+    f.store.getState().audioClips[id];
+
+  it("createAudioClip puts a clip in its own map, not among the MIDI ones", () => {
+    const f = withSample();
+    f.store.dispatch(
+      f.commands.createAudioClip({
+        id: "ac-1",
+        trackId: f.trackId,
+        start: BAR,
+        length: BAR,
+        assetId: "asset-1",
+      }),
+    );
+    expect(audioOf(f, "ac-1")).toMatchObject({
+      kind: "audio",
+      trackId: f.trackId,
+      start: BAR,
+      length: BAR,
+      assetId: "asset-1",
+      offsetFrames: 0,
+      gainDb: 0,
+    });
+    expect(f.store.getState().clips["ac-1"]).toBeUndefined();
+    expectLegalProject(f.store.getState());
+  });
+
+  it("refuses a missing sample, a missing track and a non-track lane", () => {
+    const f = withSample();
+    expect(
+      f.store.dispatch(
+        f.commands.createAudioClip({ trackId: f.trackId, start: 0, length: BAR, assetId: "nope" }),
+      ),
+    ).toEqual({ status: "rejected", reason: "That sample is not in this project." });
+    expect(
+      f.store.dispatch(
+        f.commands.createAudioClip({ trackId: f.masterId, start: 0, length: BAR, assetId: "asset-1" }),
+      ),
+    ).toEqual({ status: "rejected", reason: "Clips can only live on tracks." });
+  });
+
+  it("moves, deletes and duplicates with the SAME verbs as a MIDI clip", () => {
+    // The arrangement drags both kinds with one gesture; one command has to
+    // serve both or the two would drift apart.
+    const f = withSample();
+    f.store.dispatch(
+      f.commands.createAudioClip({
+        id: "ac-1",
+        trackId: f.trackId,
+        start: 0,
+        length: BAR,
+        assetId: "asset-1",
+      }),
+    );
+
+    f.store.dispatch(f.commands.moveClips(["ac-1"], { ticks: BAR, tracks: 0 }));
+    expect(audioOf(f, "ac-1")?.start).toBe(BAR);
+
+    f.store.dispatch(f.commands.duplicateClips(["ac-1"], { ticks: BAR, tracks: 0 }, ["ac-2"]));
+    expect(audioOf(f, "ac-2")).toMatchObject({ start: BAR * 2, assetId: "asset-1" });
+
+    f.store.dispatch(f.commands.deleteClips(["ac-1", "ac-2"]));
+    expect(audioOf(f, "ac-1")).toBeUndefined();
+    expect(audioOf(f, "ac-2")).toBeUndefined();
+  });
+
+  it("moves a MIDI clip and an audio clip together in one command", () => {
+    const f = withSample();
+    f.store.dispatch(
+      f.commands.createAudioClip({
+        id: "ac-1",
+        trackId: f.trackId,
+        start: 0,
+        length: BAR,
+        assetId: "asset-1",
+      }),
+    );
+    f.store.dispatch(f.commands.moveClips([f.clipId, "ac-1"], { ticks: BAR, tracks: 0 }));
+    expect(clipOf(f, f.clipId)?.start).toBe(BAR);
+    expect(audioOf(f, "ac-1")?.start).toBe(BAR);
+  });
+
+  it("trimming the LEFT edge moves into the file, not just onto the timeline", () => {
+    // An audio clip's content is pinned to its start the way a MIDI clip's
+    // notes are: drag the left edge in and the first second is skipped.
+    const f = withSample();
+    f.store.dispatch(
+      f.commands.createAudioClip({
+        id: "ac-1",
+        trackId: f.trackId,
+        start: 0,
+        length: BAR * 2,
+        assetId: "asset-1",
+      }),
+    );
+    // At the fixture's 120 bpm, one bar is two seconds = 96,000 frames.
+    f.store.dispatch(f.commands.trimClips([{ id: "ac-1", start: BAR, length: BAR }]));
+    expect(audioOf(f, "ac-1")).toMatchObject({ start: BAR, length: BAR });
+    expect(audioOf(f, "ac-1")?.offsetFrames).toBe(96000);
+  });
+
+  it("trimming the RIGHT edge leaves the offset alone", () => {
+    const f = withSample();
+    f.store.dispatch(
+      f.commands.createAudioClip({
+        id: "ac-1",
+        trackId: f.trackId,
+        start: 0,
+        length: BAR * 2,
+        assetId: "asset-1",
+        offsetFrames: 1000,
+      }),
+    );
+    f.store.dispatch(f.commands.trimClips([{ id: "ac-1", start: 0, length: BAR }]));
+    expect(audioOf(f, "ac-1")).toMatchObject({ length: BAR, offsetFrames: 1000 });
+  });
+
+  it("never lets one id name both a MIDI and an audio clip", () => {
+    const f = withSample();
+    expect(
+      f.store.dispatch(
+        f.commands.createAudioClip({
+          id: f.clipId,
+          trackId: f.trackId,
+          start: 0,
+          length: BAR,
+          assetId: "asset-1",
+        }),
+      ),
+    ).toEqual({ status: "rejected", reason: "A clip with that id already exists." });
+  });
+});

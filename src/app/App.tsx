@@ -62,6 +62,7 @@ import {
 import type { LaneFocusRequest } from "./panels";
 import { bootstrapProject, type BootstrapResult } from "./persistence";
 import { pitchNamesForClip } from "./pitchNames";
+import { PPQ } from "../types";
 import { DEFAULT_ARP_OPTIONS } from "../state/arpeggio";
 import { importSample, loadProjectSamples } from "./samples";
 import { createAssetStore } from "../persist/assets";
@@ -582,6 +583,61 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
     [],
   );
 
+  /**
+   * "Add Audio…": import a file and drop it on the selected track at the
+   * playhead, as a clip whose length is the file's own duration.
+   *
+   * Length is computed HERE rather than in the command because it needs the
+   * decoded buffer's duration and the song's tempo, and the document layer
+   * may see neither (SS8: no seconds in the document, SS13: no audio in it).
+   */
+  const handleAddAudioClip = useCallback(
+    async (file: File): Promise<void> => {
+      const bootstrap = docStateRef.current;
+      const live = engineRef.current;
+      if (bootstrap === null || live === null) return;
+      const doc = bootstrap.store.getState();
+      const trackId =
+        selectedChannelIdRef.current !== null &&
+        doc.channels[selectedChannelIdRef.current]?.role === "track"
+          ? selectedChannelIdRef.current
+          : (doc.channelOrder.find((id) => doc.channels[id]?.role === "track") ?? null);
+      if (trackId === null) {
+        setStatusMessage("Add a track before adding audio to it.");
+        return;
+      }
+
+      const imported = await importSample(file, {
+        store: bootstrap.store,
+        commands: projectCommands,
+        assets: live.assets,
+        assetStore: createAssetStore(bootstrap.storage),
+        ids: defaultIdFactory,
+      });
+      if (imported.status === "rejected") {
+        setStatusMessage(imported.reason);
+        return;
+      }
+
+      const after = bootstrap.store.getState();
+      const asset = after.assets[imported.assetId];
+      if (asset === undefined) return;
+      const bpm = after.tempo[0]?.bpm ?? 120;
+      const seconds = asset.frames / asset.sampleRate;
+      const length = Math.max(1, Math.round((seconds * bpm * PPQ) / 60));
+      bootstrap.store.dispatch(
+        projectCommands.createAudioClip({
+          trackId,
+          start: Math.max(0, Math.round(live.transport.positionTicks())),
+          length,
+          assetId: imported.assetId,
+        }),
+      );
+      setStatusMessage(`Added ${imported.name}`);
+    },
+    [],
+  );
+
   const handlePlay = useCallback(() => {
     engineRef.current?.transport.play();
   }, []);
@@ -712,7 +768,16 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
       // SS12: the SAME engine on an OfflineAudioContext — no live audio (or
       // boot) required; worklet modules load into the offline context.
       const doc = docState.store.getState();
-      const { wav, durationSeconds } = await renderProjectToWav(doc);
+      // The render context is a fresh `OfflineAudioContext`, so the live
+      // app's decoded buffers are of no use to it; the BYTES have to come
+      // along and be decoded again over there.
+      const assetStore = createAssetStore(docState.storage);
+      const samples = new Map<string, ArrayBuffer>();
+      for (const assetId of Object.keys(doc.assets)) {
+        const bytes = await assetStore.get(assetId);
+        if (bytes !== null) samples.set(assetId, bytes);
+      }
+      const { wav, durationSeconds } = await renderProjectToWav(doc, { samples });
       const blob = new Blob([wav], { type: "audio/wav" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
@@ -848,6 +913,7 @@ export function App({ onEngineReady, onStoreReady, storage }: AppProps = {}) {
         onLoopClip={handleLoopClip}
         canArpeggiate={noteSelectionCount > 0}
         onShowArpeggiator={() => setArpOpen(true)}
+        onAddAudioClip={engine === null ? undefined : handleAddAudioClip}
         autosaveState={autosaveState}
         autosaveError={autosaveError}
         autosaveAvailable={docState.storage.available}

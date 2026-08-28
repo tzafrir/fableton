@@ -237,6 +237,20 @@ export interface ArpOptions {
   readonly random?: (() => number) | undefined;
 }
 
+/** An audio clip as the shell proposes it; `id` is filled in by the factory. */
+export interface AudioClipInit {
+  id?: ClipId | undefined;
+  trackId: ChannelId;
+  start: Ticks;
+  length: Ticks;
+  assetId: AssetId;
+  /** Frames into the file; defaults to 0 (play it from the top). */
+  offsetFrames?: number | undefined;
+  /** Clip gain in dB; defaults to 0. */
+  gainDb?: number | undefined;
+  name?: string | undefined;
+}
+
 /** A note as an editor proposes it; `id` is filled in by the factory. */
 export interface NoteInit {
   id?: NoteId | undefined;
@@ -393,6 +407,12 @@ export interface ProjectCommands {
 
   // clips (arrangement)
   createClip(init: ClipInit): Command;
+  /**
+   * Place an imported audio file on a track as a clip. The sample must
+   * already be in `Project.assets` (the shell imports it first — see
+   * `src/app/samples.ts`), so this command cannot fail on I/O.
+   */
+  createAudioClip(init: AudioClipInit): Command;
   deleteClips(clipIds: readonly ClipId[]): Command;
   moveClips(clipIds: readonly ClipId[], delta: ClipDelta): Command;
   /**

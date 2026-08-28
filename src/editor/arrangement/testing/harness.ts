@@ -88,6 +88,7 @@ export function makeProject(): Project {
     racks: {},
     sidechains: [],
     assets: {},
+    audioClips: {},
     paramValues: {},
   };
 }

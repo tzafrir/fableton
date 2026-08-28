@@ -9,16 +9,19 @@
 // `TickIndex`, and only the visible lanes are visited at all, so a frame costs
 // O(visible) no matter how long the song is (SS9/SS2).
 
+import type { AudioClip, MidiClip } from "../../types/clip";
+import type { Immutable } from "../../types/commands";
 import type { EditorLayer, LayerFrame } from "../../types/render";
 import type { SelectionModel } from "../../types/editor";
 import type { ClipId } from "../../types/ids";
 import type { Ticks } from "../../types/time";
 import type { Grid } from "../../types/viewport";
+import { PPQ } from "../../types/time";
 import { ticksPerBar, ticksPerBeat } from "../../time";
 import { alignHalfPixel, alignPixel } from "../kit";
 import type { ArrangementTheme } from "./constants";
 import type { ClipView } from "./geometry";
-import { braceHeightPx, clipRect, laneRect } from "./geometry";
+import { braceHeightPx, clipRect, isAudioClip, laneRect, loopOf } from "./geometry";
 import { drawClipOutline } from "./ghosts";
 import type { ArrangementScene } from "./scene";
 
@@ -123,7 +126,9 @@ interface NoteFacts {
 }
 const noteFacts = new WeakMap<object, NoteFacts>();
 
-function factsOf(notes: ClipView["notes"]): NoteFacts {
+type NoteList = Immutable<MidiClip>["notes"];
+
+function factsOf(notes: NoteList): NoteFacts {
   const cached = noteFacts.get(notes);
   if (cached !== undefined) return cached;
   let lowest = 127;
@@ -141,7 +146,7 @@ function factsOf(notes: ClipView["notes"]): NoteFacts {
 
 /** First index whose `start` is >= `tick`; notes are sorted by start
  *  (./document.ts invariant 4), so this is SS9's binary search. */
-function firstNoteAtOrAfter(notes: ClipView["notes"], tick: Ticks): number {
+function firstNoteAtOrAfter(notes: NoteList, tick: Ticks): number {
   let lo = 0;
   let hi = notes.length;
   while (lo < hi) {
@@ -152,7 +157,71 @@ function firstNoteAtOrAfter(notes: ClipView["notes"], tick: Ticks): number {
   return lo;
 }
 
-function drawNotes(frame: LayerFrame, theme: ArrangementTheme, clip: ClipView, x: number, y: number, w: number, h: number): void {
+/**
+ * The audio clip's own miniature: the asset's stored peaks (SS13
+ * `AudioAsset.peaks`), drawn as a symmetric waveform around the clip's
+ * middle.
+ *
+ * From the DOCUMENT, not from a decoded buffer: this runs every frame on the
+ * main thread, and the clip may well be on screen before — or entirely
+ * without — its audio. A clip whose sample is missing draws a flat line,
+ * which is the true picture.
+ *
+ * The window drawn is the slice of the FILE the clip actually plays, so
+ * trimming a clip's left edge scrolls the waveform inside it rather than
+ * squashing it.
+ */
+function drawWaveform(
+  frame: LayerFrame,
+  theme: ArrangementTheme,
+  scene: ArrangementScene,
+  clip: Immutable<AudioClip>,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  if (h < MIN_NOTE_LANE_PX || w < 2) return;
+  const asset = scene.doc.assets[clip.assetId];
+  const peaks = asset?.peaks;
+  const { ctx } = frame;
+  const mid = y + h / 2;
+  const amplitude = Math.max(1, h / 2 - 3);
+
+  if (peaks === undefined || peaks.length === 0 || asset === undefined) {
+    ctx.fillStyle = theme.clipNote;
+    ctx.fillRect(x, alignPixel(mid), w, 1);
+    return;
+  }
+
+  // Which slice of the file this clip shows: from its offset, for as long as
+  // it lasts. `framesPerTick` needs a tempo, and the clip's own is the one
+  // the trim used (see `trimClips`), so the picture and the audio agree.
+  const bpm = scene.doc.tempo[0]?.bpm ?? 120;
+  const framesPerTick = (asset.sampleRate * 60) / (bpm * PPQ);
+  const fromFrame = clip.offsetFrames;
+  const toFrame = Math.min(asset.frames, fromFrame + clip.length * framesPerTick);
+  const span = Math.max(1, toFrame - fromFrame);
+  const perPeak = Math.max(1, asset.frames / peaks.length);
+
+  ctx.fillStyle = theme.clipNote;
+  const columns = Math.min(Math.floor(w), 2048);
+  for (let i = 0; i < columns; i++) {
+    const frame0 = fromFrame + (i / columns) * span;
+    const frame1 = fromFrame + ((i + 1) / columns) * span;
+    let peak = 0;
+    const lo = Math.max(0, Math.floor(frame0 / perPeak));
+    const hi = Math.min(peaks.length, Math.max(lo + 1, Math.ceil(frame1 / perPeak)));
+    for (let k = lo; k < hi; k++) {
+      const v = peaks[k] ?? 0;
+      if (v > peak) peak = v;
+    }
+    const half = Math.max(0.5, peak * amplitude);
+    ctx.fillRect(x + i, mid - half, 1, half * 2);
+  }
+}
+
+function drawNotes(frame: LayerFrame, theme: ArrangementTheme, clip: Immutable<MidiClip>, x: number, y: number, w: number, h: number): void {
   const notes = clip.notes;
   if (notes.length === 0 || h < MIN_NOTE_LANE_PX) return;
   const { lowest, highest, maxDur } = factsOf(notes);
@@ -218,8 +287,8 @@ export function createArrangementClipsLayer(deps: LayerDeps): EditorLayer {
 
           // Loop unrolling, drawn as repeat separators so the brace explains
           // what the player will do with the content.
-          const loop = clip.loop;
-          if (loop !== undefined && loop !== null && loop.end > loop.start) {
+          const loop = loopOf(clip);
+          if (loop !== null && loop.end > loop.start) {
             const period = loop.end - loop.start;
             // Same two rules as every other line loop in this file: skip the
             // whole rung when the repeats are closer than a readable spacing
@@ -247,9 +316,13 @@ export function createArrangementClipsLayer(deps: LayerDeps): EditorLayer {
           ctx.beginPath();
           ctx.rect(x, y, w, h);
           ctx.clip();
-          drawNotes(frame, theme, clip, rect.x, rect.y, rect.w, rect.h);
+          if (isAudioClip(clip)) {
+            drawWaveform(frame, theme, scene, clip, rect.x, rect.y, rect.w, rect.h);
+          } else {
+            drawNotes(frame, theme, clip, rect.x, rect.y, rect.w, rect.h);
+          }
 
-          if (loop !== undefined && loop !== null) {
+          if (loop !== null) {
             const bx = viewport.xOf(clip.start + loop.start);
             const bw = Math.max(1, (loop.end - loop.start) * viewport.pxPerTick);
             ctx.fillStyle = theme.clipLoopBrace;
@@ -257,12 +330,18 @@ export function createArrangementClipsLayer(deps: LayerDeps): EditorLayer {
           }
 
           if (h >= MIN_NOTE_LANE_PX) {
-            const label = clip.name ?? scene.doc.channels[clip.trackId]?.name ?? "";
+            // An audio clip says what FILE it is by default: the track's name
+            // is already on the header, and the file is the thing you cannot
+            // otherwise tell from the waveform.
+            const fallback = isAudioClip(clip)
+              ? (scene.doc.assets[clip.assetId]?.name ?? "Missing sample")
+              : (scene.doc.channels[clip.trackId]?.name ?? "");
+            const label = clip.name ?? fallback;
             if (label !== "") {
               ctx.fillStyle = theme.clipText;
               ctx.font = "11px system-ui, sans-serif";
               ctx.textBaseline = "top";
-              ctx.fillText(label, x + 4, y + (brace > 0 && clip.loop ? brace + 2 : 3));
+              ctx.fillText(label, x + 4, y + (brace > 0 && loop !== null ? brace + 2 : 3));
             }
           }
           ctx.restore();

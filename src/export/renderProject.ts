@@ -27,11 +27,27 @@ export function contentEndTick(doc: ProjectSnapshot): Ticks {
   for (const clip of Object.values(doc.clips)) {
     end = Math.max(end, clip.start + clip.length);
   }
+  // Audio clips are content too: an export that stopped at the last NOTE
+  // would cut a song whose ending is a recorded take.
+  for (const clip of Object.values(doc.audioClips)) {
+    end = Math.max(end, clip.start + clip.length);
+  }
   return end;
 }
 
 export interface RenderProjectOptions {
   sampleRate?: number | undefined;
+  /**
+   * The encoded bytes of every asset the document references, by id.
+   *
+   * Decoded audio belongs to ONE `BaseAudioContext`, and an export runs on a
+   * fresh `OfflineAudioContext` — so the live app's buffers are of no use
+   * here and the samples have to be decoded again against the render
+   * context. The caller supplies the bytes because it is the only layer that
+   * can read the store (SS13); omit them and audio clips render as silence,
+   * which is at least a bounded, obvious failure rather than a crash.
+   */
+  samples?: ReadonlyMap<string, ArrayBuffer> | undefined;
   /** Override the rendered span (song ticks). Defaults to [0, content end]. */
   fromTick?: Ticks | undefined;
   toTick?: Ticks | undefined;
@@ -84,6 +100,19 @@ export async function renderProject(
   // must be live before the transport starts (worklet `prepare` awaits in
   // here, which is why export is async at all).
   await engine.applyDocument(doc);
+
+  // Samples, decoded against THIS context (see `RenderProjectOptions.samples`).
+  // Awaited before the transport starts: a buffer that arrived mid-render
+  // would put a clip's audio into the file or not depending on timing.
+  const samples = options.samples;
+  if (samples !== undefined) {
+    await Promise.all(
+      Object.keys(doc.assets).map(async (assetId) => {
+        const bytes = samples.get(assetId);
+        if (bytes !== undefined) await engine.assets.load(assetId, bytes);
+      }),
+    );
+  }
 
   // The transport must not LOOP during an export: a bounded file is wanted.
   engine.transport.setLoop(null);

@@ -25,6 +25,42 @@ export type SampleImportResult =
   | { readonly status: "imported"; readonly assetId: AssetId; readonly name: string }
   | { readonly status: "rejected"; readonly reason: string };
 
+/**
+ * How many peak values a waveform gets. 600 is about one per pixel at a
+ * comfortable clip width and ~3 kB of JSON — small enough for the document
+ * to carry (see `AudioAsset.peaks` for why it does).
+ */
+export const PEAK_COUNT = 600;
+
+/**
+ * Peak magnitude per slice of a decoded buffer, 0..1 — what the arrangement
+ * draws an audio clip's waveform from.
+ *
+ * MAX per slice rather than RMS: the eye reads a waveform as an envelope,
+ * and averaging turns every transient into a bump. All channels are folded
+ * together, because the picture is one lane tall.
+ */
+export function peaksOf(buffer: AudioBuffer, count = PEAK_COUNT): number[] {
+  const frames = buffer.length;
+  const peaks = new Array<number>(count).fill(0);
+  if (frames === 0) return peaks;
+  const per = frames / count;
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    const data = buffer.getChannelData(ch);
+    for (let i = 0; i < count; i++) {
+      const from = Math.floor(i * per);
+      const to = Math.min(frames, Math.max(from + 1, Math.floor((i + 1) * per)));
+      let peak = peaks[i] ?? 0;
+      for (let f = from; f < to; f++) {
+        const v = Math.abs(data[f] ?? 0);
+        if (v > peak) peak = v;
+      }
+      peaks[i] = Math.min(1, peak);
+    }
+  }
+  return peaks;
+}
+
 /** The subset of `File` this needs — so a test can hand it a plain object. */
 export interface ImportableFile {
   readonly name: string;
@@ -88,6 +124,7 @@ export async function importSample(
       sampleRate: buffer.sampleRate,
       channels: buffer.numberOfChannels,
       frames: buffer.length,
+      peaks: peaksOf(buffer),
     }),
   );
   return { status: "imported", assetId, name: file.name };

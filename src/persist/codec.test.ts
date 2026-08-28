@@ -433,3 +433,84 @@ describe("ProjectCodec.validate: routing and device-chain hardening", () => {
     expect(findRoutingCycle(decoded.project)).toBeNull();
   });
 });
+
+describe("audio clips and imported samples round-trip", () => {
+  const projectCodec = createProjectCodec();
+
+  /** A project carrying one sample and one audio clip that plays it. */
+  function withAudio() {
+    const project = structuredClone(makeFixtureProject());
+    const trackId = project.channelOrder.find((id) => project.channels[id]?.role === "track");
+    if (trackId === undefined) throw new Error("fixture has no track");
+    project.assets["asset-1"] = {
+      id: "asset-1",
+      name: "take.wav",
+      sampleRate: 48000,
+      channels: 2,
+      frames: 96000,
+      peaks: [0, 0.5, 1, 0.25],
+    };
+    project.audioClips["ac-1"] = {
+      kind: "audio",
+      id: "ac-1",
+      trackId,
+      start: 1920,
+      length: 3840,
+      assetId: "asset-1",
+      offsetFrames: 4800,
+      gainDb: -3,
+      name: "Take 1",
+    };
+    return project;
+  }
+
+  it("survives encode -> decode unchanged", () => {
+    // Compared on the audio halves alone: the shared fixture keeps its notes
+    // deliberately UNSORTED so another test can prove encode sorts them, and
+    // that difference is not this test's business.
+    const project = withAudio();
+    const decoded = projectCodec.decode(projectCodec.encode(project));
+    if (!decoded.ok) throw new Error(decoded.error);
+    expect(decoded.project.audioClips).toEqual(project.audioClips);
+    expect(decoded.project.assets).toEqual(project.assets);
+  });
+
+  it("encodes byte-identically twice — nothing volatile in a sample", () => {
+    const project = withAudio();
+    const once = projectCodec.encode(project, { savedAt: "2024-01-01T00:00:00.000Z" });
+    const twice = projectCodec.encode(project, { savedAt: "2024-01-01T00:00:00.000Z" });
+    expect(once).toBe(twice);
+  });
+
+  it("reads a file written before audio clips existed", () => {
+    // Additive, like racks: the keys are simply absent and decode to `{}`.
+    const project = structuredClone(makeFixtureProject());
+    const raw = JSON.parse(projectCodec.encode(project)) as { project: Record<string, unknown> };
+    delete raw.project["assets"];
+    delete raw.project["audioClips"];
+    const decoded = projectCodec.decode(JSON.stringify(raw));
+    if (!decoded.ok) throw new Error(decoded.error);
+    expect(decoded.project.assets).toEqual({});
+    expect(decoded.project.audioClips).toEqual({});
+  });
+
+  it("drops an audio clip whose id also names a MIDI clip", () => {
+    // One id must mean one clip: a selection holds ids.
+    const project = withAudio();
+    const midiId = Object.keys(project.clips)[0] ?? "";
+    project.audioClips[midiId] = { ...project.audioClips["ac-1"]!, id: midiId };
+    const warnings = projectCodec.validate(project);
+    expect(project.audioClips[midiId]).toBeUndefined();
+    expect(warnings.some((w) => w.path.includes(midiId))).toBe(true);
+  });
+
+  it("KEEPS a clip whose sample is missing, and says so", () => {
+    // The samples may simply not have travelled with the project file;
+    // deleting the arrangement would lose work a re-import restores.
+    const project = withAudio();
+    delete project.assets["asset-1"];
+    const warnings = projectCodec.validate(project);
+    expect(project.audioClips["ac-1"]).toBeDefined();
+    expect(warnings.some((w) => w.message.includes("silent"))).toBe(true);
+  });
+});
