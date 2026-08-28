@@ -28,6 +28,7 @@ test("the whole device library is reachable from the menus", async ({ page }) =>
   await expect(effectOptions).toHaveText([
     "Filter",
     "EQ Three",
+    "EQ Eight",
     "Compressor",
     "Stereo Delay",
     "Reverb",
@@ -47,6 +48,10 @@ test("the whole device library is reachable from the menus", async ({ page }) =>
     "Noise",
     "Sampler",
   ]);
+
+  // Note effects are their own menu, on their own chain (SS7 `midiEffect`).
+  const noteEffectOptions = page.getByTestId("add-note-effect-select").locator("option:not([disabled])");
+  await expect(noteEffectOptions).toHaveText(["Arpeggiator"]);
 });
 
 test("SS7 swap: Poly Synth -> Pluck keeps the clips and still makes sound", async ({ page }) => {

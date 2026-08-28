@@ -137,6 +137,9 @@ export class FakeDelayNode extends FakeAudioNode {
 export class FakeBiquadNode extends FakeAudioNode {
   readonly frequency = new FakeAudioParam(350);
   readonly Q = new FakeAudioParam(1);
+  /** In dB, and only read by the peaking and shelving types — a fake that
+   *  omitted it made every shelf and bell device throw on construction. */
+  readonly gain = new FakeAudioParam(0);
   /** In CENTS — what a musically-even cutoff modulation drives. */
   readonly detune = new FakeAudioParam(0);
   type = "lowpass";

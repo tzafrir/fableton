@@ -38,6 +38,7 @@ import type {
   SidechainEdge,
 } from "../../types";
 import { EnumSelect, Knob, ToggleLED, controlKindFor } from "../../ui/controls";
+import { Eq8Editor } from "./devices/Eq8Editor";
 import { useDispatchHint } from "./useDispatchHint";
 
 export interface DeviceChainPanelProps {
@@ -350,7 +351,14 @@ function DevicePanel({
     // being squeezed by the ones after it (`.fbl-device` fixes min/max width
     // and `flex: 0 0 auto`) — a shrunk panel pushes its own controls outside
     // its own border, which is the overflow bug this layout exists to fix.
-    <div className="fbl-device" data-testid={`device-${deviceId}`} data-enabled={device.enabled}>
+    <div
+      className="fbl-device"
+      data-testid={`device-${deviceId}`}
+      data-enabled={device.enabled}
+      // A device with its own editor gets a wider card: a curve squeezed into
+      // the 250 px a knob grid needs is a curve you cannot aim at.
+      data-editor={def?.editor}
+    >
       {/* Header, in TWO rows on purpose. As one row it packed the enable
           dot, the title, the preset picker, save, and ◀ ▶ ✕ into a box whose
           `minWidth` is 150 — the row needs ~224px, so with a few effects in
@@ -540,34 +548,47 @@ function DevicePanel({
         </div>
       )}
 
+      {/* A device may bring its OWN panel (SS7 `DeviceDefinition.editor`) —
+          the EQ, whose controls are a curve you drag rather than a row of
+          knobs. It replaces the SS5 rows entirely, so an editor is
+          responsible for every param the device declares. */}
+      {def?.editor === "eq8" && (
+        <Eq8Editor
+          doc={doc}
+          engine={engine}
+          channelId={channelId}
+          deviceId={deviceId}
+          onShowAutomation={onShowAutomation}
+        />
+      )}
+
       {/* Param rows (SS5): registry handles exist only once audio is up. */}
-      {panel.rows.map((row, i) => (
-        <div key={i} className="fbl-param-row">
-          {/* SS5 panel rows may name themselves — the drum machine's do, one
-              row per pad, and without this the eight pads' 24 knobs were an
-              undifferentiated grid. */}
-          {row.label !== undefined && (
-            <span className="fbl-param-row-label">{row.label}</span>
-          )}
-          {row.controls.map((spec) => {
-            const handle = engine?.params.get(deviceParamId(channelId, deviceId, spec.paramId));
-            if (handle === undefined) {
+      {def?.editor === undefined &&
+        panel.rows.map((row, i) => (
+          <div key={i} className="fbl-param-row">
+            {/* SS5 panel rows may name themselves — the drum machine's do,
+                one row per pad, and without this the eight pads' 24 knobs
+                were an undifferentiated grid. */}
+            {row.label !== undefined && <span className="fbl-param-row-label">{row.label}</span>}
+            {row.controls.map((spec) => {
+              const handle = engine?.params.get(deviceParamId(channelId, deviceId, spec.paramId));
+              if (handle === undefined) {
+                return (
+                  <span key={spec.paramId} className="fbl-param-pending">
+                    {spec.paramId}
+                  </span>
+                );
+              }
               return (
-                <span key={spec.paramId} className="fbl-param-pending">
-                  {spec.paramId}
-                </span>
+                <ParamControlFor
+                  key={spec.paramId}
+                  handle={handle}
+                  onShowAutomation={onShowAutomation}
+                />
               );
-            }
-            return (
-              <ParamControlFor
-                key={spec.paramId}
-                handle={handle}
-                onShowAutomation={onShowAutomation}
-              />
-            );
-          })}
-        </div>
-      ))}
+            })}
+          </div>
+        ))}
 
       {/* Non-numeric settings (SS7 `DeviceSettingSpec`) — the sampler's file.
           Above the readouts and below the params, because it is an input. */}

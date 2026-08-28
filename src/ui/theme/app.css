@@ -916,6 +916,72 @@ select.fbl-field--sm {
   opacity: 0.45;
 }
 
+/* A device that draws its own editor (SS7 `DeviceDefinition.editor`). */
+.fbl-device[data-editor] {
+  min-width: 400px;
+  max-width: 460px;
+}
+
+/* --- EQ Eight ------------------------------------------------------------ */
+
+.fbl-eq8 {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fbl-eq8-canvas {
+  display: block;
+  width: 100%;
+  /* Sized so the whole card — header, curve, band strip, controls — fits the
+     device panel's own height without scrolling it. */
+  height: 140px;
+  border-radius: var(--fbl-r1);
+  border: 1px solid var(--fbl-line);
+  /* The curve is aimed at with a pointer, so the cursor has to say so — and
+     a drag must never turn into a text selection or a page pan. */
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.fbl-eq8-bands {
+  display: flex;
+  gap: 3px;
+}
+
+.fbl-eq8-band {
+  flex: 1 1 0;
+  height: 18px;
+  font: inherit;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fbl-text-faint);
+  background: var(--fbl-well);
+  border: 1px solid var(--fbl-line);
+  border-radius: var(--fbl-r1);
+  cursor: pointer;
+}
+
+/* Enabled bands read as live; the selected one is the amber "you are here"
+   the rest of the app already uses for selection. */
+.fbl-eq8-band[data-on="true"] {
+  color: var(--fbl-text);
+  border-color: var(--fbl-aqua-dim);
+}
+
+.fbl-eq8-band[aria-pressed="true"] {
+  color: var(--fbl-on-accent);
+  background: var(--fbl-amber);
+  border-color: var(--fbl-amber);
+}
+
+.fbl-eq8-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .fbl-device-head {
   display: flex;
   align-items: center;

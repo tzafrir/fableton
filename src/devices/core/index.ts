@@ -24,6 +24,7 @@ export { PolySynth } from "./polySynth";
 export { Sampler, SAMPLE_SETTING_KEY } from "./sampler";
 export { Compressor } from "./compressor";
 export { Eq3 } from "./eq3";
+export { Eq8, EQ8_BAND_COUNT, bandParamIds } from "./eq8";
 export { Pluck } from "./pluck";
 export { Reverb } from "./reverb";
 export { Saturator } from "./saturator";
@@ -37,6 +38,7 @@ import { Kick } from "./kick";
 import { Noise } from "./noise";
 import { Distortion, Overdrive } from "./overdrive";
 import { Eq3 } from "./eq3";
+import { Eq8 } from "./eq8";
 import { Filter } from "./filter";
 import { Gate } from "./gate";
 import { Pluck } from "./pluck";
@@ -60,6 +62,7 @@ export const CORE_DEVICES = [
   Sampler,
   Filter,
   Eq3,
+  Eq8,
   Compressor,
   StereoDelay,
   Reverb,

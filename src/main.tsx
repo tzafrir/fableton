@@ -5,6 +5,7 @@ import { App } from "./app/App";
 import type { AppProjectEngine } from "./app/engine";
 import { renderDemoOffline } from "./demo";
 import { renderSpan } from "./export/renderProject";
+import { bandResponseDb } from "./devices/core/eq8/response";
 import type { DocumentStore } from "./types";
 
 const container = document.getElementById("root");
@@ -40,6 +41,12 @@ declare global {
        *  the document says it should be instead of "more than a second". */
       store?: DocumentStore;
       renderSpan: typeof renderSpan;
+      /** The EQ's drawn curve, as a pure function — so e2e/mixer/eq8.spec.ts
+       *  can check it against a REAL browser's
+       *  `BiquadFilterNode.getFrequencyResponse`. A hand-written filter
+       *  response is only worth drawing if it is the one you hear, and that
+       *  is not a claim a headless test can settle. */
+      bandResponseDb: typeof bandResponseDb;
     };
   }
 }
@@ -56,7 +63,11 @@ declare global {
 // from the shipped build.
 const E2E_BRIDGE_ENABLED = import.meta.env.DEV || import.meta.env.MODE === "e2e";
 
-const bridge: NonNullable<Window["__fabletonDemo"]> = { renderDemoOffline, renderSpan };
+const bridge: NonNullable<Window["__fabletonDemo"]> = {
+  renderDemoOffline,
+  renderSpan,
+  bandResponseDb,
+};
 if (E2E_BRIDGE_ENABLED) {
   window.__fabletonDemo = bridge;
 }
