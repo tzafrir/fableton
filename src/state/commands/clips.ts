@@ -17,7 +17,7 @@ import type {
   ProjectSnapshot,
   Ticks,
 } from "../../types";
-import { MIN_CLIP_TICKS } from "../../types";
+import { MIN_CLIP_TICKS, loopAfterGrow } from "../../types";
 import { noteFromInit } from "./notes";
 import {
   MIN_NOTE_DUR_TICKS,
@@ -158,9 +158,23 @@ export function createClipCommands(ids: IdFactory): ClipCommands {
           const newStart = Math.max(0, tick(span.start));
           const newLength = Math.max(MIN_CLIP_TICKS, tick(span.length));
           const shift = newStart - clip.start;
+          const previousLength = clip.length;
           clip.start = newStart;
           clip.length = newLength;
-          if (shift === 0) continue;
+          if (shift === 0) {
+            // The RIGHT edge grew: tile what is already there rather than
+            // appending silence (types/editor `loopAfterGrow` states the rule
+            // and why, and the arrangement's ghost predicts it from the same
+            // function so the preview cannot disagree with the release).
+            const grown = loopAfterGrow({
+              previousLength,
+              newLength,
+              hasLoop: clip.loop !== undefined && clip.loop !== null,
+              hasNotes: clip.notes.length > 0,
+            });
+            if (grown !== null) clip.loop = { start: grown.start, end: grown.end };
+            continue;
+          }
           // The LEFT edge moved. Note ticks are clip-relative, so the content
           // slides the other way; content pushed outside the new window is
           // dropped (the accepted v1 loss — undo restores it exactly).

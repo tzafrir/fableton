@@ -194,6 +194,7 @@ export {
   FINE_NUDGE_TICKS,
   MIN_CLIP_TICKS,
   MIN_NOTE_TICKS,
+  loopAfterGrow,
 } from "./editor";
 
 export type {

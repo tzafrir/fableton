@@ -71,6 +71,52 @@ describe("clip commands", () => {
     expect(clipOf(f, f.clipId)?.notes).toHaveLength(2);
   });
 
+  // "Draw one bar, then stretch it over the arrangement" — the gesture a DAW
+  // is expected to have, and the reason `loopAfterGrow` exists.
+  describe("growing the right edge tiles the clip's content", () => {
+    it("adds a brace over the OLD length when a clip with notes grows", () => {
+      const f = makeFixture();
+      f.store.dispatch(f.commands.addNotes(f.clipId, notes([[0, 60]])));
+      f.store.dispatch(f.commands.trimClips([{ id: f.clipId, start: 0, length: BAR * 4 }]));
+      expect(clipOf(f, f.clipId)).toMatchObject({ length: BAR * 4, loop: { start: 0, end: BAR } });
+    });
+
+    it("leaves an existing brace alone — the user already said what repeats", () => {
+      const f = makeFixture();
+      f.store.dispatch(f.commands.addNotes(f.clipId, notes([[0, 60]])));
+      f.store.dispatch(f.commands.setClipLoop(f.clipId, { start: 0, end: QUARTER }));
+      f.store.dispatch(f.commands.trimClips([{ id: f.clipId, start: 0, length: BAR * 4 }]));
+      expect(clipOf(f, f.clipId)?.loop).toEqual({ start: 0, end: QUARTER });
+    });
+
+    it("leaves an EMPTY clip un-looped: stretching a blank clip makes room to draw", () => {
+      const f = makeFixture();
+      f.store.dispatch(f.commands.trimClips([{ id: f.clipId, start: 0, length: BAR * 4 }]));
+      expect(clipOf(f, f.clipId)?.loop).toBeUndefined();
+    });
+
+    it("never loops on a shrink, and never on a LEFT-edge drag", () => {
+      const f = makeFixture();
+      f.store.dispatch(f.commands.addNotes(f.clipId, notes([[0, 60]])));
+      f.store.dispatch(f.commands.trimClips([{ id: f.clipId, start: 0, length: QUARTER }]));
+      expect(clipOf(f, f.clipId)?.loop).toBeUndefined();
+      // Left edge outward: the clip grows, but its start moved, so the
+      // content slid rather than repeated — tiling here would be a lie.
+      f.store.dispatch(f.commands.moveClips([f.clipId], { ticks: BAR, tracks: 0 }));
+      f.store.dispatch(f.commands.trimClips([{ id: f.clipId, start: 0, length: BAR + QUARTER }]));
+      expect(clipOf(f, f.clipId)?.loop).toBeUndefined();
+    });
+
+    it("is one undo entry with the trim, not two", () => {
+      const f = makeFixture();
+      f.store.dispatch(f.commands.addNotes(f.clipId, notes([[0, 60]])));
+      f.store.dispatch(f.commands.trimClips([{ id: f.clipId, start: 0, length: BAR * 4 }]));
+      f.store.undo();
+      expect(clipOf(f, f.clipId)).toMatchObject({ length: BAR });
+      expect(clipOf(f, f.clipId)?.loop).toBeUndefined();
+    });
+  });
+
   it("trimming the LEFT edge rewrites note starts and drops what falls outside", () => {
     const f = makeFixture();
     f.store.dispatch(

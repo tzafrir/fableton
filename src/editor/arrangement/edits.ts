@@ -13,7 +13,7 @@
 import type { ClipSpan } from "../../types/commands";
 import type { ClipId } from "../../types/ids";
 import type { Ticks } from "../../types/time";
-import { MIN_CLIP_TICKS } from "../../types/editor";
+import { MIN_CLIP_TICKS, loopAfterGrow } from "../../types/editor";
 import type { ClipView } from "./geometry";
 import type { ArrangementScene } from "./scene";
 
@@ -168,7 +168,20 @@ export function trimClips(
     const start = edge === "start" ? clip.start + delta : clip.start;
     const length = edge === "start" ? clip.length - delta : clip.length + delta;
     spans.push({ id: clip.id, start, length });
-    const loop = loopOf(clip);
+    // The ghost predicts the loop the release will produce — including the
+    // brace a right-edge GROW adds by itself (`loopAfterGrow`), so the
+    // repeats appear under the pointer as the clip is stretched instead of
+    // arriving as a surprise on mouse-up.
+    const loop =
+      loopOf(clip) ??
+      (edge === "end"
+        ? loopAfterGrow({
+            previousLength: clip.length,
+            newLength: length,
+            hasLoop: false,
+            hasNotes: clip.notes.length > 0,
+          })
+        : null);
     const row = scene.rowOfClip(clip.id);
     ghosts.push({
       clipId: clip.id,

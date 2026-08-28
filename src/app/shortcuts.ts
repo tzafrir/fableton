@@ -244,7 +244,11 @@ export const ARRANGEMENT_ROWS: readonly ShortcutRow[] = [
   { keys: ["Cmd/Ctrl", "D"], action: "Duplicate after itself" },
   { keys: ["Cmd/Ctrl", "A"], action: "Select every clip" },
   { keys: ["Cmd/Ctrl", "E"], action: "Split at the playhead" },
-  { keys: ["Cmd/Ctrl", "L"], action: "Loop the selected clip" },
+  {
+    keys: ["Cmd/Ctrl", "L"],
+    action: "Loop the selected clip",
+    note: "or drag its right edge past the end",
+  },
   { keys: ["Delete"], action: "Delete the selection" },
   { keys: ["Esc"], action: "Clear the selection" },
 ];

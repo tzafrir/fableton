@@ -12,8 +12,11 @@
 //               VIEW's job, `Esc` mid-drag reverts with no undo entry.
 //   Shift       fine mode x0.1, enter/exit MID-DRAG with re-anchoring —
 //               no value jumps on the modifier edge.
-//   wheel       1% of sweep per notch, Shift = 0.1%; hover-only (the view
-//               only routes wheel events while hovered).
+//   wheel       1% of sweep per notch, Shift = 0.1%. The view routes wheel
+//               events only while the control is FOCUSED — SS5 says "while
+//               hovering", but a device chain scrolls under its own knobs,
+//               and hover-only meant a trackpad flick aimed at the panel
+//               stopped dead on a knob and moved it. See ParamControl.tsx.
 //   keys        arrows 1%, Shift+arrows 0.1%, PgUp/PgDn 10%.
 //   reset       Alt+click / Delete -> defaultValue (one commit).
 //   commit      exactly one `handle.commit()` per gesture (SS4).

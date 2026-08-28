@@ -70,12 +70,24 @@ function pointer(type: string, init: MouseEventInit = {}): void {
   });
 }
 
-function wheel(init: WheelEventInit): boolean {
+/** Dispatches a wheel event exactly as it arrives from the platform, with no
+ *  focus arranged first. Returns whether the control consumed it. */
+function rawWheel(init: WheelEventInit): boolean {
   const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
   act(() => {
     control().dispatchEvent(event);
   });
   return event.defaultPrevented;
+}
+
+/** The wheel is FOCUS-gated (a device chain scrolls under its knobs), so
+ *  every value-stepping assertion below first does what a user does: click
+ *  the control. `focus()` is what a real click leaves behind. */
+function wheel(init: WheelEventInit): boolean {
+  act(() => {
+    control().focus();
+  });
+  return rawWheel(init);
 }
 
 /** React tracks the input's last value on the node; assigning `.value`
@@ -155,6 +167,32 @@ describe("wheel (SS5: 1% of sweep, Shift = 0.1%, consumed while hovering)", () =
     expect(wheel({ deltaX: 0, deltaY: 0 })).toBe(true); // still consumed
     expect(handle.live()).toBe(50);
     expect(commits).toEqual([]); // and the document stays clean
+  });
+});
+
+describe("wheel is focus-gated so a scrolling device chain keeps its scroll", () => {
+  it("does not consume or act on a wheel over an un-focused control", () => {
+    // The reported bug: flicking a trackpad to scroll from one effect to the
+    // next stopped dead on whatever knob the pointer crossed, and that knob
+    // moved. Merely hovering must leave the event alone so it reaches the
+    // scrolling panel.
+    expect(rawWheel({ deltaY: -100 })).toBe(false);
+    expect(handle.live()).toBe(50);
+    expect(commits).toEqual([]);
+  });
+
+  it("takes the wheel once the control is focused, and gives it back on blur", () => {
+    act(() => {
+      control().focus();
+    });
+    expect(rawWheel({ deltaY: -100 })).toBe(true);
+    expect(handle.live()).toBeCloseTo(50 + 100 * WHEEL_STEP, 10);
+
+    act(() => {
+      control().blur();
+    });
+    expect(rawWheel({ deltaY: -100 })).toBe(false);
+    expect(handle.live()).toBeCloseTo(50 + 100 * WHEEL_STEP, 10); // unchanged
   });
 });
 

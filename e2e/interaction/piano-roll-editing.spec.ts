@@ -54,6 +54,19 @@ async function createNoteAt(page: Page, px: number, py: number): Promise<ColorRe
   return created as ColorRect;
 }
 
+/** Pins the grid division through SS10's override menu.
+ *
+ *  The roll OPENS FRAMED ON ITS CLIP, so its zoom depends on the clip's
+ *  length and the panel's width — and the ADAPTIVE grid follows the zoom.
+ *  A test about the keyboard map must not also be a test of what division
+ *  the adaptive rule picked at that width, so the ones that count grid
+ *  steps pin the division first and then measure the step in pixels off a
+ *  created note (SS10: "dbl-click empty: create grid-length note"), which
+ *  is one grid cell wide by construction at whatever zoom is in force. */
+async function setFixedGrid(page: Page, denominator: "4" | "8" | "16" | "32"): Promise<void> {
+  await page.getByTestId("grid-select").selectOption(denominator);
+}
+
 /** A point safely inside the piano roll's note area (below the ruler, above
  *  the velocity lane — RULER_HEIGHT_PX/VELOCITY_LANE_HEIGHT_PX,
  *  src/editor/pianoroll/layout.ts), independent of viewport scroll. */
@@ -141,10 +154,14 @@ test.describe("piano roll note editing (SS9/SS10)", () => {
     const after = await scanNotes(page, NOTE_FILL);
     expect(after.length).toBe(1);
     const resized = after[0] as ColorRect;
-    expect(resized.x + resized.w, "right (anchored) edge must not move on a left-edge resize").toBeCloseTo(
-      rightBefore,
-      0,
-    );
+    // Within a pixel: the scan reads RENDERED rects, whose left edge and
+    // width are rounded independently, so at a fractional px/tick the sum can
+    // sit a pixel off while the anchored edge has not moved a tick. The drag
+    // was 24 px, so an anchored edge that actually moved cannot hide in this.
+    expect(
+      Math.abs(resized.x + resized.w - rightBefore),
+      "right (anchored) edge must not move on a left-edge resize",
+    ).toBeLessThanOrEqual(1);
     expect(resized.x, "left edge should have moved left").toBeLessThan(note.x - 10);
   });
 
@@ -326,9 +343,12 @@ test.describe("piano roll keyboard map (SS10)", () => {
     // here is the viewport and the note's starting row, not the app.
     await page.setViewportSize({ width: 1280, height: 1400 });
     await openEmptyClip(page);
+    await setFixedGrid(page, "16");
     const panelBox = await page.getByTestId("piano-roll-panel").boundingBox();
     const p = gridPoint(panelBox!, 0.3, 0.9);
     const note = await createNoteAt(page, p.x, p.y);
+    // One grid cell, in pixels at whatever zoom the roll framed the clip at.
+    const gridPx = note.w;
     // A freshly-created note is auto-selected (src/editor/pianoroll/pianoRoll.ts).
     await page.getByTestId("piano-roll-panel").click({ position: { x: 2, y: 2 } });
     // Re-select it via a plain click (the panel click above may have cleared
@@ -347,19 +367,24 @@ test.describe("piano roll keyboard map (SS10)", () => {
     expect(afterOneUp.y - r.y, "Shift+ArrowUp should jump a full octave (192px)").toBeCloseTo(192, 0);
     const afterOctave = r;
 
-    // ArrowRight: move by current grid (12px at default zoom).
+    // ArrowRight: move by exactly one grid cell.
     await page.keyboard.press("ArrowRight");
     r = (await scanNotes(page, NOTE_FILL))[0] as ColorRect;
-    expect(r.x - afterOctave.x, "ArrowRight should move by one grid cell (12px)").toBeCloseTo(12, 0);
+    // Within a pixel of the cell's own rendered width — same independent
+    // rounding of a rect's left edge and width as the resize test above.
+    expect(
+      Math.abs(r.x - afterOctave.x - gridPx),
+      "ArrowRight should move by one grid cell",
+    ).toBeLessThanOrEqual(1);
     const afterRight = r;
 
-    // Shift+ArrowRight: fine nudge, 1/64 note = 60 ticks = 3px — smaller than
-    // a full grid step and in the same direction.
+    // Shift+ArrowRight: fine nudge, a fixed 1/64 note — a quarter of the
+    // 1/16 grid, so smaller than a full step and in the same direction.
     await page.keyboard.press("Shift+ArrowRight");
     r = (await scanNotes(page, NOTE_FILL))[0] as ColorRect;
     const fineDelta = r.x - afterRight.x;
     expect(fineDelta, "Shift+ArrowRight fine nudge should be smaller than a full grid step").toBeGreaterThan(0);
-    expect(fineDelta, "fine nudge should be strictly less than the 12px grid step").toBeLessThan(12);
+    expect(fineDelta, "fine nudge should be strictly less than one grid step").toBeLessThan(gridPx);
 
     // Ctrl+D: duplicate immediately after itself -> two notes now.
     await page.keyboard.press("Control+d");
@@ -375,12 +400,13 @@ test.describe("piano roll keyboard map (SS10)", () => {
 
   test("Ctrl+U quantizes note starts to the grid", async ({ page }) => {
     await openEmptyClip(page);
+    await setFixedGrid(page, "16");
     const panelBox = await page.getByTestId("piano-roll-panel").boundingBox();
     const p = gridPoint(panelBox!, 0.3, 0.4);
     const note = await createNoteAt(page, p.x, p.y);
     await page.mouse.click(note.pageCenterX, note.pageCenterY);
 
-    // ONE fine nudge: 60 ticks / 3px, a quarter of the 12px (240-tick) grid,
+    // ONE fine nudge: 60 ticks, a quarter of the pinned 1/16 (240-tick) grid,
     // so it is unambiguously off-grid AND unambiguously nearer its original
     // slot than the next one. Two nudges would land on 120 ticks — exactly
     // half a grid cell, a rounding TIE that quantize legitimately resolves

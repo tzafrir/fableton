@@ -21,6 +21,7 @@ import { BAR, CLIP_1, CLIP_2, CLIP_3, TRACK_A, TRACK_B, createHarness } from "./
 const BEAT = 960;
 /** Pixels per beat at the fixture zoom (0.05 px/tick). */
 const BEAT_PX = 48;
+const BAR_PX = BEAT_PX * 4;
 
 const CLIP_1_BODY: readonly [number, number] = [100, 20];
 const CLIP_1_EDGE_R: readonly [number, number] = [190, 20];
@@ -224,6 +225,20 @@ describe("trim (absolute spans, moving edge only)", () => {
     expect(preview.edge).toBe("end");
     expect(preview.spans).toEqual([{ id: CLIP_1, start: 0, length: BAR + BEAT }]);
     expect(h.clip(CLIP_1)?.length).toBe(BAR);
+  });
+
+  // The ghost has to show the repeats WHILE the edge is being dragged; a
+  // brace that only appeared on release would make the gesture a guess.
+  it("previews the loop brace a grow will add, and commits it in the same command", () => {
+    const h = createHarness();
+    h.down(...CLIP_1_EDGE_R);
+    h.move(190 + BAR_PX, 20);
+    const preview = h.engine.preview as TrimPreview;
+    expect(preview.ghosts[0]?.loop).toEqual({ start: 0, end: BAR });
+    expect(h.clip(CLIP_1)?.loop).toBeUndefined(); // still just a preview
+    h.up(190 + BAR_PX, 20);
+    expect(h.dispatched).toHaveLength(1);
+    expect(h.clip(CLIP_1)).toMatchObject({ length: BAR * 2, loop: { start: 0, end: BAR } });
   });
 
   it("trims a whole multi-selection with one command", () => {

@@ -53,6 +53,10 @@ const DEFAULT_HIGH_PITCH = 79;
  *  content" — the arrangement's `CONTENT_TAIL_BARS`, roll flavour. */
 const CONTENT_TAIL_BARS = 2;
 
+/** Air left past the clip's end when the roll frames it — enough that the
+ *  end marker reads as an edge rather than as the canvas running out. */
+const FRAME_TAIL_FRACTION = 0.06;
+
 export interface PianoRollViewOptions extends PianoRollOptions {
   theme?: PianoRollTheme | undefined;
   dpr?: number | undefined;
@@ -211,22 +215,50 @@ export function createPianoRollView(options: PianoRollOptions): KitPianoRollView
 
   // --- scroll extents -------------------------------------------------------
 
+  /** The clip's own extent in ticks: its length, or the end of a note that
+   *  sticks out past it. Shared by the scroll limits and the opening frame. */
+  const contentEndTicks = (): Ticks => {
+    let end = ctx.clipLength();
+    for (const note of ctx.notes()) {
+      const noteEnd = note.start + note.dur;
+      if (noteEnd > end) end = noteEnd;
+    }
+    return end;
+  };
+
   /** SS9's `ViewportLimits` contract: "maxTick/maxRow follow the content".
    *  The roll's content is the clip: its length, or the end of its longest
    *  note when a note sticks out past it, plus a two-bar tail. */
   const updateLimits = (): void => {
     const doc = options.store.getState();
     const bar = ticksPerBar(doc.timeSignature);
-    let end = ctx.clipLength();
-    for (const note of ctx.notes()) {
-      const noteEnd = note.start + note.dur;
-      if (noteEnd > end) end = noteEnd;
-    }
+    const end = contentEndTicks();
     host.viewport.setLimits({ maxTick: Math.max(bar, end + bar * CONTENT_TAIL_BARS) });
   };
   updateLimits();
 
   // --- vertical framing -----------------------------------------------------
+
+  /** Horizontal counterpart of `revealPitches`: open on the WHOLE clip.
+   *
+   *  The roll used to open at `DEFAULT_PX_PER_TICK` — a fixed ~192 px per bar
+   *  — which is the right editing zoom for a one-bar clip and the wrong one
+   *  for everything else: an eight-bar clip opened showing its first two bars
+   *  with no hint that the rest existed. A clip is the unit the roll edits,
+   *  so the clip is what it frames, and the user zooms in from there. */
+  const revealClipSpan = (): void => {
+    const width = host.viewport.widthPx;
+    const current = host.viewport.pxPerTick;
+    if (width <= 0 || current <= 0) return;
+    const end = contentEndTicks();
+    if (end <= 0) return;
+    const target = width / (end * (1 + FRAME_TAIL_FRACTION));
+    // `zoomAt` is the only way in, and it clamps to the viewport's limits for
+    // free; anchoring at x = 0 leaves `scrollTicks` alone so the clip's start
+    // stays pinned to the left edge.
+    host.viewport.zoomAt(0, target / current);
+    host.viewport.setScroll(0, host.viewport.scrollRows);
+  };
 
   const revealPitches = (): void => {
     const notes = ctx.notes();
@@ -252,16 +284,27 @@ export function createPianoRollView(options: PianoRollOptions): KitPianoRollView
     host.viewport.setScroll(host.viewport.scrollTicks, top);
   };
 
-  // Framing needs a HEIGHT. A roll mounted into a container the browser has
+  // Framing needs a SIZE. A roll mounted into a container the browser has
   // not laid out yet — a hidden tab, or any test harness — measures zero, and
   // framing against zero leaves the clip's notes off screen the moment the
-  // panel is shown. So the first framing at a REAL height is the one that
+  // panel is shown. So the first framing at a REAL size is the one that
   // counts; until then it is retried on the next size change.
   let framed = false;
+  let framing = false;
   const frameOnce = (): void => {
-    if (framed) return;
+    if (framed || framing) return;
     if (layout.noteBottomPx - layout.noteTopPx <= 0) return;
-    revealPitches();
+    if (host.viewport.widthPx <= 0) return;
+    // Both halves move the viewport, and a viewport move re-enters this
+    // through `onChange` — the guard makes that re-entry a no-op rather than
+    // a second framing that fights the first.
+    framing = true;
+    try {
+      revealPitches();
+      revealClipSpan();
+    } finally {
+      framing = false;
+    }
     framed = true;
   };
   frameOnce();
@@ -332,8 +375,14 @@ export function createPianoRollView(options: PianoRollOptions): KitPianoRollView
       knownNoteIds = noteIdsOf(ctx.notes());
       selection.clear();
       audition.stopAll();
-      revealPitches();
       updateLimits();
+      // Opening a different clip re-frames on that clip — including its
+      // length, which is the whole point of framing at all. Going back
+      // through `frameOnce` (rather than calling the two reveals here) is
+      // what keeps a clip opened into a zero-sized panel framed later,
+      // when the panel is actually shown.
+      framed = false;
+      frameOnce();
       // The clip moved under the playhead's song tick: re-project it onto the
       // new clip's axis (see `setPlayheadTicks`).
       host.playhead.setTicks(playheadSongTicks - ctx.clipStart());

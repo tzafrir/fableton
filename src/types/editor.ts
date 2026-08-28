@@ -40,6 +40,39 @@ export const EDGE_ZONE_FRACTION = 0.4;
  *  zero-length one is unclickable and unrepresentable in the ruler. */
 export const MIN_CLIP_TICKS = TICKS_PER_WHOLE_NOTE / 64;
 
+/**
+ * The loop window a clip takes on when a trim GROWS its right edge past the
+ * end — Live's "stretch it and it repeats", which is how a one-bar idea
+ * becomes eight bars of arrangement without a single copy/paste.
+ *
+ * Returns `null` when the rule does not apply, which is the interesting half:
+ *
+ *   - a clip that ALREADY has a brace keeps it (the user has said what the
+ *     loop is; growing the clip just unrolls more of it),
+ *   - an EMPTY clip stays un-looped (stretching a blank clip is how you make
+ *     room to draw, and tiling nothing would only add a brace to explain),
+ *   - shrinking never adds one.
+ *
+ * The window is the clip's OWN previous length, not the end of its last note:
+ * the length is the musical unit the user built — a bar with a rest at the
+ * end of it is still a bar, and tiling to the last note would swallow the rest.
+ *
+ * It lives here, beside `MIN_CLIP_TICKS`, because BOTH sides of the gesture
+ * need it and must agree: the document command that performs the trim, and
+ * the arrangement's ghost, which has to draw the repeats the release will
+ * produce (SS9: "what you dragged is what you get").
+ */
+export function loopAfterGrow(args: {
+  readonly previousLength: Ticks;
+  readonly newLength: Ticks;
+  readonly hasLoop: boolean;
+  readonly hasNotes: boolean;
+}): { readonly start: Ticks; readonly end: Ticks } | null {
+  if (args.hasLoop || !args.hasNotes) return null;
+  if (args.newLength <= args.previousLength) return null;
+  return { start: 0, end: Math.max(1, args.previousLength) };
+}
+
 /** Velocity of a note created by click/paint before any velocity edit. */
 export const DEFAULT_NOTE_VELOCITY = 100;
 

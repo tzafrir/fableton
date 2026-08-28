@@ -372,13 +372,25 @@ export function Toolbar({
           />
           Triplet
         </label>
+      </Group>
+
+      <Sep />
+
+      {/* Its own group, not a straggler at the end of the grid controls:
+          "how do I loop a clip?" is a question people arrive with, and a
+          verb filed under `Grid` is a verb nobody finds. */}
+      <Group label="Clip">
         <button
           type="button"
           className="fbl-btn"
           data-testid="loop-clip-button"
           onClick={onLoopClip}
           disabled={!canLoopClip}
-          title="Loop the selected clip(s) — drag the clip's right edge to unroll repeats (Cmd/Ctrl+L)"
+          title={
+            canLoopClip
+              ? "Loop the selected clip — the brace on top of it sets the repeating region (Cmd/Ctrl+L). Dragging a clip's right edge past its end loops it for you."
+              : "Select a clip in the arrangement to loop it (Cmd/Ctrl+L)"
+          }
         >
           Loop Clip
         </button>

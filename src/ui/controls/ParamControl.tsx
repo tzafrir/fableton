@@ -174,20 +174,33 @@ export function ParamControl({
     setEditing(true);
   }, [handle]);
 
-  // SS5 "Wheel events consumed only while hovering the control proper".
+  // SS5 says "wheel events consumed only while hovering the control proper".
+  // Hover alone turned out to be too generous a claim on the wheel: a device
+  // chain is a SCROLLING column of knobs, so a trackpad flick aimed at the
+  // panel lands on whatever control the pointer happens to be crossing, and
+  // the scroll stops dead while that knob silently walks. Hover says "the
+  // pointer is here"; it does not say "I am adjusting this".
+  //
+  // So the control takes the wheel only once it is FOCUSED — i.e. after a
+  // click or a Tab, the same gate the arrow-key steps below already sit
+  // behind. Un-focused, the handler returns without `preventDefault()` and
+  // the wheel travels on to the panel, which is the behaviour the user
+  // actually wants nine times out of ten. `activeElement === el` and not
+  // `el.contains(...)`: while the inline text entry has focus the wheel is
+  // the field's, not the param's.
   //
   // Deliberately NOT React's `onWheel`: React 19 registers `wheel` on the root
   // container as a PASSIVE listener, so `preventDefault()` from a synthetic
   // handler does nothing (and Chrome logs an error per notch) — the strip row
   // and the page keep scrolling while the knob steps, sliding the control out
   // from under the pointer mid-adjustment. A native listener on the control
-  // root with `{ passive: false }` is the only way to consume it, and being on
-  // the root is what makes it hover-only (same shape as the editor kit's
-  // `gestureEngine` DOM binding).
+  // root with `{ passive: false }` is the only way to consume it (same shape
+  // as the editor kit's `gestureEngine` DOM binding).
   useEffect(() => {
     const el = rootRef.current;
     if (el === null) return;
     const onWheel = (e: WheelEvent): void => {
+      if (el.ownerDocument.activeElement !== el) return;
       e.preventDefault();
       e.stopPropagation();
       // Shift+wheel and trackpad side-swipes arrive on deltaX on some

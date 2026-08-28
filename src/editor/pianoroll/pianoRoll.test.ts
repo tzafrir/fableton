@@ -11,6 +11,7 @@ import { createDocumentStore } from "../../state/store";
 import { installFakeCanvas2D } from "../kit/testing/fakeCanvas";
 import { createPianoRoll, createPianoRollView, createdNoteIds, redrawScopeOf } from "./pianoRoll";
 import { KEY_GUTTER_WIDTH_PX } from "./keyNames";
+import { DEFAULT_PX_PER_TICK } from "../kit/viewport";
 
 beforeAll(() => {
   installFakeCanvas2D();
@@ -83,8 +84,53 @@ function mount(options: { tool?: "select" | "pencil" } = {}) {
   cell.getBoundingClientRect = rect(CANVAS_WIDTH_PX, 400);
   view.measure();
   view.element.getBoundingClientRect = rect(CANVAS_WIDTH_PX, 400);
-  return { view, store, commands, clipId, container, seeks };
+
+  // The roll OPENS framed on its clip (see `revealClipSpan`), so the zoom it
+  // lands on is whatever fits this clip in this canvas. Every assertion below
+  // that counts pixels is about something else — the playhead transform, a
+  // drag delta, the adaptive grid — so the zoom is pinned back to the kit's
+  // default first and the numbers stay readable. Framing itself is asserted
+  // in "opening frame", against the un-pinned view.
+  const setZoom = (pxPerTick: number): void => {
+    view.host.viewport.zoomAt(0, pxPerTick / view.host.viewport.pxPerTick);
+    view.host.viewport.setScroll(0, view.host.viewport.scrollRows);
+  };
+  setZoom(DEFAULT_PX_PER_TICK);
+  return { view, store, commands, clipId, container, seeks, setZoom };
 }
+
+describe("opening frame", () => {
+  it("opens showing the WHOLE clip, not a fixed number of bars", () => {
+    // The complaint this fixes: an eight-bar clip opened at a bar-and-a-bit
+    // wide, with nothing to say the rest of it was there.
+    const { view, store, commands, clipId } = mount();
+    const EIGHT_BARS = 3840 * 8;
+    store.dispatch(commands.trimClips([{ id: clipId, start: 0, length: EIGHT_BARS }]));
+    view.setClip(null);
+    view.setClip(clipId);
+
+    const viewport = view.host.viewport;
+    expect(viewport.scrollTicks).toBe(0);
+    // The clip's end sits just inside the right edge — visible, with air.
+    const endX = viewport.xOf(EIGHT_BARS);
+    expect(endX).toBeGreaterThan(CANVAS_WIDTH_PX * 0.9);
+    expect(endX).toBeLessThanOrEqual(CANVAS_WIDTH_PX);
+    view.dispose();
+  });
+
+  it("frames a note that hangs past the clip's end", () => {
+    const { view, store, commands, clipId } = mount();
+    store.dispatch(
+      commands.addNotes(clipId, [{ id: "long", start: 0, dur: 3840 * 4, pitch: 60, vel: 100 }]),
+    );
+    view.setClip(null);
+    view.setClip(clipId);
+    const endX = view.host.viewport.xOf(3840 * 4);
+    expect(endX).toBeGreaterThan(CANVAS_WIDTH_PX * 0.9);
+    expect(endX).toBeLessThanOrEqual(CANVAS_WIDTH_PX);
+    view.dispose();
+  });
+});
 
 describe("mounting", () => {
   it("fills the container and is keyboard-focusable", () => {
@@ -274,6 +320,7 @@ describe("real DOM events reach the FSM", () => {
       moveClipTo(m, -7680);
       m.view.setClip(null);
       m.view.setClip(m.clipId);
+      m.setZoom(DEFAULT_PX_PER_TICK); // re-opening a clip re-frames it
       expect(playheadX(m)).toBe(`translateX(${String(Math.round(7680 * 0.05))}px)`);
       m.view.dispose();
     });
