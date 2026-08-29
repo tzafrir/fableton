@@ -17,6 +17,7 @@ export { Distortion, Overdrive } from "./overdrive";
 export { DrumMachine, PADS } from "./drumMachine";
 export { Filter } from "./filter";
 export { Gate } from "./gate";
+export { Limiter } from "./limiter";
 export { FmSynth, MAX_INDEX, OPERATOR_WAVES, operatorParamIds } from "./fmSynth";
 export {
   ALGORITHMS,
@@ -70,6 +71,7 @@ import { Compressor } from "./compressor";
 import { DrumMachine } from "./drumMachine";
 import { FmSynth } from "./fmSynth";
 import { Kick } from "./kick";
+import { Limiter } from "./limiter";
 import { Noise } from "./noise";
 import { Distortion, Overdrive } from "./overdrive";
 import { Eq3 } from "./eq3";
@@ -107,6 +109,7 @@ export const CORE_DEVICES = [
   Overdrive,
   Distortion,
   Gate,
+  Limiter,
   // Note effects (SS7 `midiEffect`) — no audio ports, no place in the SS6
   // graph; they sit in a channel's `midiChain` ahead of its instrument.
   Arpeggiator,
